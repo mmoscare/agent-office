@@ -99,8 +99,9 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
   const terminalBtn = h('button.btn', { type: 'button', title: 'Open the terminal instead' }, '⌨️ Terminal');
   const closeBtn = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const filesHead = h('h4', {}, 'Changed files');
+  const repositoryNotes = h('div.note', { role: 'status' });
   const list = h('ul', { role: 'listbox', 'aria-label': 'Changed files' });
-  const files = h('aside.changes-files', {}, filesHead, list);
+  const files = h('aside.changes-files', {}, filesHead, repositoryNotes, list);
   const diffHead = h('div.dh');
   const diffBody = h('div.diff-scroll');
   const diff = h('section.changes-diff', {}, diffHead, diffBody);
@@ -146,7 +147,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
         'div.changes-empty',
         {},
         h('div.big', {}, '🌱'),
-        h('p', {}, state.base === 'HEAD' ? `Nothing uncommitted in ${where()}.` : `${info.name} hasn't changed anything since ${state.base} yet.`),
+        h('p', {}, state.repositories ? (state.repositories.some((r) => r.error) ? 'Some repositories could not be read. See the repository errors in the file list.' : `No changes in the repositories inside ${where()}.`) : state.base === 'HEAD' ? `Nothing uncommitted in ${where()}.` : `${info.name} hasn't changed anything since ${state.base} yet.`),
         h('p.note', {}, 'This window follows the checkout as the worker works, so changes show up here as they are made.'),
       ),
     );
@@ -155,6 +156,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
   const renderList = () => {
     const s = state;
     list.replaceChildren();
+    repositoryNotes.replaceChildren(...(s?.repositories ?? []).filter((r) => r.error).map((r) => h('p', {}, `${r.path}: ${r.error}`)));
     if (!s) return;
     const n = s.files.length;
     filesHead.textContent = n ? `${n}${s.more ? '+' : ''} changed file${n > 1 || s.more ? 's' : ''}` : 'Changed files';
@@ -188,7 +190,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
       h('span.word', {}, f.uncommitted ? `${STATUS_WORD[f.status]} · not committed` : STATUS_WORD[f.status]),
       plusMinus(f.additions, f.deletions, f.binary),
     );
-    if (f.uncommitted && !state?.busy) diffHead.append(discardOne);
+    if (f.uncommitted && !state?.busy && !state?.repositories) diffHead.append(discardOne);
   };
 
   const renderFooter = () => {
@@ -204,15 +206,16 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
       if (s.files.length) bits.push(plusMinus(adds, dels));
       bits.push(uncommitted ? `${uncommitted} uncommitted` : s.files.length ? 'all committed' : '');
       if (s.ahead) bits.push(`${s.ahead} commit${s.ahead > 1 ? 's' : ''} ahead of ${s.base}`);
+      if (s.repositories) bits.push('View only: use each repository for Git actions');
       if (!s.dir) bits.push(h('span', { title: "This worker works in the project folder itself, so this is everything uncommitted there — everyone's edits, not just its own." }, '📁 shared project folder'));
       else bits.push(h('span', { title: `Its own worktree at ${s.dir}` }, `📁 ${s.dir}`));
       summary.append(...bits.filter(Boolean).map((b) => (typeof b === 'string' ? h('span', {}, b) : b)));
     }
-    discardBtn.disabled = busy || !uncommitted;
-    commitBtn.disabled = busy || !uncommitted;
+    discardBtn.disabled = busy || !uncommitted || !!s?.repositories;
+    commitBtn.disabled = busy || !uncommitted || !!s?.repositories;
     commitBtn.textContent = uncommitted ? `✅ Commit ${uncommitted} file${uncommitted > 1 ? 's' : ''}…` : '✅ Commit…';
     prSlot.replaceChildren();
-    if (!s) return;
+    if (!s || s.repositories) return;
     if (s.pr) prSlot.append(h('a.btn.primary', { href: s.pr.url, target: '_blank', rel: 'noopener', title: 'Open on GitHub' }, `🔀 ${pullRequestLabel(s.pr)} ↗`));
     else if (s.prBase) {
       const why = busy ? '' : uncommitted ? 'Commit first' : !s.ahead ? `Nothing on ${s.branch} that ${s.prBase} lacks yet` : '';
@@ -240,6 +243,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
     if (w) title.textContent = `${w.name} · changes`;
     const s = state;
     if (!s || s.error) branch.textContent = '';
+    else if (s.repositories) branch.textContent = `📁 ${s.repositories.length} repositories`;
     else branch.textContent = s.base === 'HEAD' ? `🌿 ${s.branch} · uncommitted changes` : `🌿 ${s.branch} · vs ${s.base}`;
   };
 
