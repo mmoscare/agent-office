@@ -1,6 +1,7 @@
 // Wire protocol between browser and server. Every WebSocket frame is one JSON object.
 
 import type { Look } from './avatar.js';
+import type { WorkerWorkspace } from './workspaces.js';
 import type { DecorPlacement, Decoration } from './decor.js';
 import type { DogState } from './dog.js';
 import type { JukeboxState } from './jukebox.js';
@@ -37,6 +38,15 @@ export interface PullRequestRef {
   state?: string;
 }
 
+/** Live Git HEAD information for one of a worker's checkout folders. */
+export interface WorkerBranch {
+  /** Set when the desk has multiple repository worktrees. */
+  repository?: string;
+  branch?: string;
+  /** Present instead of branch when HEAD is detached. */
+  commit?: string;
+}
+
 export interface WorkerInfo {
   id: string;
   /** 'agent' runs the selected provider; 'shell' is a plain shared login shell. */
@@ -58,6 +68,10 @@ export interface WorkerInfo {
    * the branch the office was on when the worktree was cut, which its pull request targets.
    */
   worktree?: { path: string; branch: string; base: string; from?: string };
+  /** One desk working across selected local repositories in separate worktrees. */
+  workspace?: WorkerWorkspace;
+  /** Refreshed from Git while the terminal is open; never used for Git mutations. */
+  branches?: WorkerBranch[];
   /** The worktree branch's PR, whether opened in the office or elsewhere. */
   pr?: PullRequestRef;
   /** True while the branch is being pushed and its pull request opened. */

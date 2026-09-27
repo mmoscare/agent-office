@@ -522,10 +522,10 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   assert.equal(hook('PreToolUse', { tool_name: 'read_file', tool_use_id: 'call-other' }), true);
   assert.equal(hook('PermissionRequest', { tool_name: 'exec_command' }), true);
   assert.equal(hook('PostToolUse', { tool_name: 'read_file', tool_use_id: 'call-other' }), true);
-  assert.equal(worker.status, 'needs_input');
-  assert.equal(worker.status, 'needs_input');
+  // A permission hook alone may be auto-approved; the TUI confirms human input.
+  assert.equal(worker.status, 'working');
   assert.equal(hook('Stop', { agent_id: 'child' }), false);
-  assert.equal(worker.status, 'needs_input');
+  assert.equal(worker.status, 'working');
   assert.equal(hook('PostToolUse', { tool_name: 'exec_command', tool_use_id: 'call-permission' }), true);
   assert.equal(worker.status, 'working');
   assert.equal(hook('Stop'), true);
@@ -577,7 +577,7 @@ test('Codex token snapshots survive restart, preserve permissions, and stay outs
   workers.handleCodexHook(worker.id, token, 'SessionStart', { session_id: 'metrics-root', transcript_path: transcript });
   workers.handleCodexHook(worker.id, token, 'PermissionRequest', { session_id: 'metrics-root', tool_name: 'Bash' });
   await waitFor(() => worker.usage, u => u?.input === 100);
-  assert.equal(worker.status, 'needs_input');
+  assert.equal(worker.status, 'working');
   assert.equal(worker.usage?.output, 20);
   assert.equal(worker.usage?.reasoning, 10);
   assert.equal(worker.usage?.cacheRead, 20);
