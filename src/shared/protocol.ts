@@ -79,6 +79,10 @@ export interface WorkerInfo {
   model?: string;
   /** Reasoning effort requested for this worker, when one was chosen (Claude only). */
   effort?: AgentEffort;
+  /** The model its latest reply came from, read from the session's transcript (see shared/model.ts). */
+  runningModel?: string;
+  /** The reasoning effort of that reply ("medium", "high"…), when the transcript records one. */
+  runningEffort?: string;
   deskId: string;
   name: string;
   color: string;

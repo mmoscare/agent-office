@@ -1071,6 +1071,8 @@ export class Worker {
   /** The bubble is a task card: it hangs from its tail instead of floating. */
   private bubbleIsCard = false;
   private task: WorkerTask | undefined;
+  /** The model it runs, on a tab at the foot of its task card. */
+  private modelTag: string | undefined;
   private nameTag: THREE.Sprite | null = null;
   private eyes: THREE.Mesh[] = [];
   private blinkAt = Math.random() * 4;
@@ -1273,6 +1275,12 @@ export class Worker {
     this.drawBubble();
   }
 
+  /** The model (and effort) it runs, e.g. "Opus 5.5 · high", tucked onto the bottom edge of its task card. */
+  setModel(tag: string | undefined) {
+    this.modelTag = tag;
+    this.drawBubble();
+  }
+
   /** Sent home: its light goes out, its face falls, and its things pop into a box in its arms. `farewell` goes over its head. */
   leave(farewell: string) {
     if (this.leaving) return;
@@ -1328,7 +1336,7 @@ export class Worker {
     const bg = hot ? (status === 'done' ? '#caffbf' : '#ffd6e0') : status === 'working' ? '#ffec99' : '#fffaf3';
     const bubble =
       status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '';
-    const key = task ? `${status}|${bounce}|${task.name}|${task.summary}` : bubble;
+    const key = task ? `${status}|${bounce}|${task.name}|${task.summary}|${this.modelTag ?? ''}` : bubble;
     if (key === this.bubbleKey) return;
     this.bubbleKey = key;
     if (this.bubble) {
@@ -1339,7 +1347,7 @@ export class Worker {
     this.bubbleIsCard = !!task;
     if (task) {
       const [text, chipBg, color] = TASK_CHIP[status] ?? TASK_CHIP.idle;
-      this.bubble = cardSprite({ chip: { text, bg: chipBg, color }, title: task.name, body: task.summary, bg: isAsleep(status) ? '#e9ecef' : bg });
+      this.bubble = cardSprite({ chip: { text, bg: chipBg, color }, title: task.name, body: task.summary, tag: this.modelTag, bg: isAsleep(status) ? '#e9ecef' : bg });
     } else if (bubble) this.bubble = textSprite(bubble, { bg, size: 38 });
     if (this.bubble) this.root.add(this.bubble);
   }

@@ -6,6 +6,7 @@ import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLO
 import { floorPalette } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
+import { modelTag } from '../shared/model';
 import { isAsleep, isBusy } from '../shared/status';
 import { pullRequestLabel } from '../shared/pulls';
 import { Net } from './net';
@@ -1041,6 +1042,8 @@ function syncWorkers() {
       noOutline(v.model.root);
     }
     v.model.setAction(w.action);
+    // What it last replied with, or failing that the model it was hired on.
+    v.model.setModel(w.kind === 'agent' ? modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : undefined) : undefined);
     const engineBadge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
     v.model.setTask(meetingCard(w) ?? (w.task && w.kind === 'agent' ? { ...w.task, name: `${providerLabel(w.provider, store.project)}${engineBadge ? ` · ${engineBadge}` : ''} · ${w.task.name}` } : w.task));
     const deskDef = DESK_BY_ID.get(w.deskId);
