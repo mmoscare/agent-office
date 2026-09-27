@@ -204,7 +204,26 @@ export const FLAG_BOLD = 1;
 export const FLAG_INVERSE = 2;
 export const FLAG_DIM = 4;
 
-export interface GhIssue {
+/**
+ * Which repository a board item is in, on a floor that's a folder of checkouts rather than one:
+ * owner/name, and the folder it's checked out in, relative to the floor. Unset on a one-repo floor.
+ */
+export interface GhWhere {
+  repo?: string;
+  repoDir?: string;
+}
+
+/** An issue or PR's key on the boards: its number, and its repository on a floor of several. */
+export function ghKey(it: { number: number; repo?: string }): string {
+  return it.repo ? `${it.repo.toLowerCase()}#${it.number}` : `#${it.number}`;
+}
+
+/** How an issue or PR is named to people: "#12", or "tax-terminal#12" on a floor of several repositories. */
+export function ghRef(it: { number: number; repo?: string }): string {
+  return `${it.repo ? it.repo.split('/')[1] : ''}#${it.number}`;
+}
+
+export interface GhIssue extends GhWhere {
   number: number;
   title: string;
   state: string;
@@ -218,7 +237,7 @@ export interface GhIssue {
   comments: number;
 }
 
-export interface GhPull {
+export interface GhPull extends GhWhere {
   number: number;
   title: string;
   state: string;
@@ -249,6 +268,8 @@ export interface QueueTask {
   model?: string;
   /** The GitHub issue it came from, when it did. */
   issue?: number;
+  /** The issue's repository, on a floor that's a folder of several (see GhWhere). */
+  repo?: string;
   title: string;
   prompt: string;
   addedBy: string;
@@ -337,7 +358,7 @@ export interface GhCheck {
   url?: string;
 }
 
-/** Everything the PR window shows beyond the board card: GET /api/gh/pull?number=N */
+/** Everything the PR window shows beyond the board card: GET /api/gh/pull?number=N (&repo=owner/name) */
 export interface GhPullDetail {
   number: number;
   body: string;
@@ -360,7 +381,7 @@ export interface GhPullDetail {
   viewer: string;
 }
 
-/** GET /api/gh/issue?number=N */
+/** GET /api/gh/issue?number=N (&repo=owner/name on a floor of several repositories) */
 export interface GhIssueDetail {
   number: number;
   /** OPEN or CLOSED. */
@@ -678,14 +699,14 @@ export type ClientMsg =
   | { t: 'term.resize'; workerId: string; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
-  | { t: 'gh.merge'; number: number; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
+  | { t: 'gh.merge'; number: number; repo?: string; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
   /** Comment on an issue or a PR's conversation, as the server's gh account; answered with gh.commented. */
-  | { t: 'gh.comment'; kind: 'issue' | 'pull'; number: number; body: string }
+  | { t: 'gh.comment'; kind: 'issue' | 'pull'; number: number; repo?: string; body: string }
   /** Hit the office gong (E at the gong); everyone on the floor hears it. */
   | { t: 'gong' }
   /** Close an issue, or a pull request without merging it; the answer comes back as gh.closed. */
-  | { t: 'gh.close'; kind: 'issue' | 'pull'; number: number; comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }
-  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; provider?: AgentProvider; model?: string }
+  | { t: 'gh.close'; kind: 'issue' | 'pull'; number: number; repo?: string; comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }
+  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; repo?: string; provider?: AgentProvider; model?: string }
   | { t: 'queue.remove'; taskId: string }
   /** Move a queued task up (-1) or down (+1) the queue. */
   | { t: 'queue.move'; taskId: string; delta: number }
@@ -797,9 +818,9 @@ export type ServerMsg =
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */
-  | { t: 'gh.merged'; number: number; error?: string }
+  | { t: 'gh.merged'; number: number; repo?: string; error?: string }
   /** Sent to whoever commented: the comment as GitHub saved it, or why it wasn't. */
-  | { t: 'gh.commented'; kind: 'issue' | 'pull'; number: number; comment?: GhComment; error?: string }
+  | { t: 'gh.commented'; kind: 'issue' | 'pull'; number: number; repo?: string; comment?: GhComment; error?: string }
   /**
    * The gong rings, for everyone on the floor: someone hit it, pull request `pr` merged (confetti
    * over the desk it came from), or the last task on the queue just finished (a bigger party).
@@ -811,7 +832,7 @@ export type ServerMsg =
    */
   | { t: 'phone'; floor: string; name: string; worker: string; task?: string }
   /** Sent to whoever asked to close it. */
-  | { t: 'gh.closed'; kind: 'issue' | 'pull'; number: number; error?: string }
+  | { t: 'gh.closed'; kind: 'issue' | 'pull'; number: number; repo?: string; error?: string }
   | { t: 'rtc'; from: string; data: unknown }
   | ({ t: 'chat' } & ChatLine)
   | { t: 'toast'; text: string; level: 'info' | 'warn' | 'error' }
