@@ -8,14 +8,15 @@ import { workerBranches } from './worker-branches.js';
 import { codexInputPrompt } from './codex-input.js';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
-import type { AgentProvider, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
+import type { AgentProvider, GhPull, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief } from './stations.js';
 import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
 import { isBusy } from '../shared/status.js';
-import { gh } from './github.js';
+import { findBranchPr, gh } from './github.js';
+import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
 import { TaskNamer, fallbackTask } from './tasks.js';
 import { addUsage, newTracker, restoreTracker, scanTracker, trackerUsage, zeroUsage, type Ledger, type UsageTracker } from './usage.js';
@@ -215,6 +216,21 @@ export class WorkerManager {
 
   list(): WorkerInfo[] {
     return [...this.workers.values()].map((w) => w.info);
+  }
+
+  /** Link PRs created outside the office and retain their merged/closed state across restarts. */
+  onPulls(pulls: GhPull[]) {
+    let changed = false;
+    for (const w of this.workers.values()) {
+      const branch = w.info.worktree?.branch;
+      const pr = branch && pullForBranch(pulls, branch);
+      // The board keeps a bounded history; absence is not proof that a saved PR disappeared.
+      if (!pr || (w.info.pr?.number === pr.number && w.info.pr.url === pr.url && w.info.pr.state === pr.state)) continue;
+      w.info.pr = pr;
+      this.emitUpdate(w);
+      changed = true;
+    }
+    if (changed) this.persist();
   }
 
   get(id: string): WorkerInfo | undefined {
@@ -468,7 +484,7 @@ export class WorkerManager {
   /**
    * Pushes a worktree worker's branch and opens a pull request for it, with a title and body
    * drafted from its task. Resolves to the PR, or to a message saying why there is none. The
-   * branch may already have an open PR (a second press, or one opened by hand): that one is used.
+   * branch may already have a PR (including one merged or closed elsewhere): that one is used.
    */
   async openPr(id: string, by: string): Promise<{ number: number; url: string; existed: boolean; dirty: boolean } | string> {
     const w = this.workers.get(id);
@@ -485,15 +501,15 @@ export class WorkerManager {
     info.prOpening = true;
     this.emitUpdate(w);
     try {
-      const commits = (await run('git', ['log', '--reverse', '--format=%h %s', `${wt.base}..${wt.branch}`], cwd)).split('\n').filter(Boolean);
       const dirty = (await run('git', ['status', '--porcelain'], cwd)) !== '';
-      if (!commits.length) return dirty ? `${info.name} hasn't committed anything yet — ask it to commit first` : `${info.name} has no commits on ${wt.branch} yet`;
-      const open = await findOpenPr(wt.branch, cwd);
-      if (open) {
-        info.pr = open;
+      const existing = info.pr ?? await findBranchPr(wt.branch, cwd);
+      if (existing) {
+        info.pr = existing;
         this.persist();
-        return { ...open, existed: true, dirty };
+        return { ...existing, existed: true, dirty };
       }
+      const commits = (await run('git', ['log', '--reverse', '--format=%h %s', `${wt.base}..${wt.branch}`], cwd)).split('\n').filter(Boolean);
+      if (!commits.length) return dirty ? `${info.name} hasn't committed anything yet — ask it to commit first` : `${info.name} has no commits on ${wt.branch} yet`;
       await run('git', ['push', '-u', 'origin', wt.branch], cwd, 90_000);
       const base = await this.pushedBranch([wt.from, this.trees.currentBranch()], wt.branch);
       const { title, body } = draftPr(info, commits, by);
@@ -501,7 +517,7 @@ export class WorkerManager {
       const url = out.trim().split('\n').pop() ?? '';
       const number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
       if (!number) throw new Error(`gh did not return a pull request URL (${truncate(out, 120)})`);
-      info.pr = { number, url };
+      info.pr = { number, url, state: 'OPEN' };
       this.persist();
       return { number, url, existed: false, dirty };
     } catch (err) {
@@ -1295,7 +1311,7 @@ process.stdin.on('end', () => {
           sessionId: s.sessionId,
           activity: s.activity,
           task: validTask(s.task),
-          pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url } : undefined,
+          pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url, state: typeof s.pr.state === 'string' ? s.pr.state : undefined } : undefined,
           usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (provider === 'claude' || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
           cols: 100,
           rows: 30,
@@ -1496,12 +1512,6 @@ function run(cmd: string, args: string[], cwd: string, timeout = 30_000): Promis
       else resolve(stdout.trim());
     });
   });
-}
-
-async function findOpenPr(branch: string, cwd: string): Promise<{ number: number; url: string } | undefined> {
-  const out = await gh(['pr', 'list', '--head', branch, '--state', 'open', '--limit', '1', '--json', 'number,url'], cwd);
-  const found = (JSON.parse(out || '[]') as { number: number; url: string }[])[0];
-  return found ? { number: found.number, url: found.url } : undefined;
 }
 
 /**

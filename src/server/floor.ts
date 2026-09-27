@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
+import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
 import { configuredProvider } from './agents.js';
@@ -140,6 +141,7 @@ export class Floor {
         ctx.emit(this, { t: 'gh.pulls', state });
         this.queue?.onPulls(state.items);
         if (state.loading || state.error) return;
+        this.workers.onPulls(state.items);
         for (const p of this.merges.look(state.items)) {
           ctx.toast(this, `🎉 PR #${p.number} merged: ${p.title}`);
           this.merged(p.number);
@@ -169,8 +171,8 @@ export class Floor {
         return { name: w.name, cwd: w.worktree ? path.join(def.dir, w.worktree.path) : def.dir, rel: w.worktree?.path ?? '', worktreeBase: w.worktree?.base };
       },
       (branch) => {
-        const pr = this.github.pulls.items.find((p) => p.state === 'OPEN' && p.headRefName === branch);
-        return pr ? { number: pr.number, url: pr.url } : undefined;
+        return pullForBranch(this.github.pulls.items, branch)
+          ?? this.workers.list().find((w) => w.worktree?.branch === branch)?.pr;
       },
       {
         state: (state, ids) => ctx.changes(state, ids),

@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { ChangedFile, ChangeStatus, ChangesState } from '../shared/protocol.js';
+import type { ChangedFile, ChangeStatus, ChangesState, PullRequestRef } from '../shared/protocol.js';
+import { pullRequestLabel } from '../shared/pulls.js';
+import { findBranchPr } from './github.js';
 
 // What a worker changed, for the Changes window at its desk: the files it touched and their diff,
 // against the branch the office was opened on. While anyone has the window open, the office polls
@@ -120,15 +122,15 @@ async function signature(file: string): Promise<string> {
 export class Changes {
   private watches = new Map<string, Watch>();
   /** PRs opened from the office, until the GitHub boards catch up. */
-  private opened = new Map<string, { number: number; url: string }>();
+  private opened = new Map<string, PullRequestRef>();
 
   constructor(
     private dir: string,
     /** The branch the office was opened on: what diffs are taken against and what PRs target. */
     private baseBranch: string | undefined,
     private target: (workerId: string) => ChangesTarget | undefined,
-    /** An open pull request whose head is that branch, from the PR board. */
-    private openPull: (branch: string) => { number: number; url: string } | undefined,
+    /** The branch's pull request from the board or the worker's saved history, in any state. */
+    private branchPull: (branch: string) => PullRequestRef | undefined,
     private events: ChangesEvents,
   ) {
     if (baseBranch === 'HEAD') this.baseBranch = undefined;
@@ -231,10 +233,15 @@ export class Changes {
   /** Pushes the branch and opens a pull request for it with `gh`. */
   async pullRequest(workerId: string, title: string, body: string, who: string): Promise<string | undefined> {
     if (!title.trim()) return 'The pull request needs a title';
-    return this.action(workerId, 'Pushing the branch and opening a pull request…', async (t, w) => {
-      const s = w.last ?? (await this.compute(workerId, t));
+    return this.action(workerId, 'Pushing the branch and opening a pull request…', async (t) => {
+      const s = await this.compute(workerId, t);
       if (!s.branch || !s.prBase) return "This checkout isn't on a branch of its own";
-      if (s.pr) return `There's already a pull request for ${s.branch}: ${s.pr.url}`;
+      const existing = s.pr ?? await findBranchPr(s.branch, t.cwd);
+      if (existing) {
+        this.opened.set(s.branch, existing);
+        this.events.refreshGitHub();
+        return `${pullRequestLabel(existing)} already exists for ${s.branch}: ${existing.url}`;
+      }
       if (s.files.some((f) => f.uncommitted)) return 'Commit the changes first';
       if (!s.ahead) return `${s.branch} has no commits that ${s.prBase} lacks`;
       const remotes = (await git(['remote'], t.cwd)).split('\n').filter(Boolean);
@@ -245,7 +252,7 @@ export class Changes {
       const url = r.out.trim().split('\n').pop() ?? '';
       if (r.code !== 0 || !/^https?:\/\//.test(url)) throw new GitError(reason(r, url || 'gh pr create failed'));
       const number = Number(/\/(\d+)$/.exec(url)?.[1] ?? 0);
-      this.opened.set(s.branch, { number, url });
+      this.opened.set(s.branch, { number, url, state: 'OPEN' });
       this.events.toast(`${who} opened a pull request for ${t.name}: ${url}`, 'info');
       this.events.refreshGitHub();
       return undefined;
@@ -406,7 +413,7 @@ export class Changes {
       );
       const ahead = Number(await gitMaybe(['rev-list', '--count', `${base.commit}..HEAD`], t.cwd)) || 0;
       const subject = ahead ? await gitMaybe(['log', '-1', '--format=%s'], t.cwd) : undefined;
-      const pr = base.branch ? this.opened.get(base.branch) ?? this.openPull(base.branch) : undefined;
+      const pr = base.branch ? this.branchPull(base.branch) ?? this.opened.get(base.branch) : undefined;
       return { workerId, dir: t.rel, branch: base.branch ?? 'HEAD', base: base.label, ahead, subject, files: list, more: all.length - list.length, prBase: base.prBase, pr, at: Date.now() };
     } catch (err) {
       return errorState(workerId, t.rel, err instanceof GitError ? err.message : String((err as Error).message ?? err));
