@@ -376,6 +376,8 @@ export const GH_COMMENT_MAX = 65536;
 
 export interface ProjectInfo {
   name: string;
+  /** Authenticated, same-origin URL of this project's local logo, when one was found. */
+  logo?: string;
   dir: string;
   branch?: string;
   remote?: string;

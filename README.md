@@ -97,6 +97,14 @@ The office keeps its data in `~/agent-office` (`--home` or `AGENT_OFFICE_HOME` t
 
 To start the office in a project you already have, pass its folder: `agent-office ~/code/my-project`. That project becomes a floor, and the office keeps its data in `~/code/my-project/.agent-office` as it always did. An office that already ran in a project (from before there were floors) carries on in it when you start `agent-office` there again.
 
+### Floor names and logos
+
+Every floor displays its repo or directory name on matching plaques behind the rolling whiteboard and above the elevator, exit, balcony and loft doorways. The signs follow the floor's colors. Projects without a logo use an initials badge.
+
+Logos are discovered locally when a floor opens. The office checks `logo`, the directory name (also with `-logo`), `logo-light`, `logo-dark`, `icon`, `apple-touch-icon` and `favicon` in the project root and common asset folders such as `public`, `assets`, `images`, `static`, `docs`, `.github`, `src/assets`, `app`, `src/app` and `src/client/public`. Supported formats are SVG, PNG, WebP, JPEG and ICO, up to 512 KiB. Logos take precedence over icons. It does not download images from GitHub or crawl dependencies.
+
+To choose a particular logo, put it at `.agent-office/logo.svg` (or another supported extension) in that floor's project folder. This takes precedence over discovered assets. Restart the office after adding or replacing a logo on an existing floor. Logos are served only to signed-in office users; an unreadable or broken image falls back to initials.
+
 ### Accounts
 
 The office password gets you in until everyone has an account, and whoever signs in with it is an admin. Open **🔑 Accounts** and make an invite link for each person. Give the invite a name, or leave it empty and they pick their own, and make them a *Member* or an *Admin*. Send them the link: it works once, for 7 days, and they choose their own password. Make one for yourself too, as an admin.
