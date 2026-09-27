@@ -122,6 +122,8 @@ export interface CardOpts {
   chip?: { text: string; bg: string; color: string };
   title: string;
   body?: string;
+  /** A small tab on the bottom edge beside the tail, e.g. the model a worker runs: "Opus 5.5 · high". */
+  tag?: string;
   bg: string;
   /** Widest a line of text may get, in textSprite `size` pixels. */
   maxWidth?: number;
@@ -158,8 +160,15 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   const bodyW = body.length ? Math.max(...body.map((l) => ctx.measureText(l).width)) : 0;
   ctx.font = chipFont;
   const chipW = o.chip ? ctx.measureText(o.chip.text).width + 24 * R : 0;
+  const tagFont = `700 ${15 * R}px ${FONT}`;
+  const tagH = 22 * R;
+  const r = 18 * R;
+  ctx.font = tagFont;
+  const tagW = o.tag ? ctx.measureText(o.tag).width + 16 * R : 0;
+  // Room for the tab between the tail and the rounded corner.
+  const tagRoom = o.tag ? 2 * (tail + 6 * R + tagW + r) : 0;
 
-  const w = Math.ceil(Math.max(titleW, bodyW, chipW + 2 * pad) + 2 * pad);
+  const w = Math.ceil(Math.max(titleW, bodyW, chipW + 2 * pad, tagRoom - 2 * pad) + 2 * pad);
   const top = o.chip ? chipH / 2 : lw;
   const titleY = top + (o.chip ? chipH / 2 + 6 * R : pad);
   const bodyY = titleY + title.length * titleLH + 4 * R;
@@ -173,7 +182,6 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   const x0 = lw / 2;
   const x1 = w - lw / 2;
   const cx = w / 2;
-  const r = 18 * R;
   ctx.beginPath();
   ctx.moveTo(x0 + r, top);
   ctx.arcTo(x1, top, x1, bottom, r);
@@ -203,6 +211,20 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
     ctx.font = chipFont;
     ctx.fillStyle = o.chip.color;
     ctx.fillText(o.chip.text, cx, lw / 2 + chipH / 2 + R);
+  }
+  if (o.tag) {
+    // Straddles the bottom edge like the chip does the top, in the card's own colour so it reads as part of it.
+    const tx = x1 - r - tagW;
+    ctx.beginPath();
+    ctx.roundRect(tx, bottom - tagH / 2, tagW, tagH, tagH / 2);
+    ctx.fillStyle = o.bg;
+    ctx.fill();
+    ctx.lineWidth = 3 * R;
+    ctx.strokeStyle = INK;
+    ctx.stroke();
+    ctx.font = tagFont;
+    ctx.fillStyle = '#5c5f77';
+    ctx.fillText(o.tag, tx + tagW / 2, bottom + R);
   }
   ctx.font = titleFont;
   ctx.fillStyle = INK;

@@ -1,6 +1,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Usage, UsageState } from '../shared/protocol.js';
+import { isEffort, isModelId } from '../shared/model.js';
 
 /*
  * Where a worker's numbers come from
@@ -93,6 +94,10 @@ export interface UsageTracker {
   since: Usage;
   /** Latest transcript timestamp seen. */
   at?: number;
+  /** The model the session's latest reply came from (subagents' own models don't count). */
+  model?: string;
+  /** The reasoning effort that reply was made at. */
+  effort?: string;
 }
 
 export const newTracker = (): UsageTracker => ({ files: {}, since: zeroUsage() });
@@ -121,6 +126,8 @@ export function restoreTracker(saved: any): UsageTracker {
   if (base) t.base = { ...base, at: num(saved.base.at) };
   t.since = asUsage(saved.since) ?? zeroUsage();
   if (num(saved.at)) t.at = saved.at;
+  if (isModelId(saved.model)) t.model = saved.model;
+  if (isEffort(saved.effort)) t.effort = saved.effort;
   return t;
 }
 
@@ -150,26 +157,33 @@ export function scanTracker(t: UsageTracker): boolean {
       } catch {
         continue;
       }
-      if (applyLine(t, cur, obj)) changed = true;
+      if (applyLine(t, cur, obj, file === t.transcript)) changed = true;
     }
   }
   return changed;
 }
 
-function applyLine(t: UsageTracker, cur: FileCursor, line: any): boolean {
+function applyLine(t: UsageTracker, cur: FileCursor, line: any, main: boolean): boolean {
   if (!line || typeof line !== 'object') return false;
   const at = typeof line.timestamp === 'string' ? Date.parse(line.timestamp) : NaN;
   if (at > (t.at ?? 0)) t.at = at;
   if (line.type === 'assistant') {
     const msg = line.message;
     if (!msg || typeof msg !== 'object' || typeof msg.id !== 'string' || !msg.usage) return false;
+    // "<synthetic>" marks messages Claude Code wrote itself, which isModelId turns away.
+    const effort = line.perTurnEffort ?? line.effort;
+    const modelChanged = main && isModelId(msg.model) && (msg.model !== t.model || (isEffort(effort) && effort !== t.effort));
+    if (modelChanged) {
+      t.model = msg.model;
+      if (isEffort(effort)) t.effort = effort;
+    }
     // Already inside Claude Code's own tally.
-    if (t.base && at <= t.base.at) return false;
+    if (t.base && at <= t.base.at) return modelChanged;
     const u = usageOfMessage(typeof msg.model === 'string' ? msg.model : '', msg.usage);
     const delta = cur.lastId === msg.id && cur.lastUsage ? addUsage(u, cur.lastUsage, -1) : u;
     cur.lastId = msg.id;
     cur.lastUsage = u;
-    if (isZero(delta)) return false;
+    if (isZero(delta)) return modelChanged;
     t.since = addUsage(t.since, delta);
     return true;
   }
