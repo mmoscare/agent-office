@@ -829,6 +829,8 @@ export function changedImageType(filePath: string): string | undefined {
 
 /** What a worker changed in its checkout, against the branch the office was opened on. */
 export interface ChangesState {
+  /** Read-only combined view of direct child repositories in a shared project folder. */
+  repositories?: { path: string; error?: string }[];
   workerId: string;
   /** The checkout, relative to the office dir ('' is the project folder itself, shared by everyone). */
   dir: string;
