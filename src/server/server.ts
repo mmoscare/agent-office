@@ -601,6 +601,21 @@ export async function startServer(cfg: Config) {
         return;
       }
       if (p === '/api/whoami') return send(res, 200, { ok: true, me: meOf(session.account?.id) });
+      const logoMatch = /^\/api\/floors\/([^/]+)\/logo$/.exec(p);
+      if (logoMatch && req.method === 'GET') {
+        const logo = floors.get(logoMatch[1])?.logo;
+        if (!logo) return send(res, 404, { error: 'No project logo' });
+        res.writeHead(200, {
+          'content-type': logo.type,
+          'content-length': logo.bytes.length,
+          'cache-control': 'private, max-age=3600',
+          'x-content-type-options': 'nosniff',
+          // An SVG is an image here, never an executable page if opened directly.
+          'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+        });
+        res.end(logo.bytes);
+        return;
+      }
       if (p === '/api/model-usage' && req.method === 'GET') {
         const waiting = [];
         for (const floor of floors.values()) {

@@ -399,7 +399,7 @@ function renderProject() {
   const n = store.floors.findIndex((f) => f.id === store.floor);
   $('project-name').textContent = `🏢 ${p.name}`;
   $('project-meta').textContent = [n >= 0 && `🛗 floor ${n + 1} of ${store.floors.length}`, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
-  office.setProjectName(p.name);
+  office.setProjectName(p.name, p.logo, n >= 0 ? n + 1 : undefined);
 }
 store.on('floors', renderProject);
 store.on('project', renderProject);

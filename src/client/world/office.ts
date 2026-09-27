@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LOFT, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
-import { wallFacing, type WallId, type WallRect } from '../../shared/decor';
+import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
@@ -9,6 +9,7 @@ import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
 import { buildJukebox, type JukeboxView } from './jukebox';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
+import { buildProjectSigns } from './project-signs';
 
 export interface Collider {
   minX: number;
@@ -75,8 +76,8 @@ export interface Office {
   jukebox: JukeboxView;
   /** The rolling whiteboard everyone draws on together. */
   whiteboard: WhiteboardStand;
-  /** The sign over the elevator doors: which floor you're on. */
-  setProjectName(name: string): void;
+  /** The repo/directory plaques behind the whiteboard and above every doorway. */
+  setProjectName(name: string, logo?: string, floor?: number): void;
   /** Paints the walls, their trim and the floor in a floor's colors, so each project looks like itself. */
   setLook(p: FloorPalette): void;
   /** Lights, windows and glass for the sky to change with the time of day and the weather. */
@@ -927,6 +928,7 @@ function wallBoard(width: number, height: number, frameColor: string): { group: 
 
 export function buildOffice(): Office {
   const group = new THREE.Group();
+  const projectSigns = buildProjectSigns();
   const colliders: Collider[] = [];
   const interactables: Interactable[] = [];
   const fixtures: WallRect[] = [];
@@ -994,6 +996,21 @@ export function buildOffice(): Office {
   doors.push(slider.door);
   fixture(BALCONY_DOOR.wall, BALCONY_DOOR.u, (BALCONY_DOOR.y1 + 0.1) / 2, BALCONY_DOOR.width + 0.2, BALCONY_DOOR.y1 + 0.1);
   buildBalcony(group, colliders, interactables, night);
+
+  // On both sides of the outside doors, above the EXIT light and clear of the windows.
+  for (const [location, opening, signWidth, y] of [
+    ['exit', EXIT_DOOR, 2.6, 3.55],
+    ['balcony', BALCONY_DOOR, 3.1, 3.15],
+  ] as const) {
+    for (const outside of [false, true]) {
+      const sign = projectSigns.create(`${location}-${outside ? 'outside' : 'inside'}`, signWidth);
+      const at = wallPose(opening.wall, opening.u, y, outside ? -WALL_T - 0.06 : 0.06);
+      sign.position.set(at.x, at.y, at.z);
+      sign.rotation.y = at.rotY + (outside ? Math.PI : 0);
+      group.add(sign);
+    }
+    fixture(opening.wall, opening.u, y, signWidth + 0.1, signWidth / 4 + 0.1);
+  }
 
   // Downstairs: the garage under the office, and the street outside.
   buildGarage(group, colliders);
@@ -1199,7 +1216,7 @@ export function buildOffice(): Office {
   const bossScreen = buildLoft(group, colliders, interactables, looks);
 
   // The elevator to the other floors, against the north wall between the PR board and the gong.
-  const elevator = buildElevator();
+  const elevator = buildElevator(projectSigns.create('elevator', 2.42));
   group.add(elevator.group);
   colliders.push(...elevator.colliders);
   interactables.push(elevator.interactable);
@@ -1217,6 +1234,27 @@ export function buildOffice(): Office {
   group.add(whiteboard.group);
   colliders.push(...whiteboard.colliders);
   interactables.push(whiteboard.interactable);
+  // The back of the rolling board carries the identity, with a matching raised header visible
+  // from the desks. Both are attached behind it, leaving the drawing and its controls clear.
+  const backSign = projectSigns.create('whiteboard-back', 3.65);
+  backSign.position.set(0, 1.6, -0.095);
+  backSign.rotation.y = Math.PI;
+  whiteboard.group.add(backSign);
+  const headerSign = projectSigns.create('whiteboard-header', 3.8);
+  headerSign.position.set(0, 3.65, -0.13);
+  whiteboard.group.add(headerSign);
+  // Include the raised header when jumping onto the stand.
+  for (const collider of whiteboard.colliders) collider.top = 4.17;
+  for (const x of [-1.75, 1.75]) {
+    whiteboard.group.add(mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.55, 8), toon('#aab4be'), x, 3.12, -0.13));
+  }
+  // The small doorway into the loft gets the same identity, facing the stairs and the office.
+  for (const inside of [false, true]) {
+    const sign = projectSigns.create(`loft-${inside ? 'inside' : 'stairs'}`, 1.5);
+    sign.position.set(LOFT.minX + (inside ? 0.19 : -0.07), LOFT.y + 2.55, (STAIRS.minZ + LOFT.maxZ) / 2);
+    sign.rotation.y = inside ? Math.PI / 2 : -Math.PI / 2;
+    group.add(sign);
+  }
   // Pictures stay clear of the stairs (step by step, so they can hang above them) and of what's on
   // the loft's walls upstairs, as buildLoft places it: the couch and the sign.
   const run = (STAIRS.toX - STAIRS.fromX) / STAIRS.steps;
@@ -1226,8 +1264,9 @@ export function buildOffice(): Office {
   fixture('east', loftZ, LOFT.y + 0.5, 2.4, 1);
   fixture('south', LOFT.maxX - 3, LOFT.y + 1.9, 2.6, 0.6);
 
-  const setProjectName = (name: string) => elevator.setSign(`🛗 ${name}`);
+  const setProjectName = projectSigns.setProject;
   const setLook = (p: FloorPalette) => {
+    projectSigns.setLook(p);
     looks.wall.color.set(p.wall);
     looks.trim.color.set(p.trim);
     for (const t of looks.planks) {

@@ -14,6 +14,7 @@ import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { readProjectLogo, type ProjectLogo } from './project-logo.js';
 import type { Ledger } from './usage.js';
 
 type ToastLevel = 'info' | 'warn' | 'error';
@@ -72,6 +73,7 @@ export class Floor {
   readonly id: string;
   readonly dir: string;
   readonly project: ProjectInfo;
+  readonly logo?: ProjectLogo;
   readonly workers: WorkerManager;
   readonly github: GitHub;
   readonly queue: TaskQueue;
@@ -97,6 +99,8 @@ export class Floor {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     excludeFromGit(def.dir);
     this.project = projectInfo(def.dir, def.name, ctx.agentCmd, ctx.agentArgs);
+    this.logo = readProjectLogo(def.dir);
+    if (this.logo) this.project.logo = `/api/floors/${encodeURIComponent(def.id)}/logo?v=${this.logo.version}`;
 
     // Before the workers, so it hears about the ones who wake up needing input.
     this.dog = new Dog(def.id, dataDir, {
