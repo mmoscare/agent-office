@@ -4,6 +4,7 @@ import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
+import { modelTag } from '../shared/model';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
 import { isAsleep, isBusy } from '../shared/status';
 import { Net } from './net';
@@ -613,6 +614,8 @@ function syncWorkers() {
       v.model.setStatus(w.status, waitingOnSomeone(w));
       noOutline(v.model.root);
     }
+    // What it last replied with, or failing that the model it was hired on (OpenCode's --model).
+    v.model.setModel(w.kind === 'agent' ? modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : undefined) : undefined);
     v.model.setTask(w.task && w.kind === 'agent' ? { ...w.task, name: `${providerLabel(w.provider, store.project)} · ${w.task.name}` } : w.task);
     const deskDef = DESK_BY_ID.get(w.deskId);
     if (deskDef) sound.setTyping(w.id, deskDef.x, deskDef.z, w.status === 'working');

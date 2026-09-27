@@ -20,6 +20,7 @@ import { PtyHost, SCROLLBACK, type Adopted, type Pty } from './ptys.js';
 import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
 import { reportedUsage } from './reported-usage.js';
 import { configuredProvider, isValidOpenCodeModel, validateWorkerModel } from './agents.js';
+import { isEffort, isModelId } from '../shared/model.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 
@@ -1033,8 +1034,14 @@ export class WorkerManager {
     if (w.info.kind === 'agent' && w.info.provider === 'codex') {
       if (this.workers.get(w.info.id) !== w || !w.codexTranscript || !w.codexHome || !w.info.sessionId) return;
       const usage = w.codexUsage.read(w.codexTranscript, w.info.sessionId, w.codexHome);
-      if (usage && JSON.stringify(usage) !== JSON.stringify(w.info.usage)) {
-        w.info.usage = usage;
+      const { model, effort } = w.codexUsage;
+      const switched = !!model && (model !== w.info.runningModel || effort !== w.info.runningEffort);
+      if (switched) {
+        w.info.runningModel = model;
+        w.info.runningEffort = effort;
+      }
+      if ((usage && JSON.stringify(usage) !== JSON.stringify(w.info.usage)) || switched) {
+        if (usage) w.info.usage = usage;
         this.emitUpdate(w);
         this.persist();
       }
@@ -1045,6 +1052,10 @@ export class WorkerManager {
       if (!scanTracker(w.tracker)) return;
     } catch {
       return; // an unreadable transcript is retried on the next scan
+    }
+    if (w.tracker.model) {
+      w.info.runningModel = w.tracker.model;
+      w.info.runningEffort = w.tracker.effort;
     }
     const before = w.info.usage ?? zeroUsage();
     const after = trackerUsage(w.tracker);
@@ -1201,6 +1212,8 @@ process.stdin.on('end', () => {
       kind: info.kind,
       provider: info.provider,
       model: info.model,
+      runningModel: info.runningModel,
+      runningEffort: info.runningEffort,
       deskId: info.deskId,
       name: info.name,
       color: info.color,
@@ -1246,6 +1259,8 @@ process.stdin.on('end', () => {
           kind: s.kind === 'shell' ? 'shell' : 'agent',
           provider,
           model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : undefined,
+          runningModel: isModelId(s.runningModel) ? s.runningModel : undefined,
+          runningEffort: isModelId(s.runningModel) && isEffort(s.runningEffort) ? s.runningEffort : undefined,
           deskId: s.deskId,
           name: s.name ?? 'Worker',
           color: s.color ?? COLORS[0],

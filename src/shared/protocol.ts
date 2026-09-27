@@ -36,6 +36,10 @@ export interface WorkerInfo {
   provider?: AgentProvider;
   /** Initial OpenCode model selected for this worker, when one was requested. */
   model?: string;
+  /** The model its latest reply came from, read from the session's transcript (see shared/model.ts). */
+  runningModel?: string;
+  /** The reasoning effort of that reply ("medium", "high"…), when the transcript records one. */
+  runningEffort?: string;
   deskId: string;
   name: string;
   color: string;
