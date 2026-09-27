@@ -17,7 +17,7 @@ export function fmtCost(usd: number): string {
 }
 
 function displayedCost(u: Usage): string {
-  return u.costKnown === false ? 'cost unavailable' : fmtCost(u.cost);
+  return u.costKnown === false ? 'cost unavailable' : `${fmtCost(u.cost)} est.`;
 }
 
 /** e.g. "$0.42 · 38k tokens"; OpenCode's amount is explicitly an estimate. */
@@ -26,7 +26,7 @@ export function usageLabel(u: Usage, provider: AgentProvider = 'claude'): string
     ? 'cost unavailable'
     : u.costKnown === false
       ? 'cost unavailable'
-      : `${fmtCost(u.cost)}${provider === 'opencode' ? ' reported' : ''}`;
+      : `${fmtCost(u.cost)} ${provider === 'opencode' ? 'provider est.' : 'API est.'}`;
   return `${u.incomplete ? "Partial: " : ""}${money} · ${fmtTokens(tokensOf(u))} tokens`;
 }
 
@@ -44,7 +44,7 @@ export function usageTitle(u: Usage, provider: AgentProvider = 'claude'): string
       ? `Codex root-session metrics; subagent usage is not included; ${money}; ${calls}`
       : provider === 'opencode'
         ? `OpenCode reported estimate ${money}; model/provider estimate, not billing; ${calls}`
-        : `${money} over ${calls}`,
+        : `API-value estimate ${money}; not a subscription charge; ${calls}`,
     `input ${fmtTokens(u.input)} · output ${fmtTokens(u.output)}`,
     `reasoning ${fmtTokens(u.reasoning ?? 0)}`,
     `cache write ${fmtTokens(u.cacheWrite)} · cache read ${fmtTokens(u.cacheRead)}`,
@@ -126,8 +126,8 @@ export function renderUsage() {
     if (providerUsageTracked(provider, store.project, w.usage) && w.usage?.costKnown !== false && !w.usage?.incomplete) now += w.usage?.cost ?? 0;
   }
   const head = $('workers-cost');
-  head.textContent = now > 0 ? fmtCost(now) : '';
-  head.title = 'Current desks: tracked Claude Code costs plus reported OpenCode estimates; Codex root-session tokens appear below; sessions with unavailable cost or partial history are excluded.';
+  head.textContent = now > 0 ? `${fmtCost(now)} est.` : '';
+  head.title = 'Estimated API value, not your subscription bill. Includes Claude estimates and reported OpenCode estimates; excludes unavailable costs and partial history.';
 
   const el = $('usage');
   const any = s.total.calls > 0 || s.budget !== undefined || untracked || currentOpenCodeReports > 0 || openCodeWaiting || currentCodexReports > 0 || codexWaiting;
@@ -154,7 +154,7 @@ export function renderUsage() {
   }
   if (s.total.calls > 0 || s.budget !== undefined) rows.push(h('div.row.muted', { title: usageTitle(s.total, 'claude') }, `Claude Code all time ${displayedCost(s.total)} · ${fmtTokens(tokensOf(s.total))} tokens`));
   if (currentOpenCodeReports > 0) {
-    const amount = currentOpenCodeCostUnknown ? 'cost unavailable' : `${fmtCost(currentOpenCodeCost)} reported`;
+    const amount = currentOpenCodeCostUnknown ? 'cost unavailable' : `${fmtCost(currentOpenCodeCost)} provider est.`;
     rows.push(
       h(
         'div.row.muted',
@@ -192,5 +192,6 @@ export function renderUsage() {
   if (untracked) {
     rows.push(h('div.row.muted', { title: 'Custom provider usage is not reported by the office.' }, 'Custom usage untracked · budget and totals cover Claude Code only'));
   }
+  if (now > 0 || s.total.cost > 0) rows.push(h('div.row.muted', {}, 'Dollar figures estimate API value, not subscription charges.'));
   el.replaceChildren(...rows);
 }

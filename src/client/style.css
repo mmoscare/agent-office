@@ -83,6 +83,19 @@ button { font-family: inherit; }
 .usage .row b { font-weight: 900; font-variant-numeric: tabular-nums; }
 .usage .muted { color: var(--muted); font-weight: 600; }
 .usage.over .row b { color: var(--bad); }
+#btn-model-usage { width: 100%; margin-top: 8px; }
+.modal.model-usage { width: min(800px, calc(100vw - 24px)); }
+.model-usage .body { overflow-y: auto; max-height: 72vh; }
+.model-usage select { padding: 7px 10px; font: inherit; color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: 8px; }
+.usage-summary { margin: 16px 0; padding: 12px; background: var(--paper, #fff8e7); border: 2px solid var(--ink, #2b2d42); border-radius: 8px; }
+.usage-record { padding: 10px 0; border-bottom: 1px solid #d5cfbe; }
+.usage-record summary { display: flex; justify-content: space-between; gap: 14px; cursor: pointer; }
+.usage-record summary > span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.usage-expander { align-self: center; }
+.usage-record[open] .usage-expander { transform: rotate(90deg); }
+.usage-record summary > span:last-child { text-align: right; flex-shrink: 0; }
+.usage-record small { display: block; color: var(--muted); margin-top: 3px; }
+.usage-record p { margin: 8px 0; }
 .budget, .meter { height: 10px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; overflow: hidden; }
 .budget .fill, .meter .fill { height: 100%; background: var(--good); transition: width .3s; }
 .budget.near .fill, .meter.near .fill { background: var(--warn); }
@@ -723,6 +736,14 @@ a.when:hover { text-decoration: underline; }
 .elevator .add h3 { margin: 0 0 8px; font-size: 15px; font-weight: 900; }
 .elevator .repo-search { display: flex; gap: 8px; }
 .elevator .repo-search input { flex: 1; }
+.elevator .floor-source { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.elevator .floor-source [aria-pressed="true"] { background: var(--paper-2); box-shadow: none; outline: 2px solid var(--ink); }
+.elevator .local-floor .repo-search input { min-width: 0; }
+.elevator .folder-browser { margin-top: 12px; }
+.elevator .folder-list { display: grid; max-height: 230px; overflow: auto; margin-top: 8px; border: 2px solid var(--ink); border-radius: 10px; background: #fff; }
+.elevator .folder-row { padding: 9px 12px; border: 0; border-bottom: 1px solid var(--paper-2); background: transparent; font: inherit; font-weight: 700; text-align: left; color: var(--ink); overflow-wrap: anywhere; cursor: pointer; }
+.elevator .folder-row:hover, .elevator .folder-row:focus-visible { background: var(--paper-2); }
+.elevator .folder-list .note { padding: 10px; margin: 0; }
 .elevator .repo-list { margin-top: 8px; max-height: 280px; overflow: auto; border: 3px solid var(--ink); border-radius: 12px; background: #fff; }
 .elevator .repo { display: flex; gap: 8px; align-items: baseline; padding: 7px 10px; border-bottom: 2px solid var(--paper-2); cursor: pointer; }
 .elevator .repo:last-child { border-bottom: 0; }

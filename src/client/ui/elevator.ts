@@ -3,9 +3,10 @@ import { floorPalette, normalizeRepo, sameRepo } from '../../shared/floors';
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, openModal, timeAgo, type Modal } from './dom';
+import { localFloorPicker } from './local-floor';
 
-// The elevator's panel: a button for every floor (every project), and "add a project", which clones
-// one of the repositories the office's gh login can see and makes it a new floor. The first time
+// The elevator's panel: a button for every floor, plus opening a local folder or cloning a GitHub
+// repository as a new floor. The first time
 // the office runs there are no floors, and this is where you start.
 
 export interface ElevatorOptions {
@@ -41,6 +42,7 @@ export function openElevator(opts: ElevatorOptions): void {
   let adding: string | null = null;
   let error = '';
   let showAdd = setup || !store.floors.length;
+  let source: 'local' | 'github' = 'local';
   /** The search box and list are in place (rebuilding them would lose the focus mid-typing). */
   let built = false;
 
@@ -52,6 +54,13 @@ export function openElevator(opts: ElevatorOptions): void {
   const addBtn = h('button.btn.primary', { type: 'button' }, '🛗 Add floor');
   const refreshBtn = h('button.btn', { type: 'button', title: 'Ask GitHub for the list again' }, '↻');
   const close = setup ? null : h('button.btn.close', { 'aria-label': 'Close' }, '✕');
+  const localTab = h('button.btn', { type: 'button', 'aria-pressed': 'true' }, 'Local folder');
+  const githubTab = h('button.btn', { type: 'button', 'aria-pressed': 'false' }, 'Clone from GitHub');
+  const sourceChoice = h('div.floor-source', { role: 'group', 'aria-label': 'Project source' }, localTab, githubTab);
+  const local = localFloorPicker((floor) => { modal.close(); opts.ride(floor); }, (busy) => {
+    localTab.disabled = githubTab.disabled = busy;
+  });
+  const focusSource = () => source === 'local' ? local.focus() : input.focus();
 
   const needRepos = () => {
     const r = store.repos;
@@ -126,16 +135,27 @@ export function openElevator(opts: ElevatorOptions): void {
   };
 
   const renderAdd = () => {
+    local.button.classList.toggle('hidden', !showAdd || source !== 'local');
     if (!showAdd) {
       const open = h('button.btn', { type: 'button' }, '➕ Add a project');
       open.addEventListener('click', () => {
         showAdd = true;
-        needRepos();
+        if (source === 'github') needRepos();
         renderAdd();
-        setTimeout(() => input.focus(), 0);
+        setTimeout(focusSource, 0);
       });
       addEl.replaceChildren(open);
       addBtn.classList.add('hidden');
+      return;
+    }
+    localTab.setAttribute('aria-pressed', String(source === 'local'));
+    githubTab.setAttribute('aria-pressed', String(source === 'github'));
+    addBtn.classList.toggle('hidden', source !== 'github');
+    if (source === 'local') {
+      if (!built) {
+        built = true;
+        addEl.replaceChildren(h('h3', {}, setup && !store.floors.length ? 'Open your first project' : 'Add a project'), sourceChoice, local.element);
+      }
       return;
     }
     addBtn.classList.remove('hidden');
@@ -165,6 +185,7 @@ export function openElevator(opts: ElevatorOptions): void {
       built = true;
       addEl.replaceChildren(
         h('h3', {}, setup && !store.floors.length ? 'Pick your first project' : '➕ Add a project'),
+        sourceChoice,
         h('div.repo-search', {}, input, refreshBtn),
         listEl,
         statusEl,
@@ -175,6 +196,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const add = (repo: string) => {
     if (adding) return;
     adding = repo;
+    localTab.disabled = githubTab.disabled = true;
     error = '';
     renderAdd();
     net.send({ t: 'floor.add', repo });
@@ -183,6 +205,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const onAdded = (msg: Extract<ServerMsg, { t: 'floor.added' }>) => {
     if (!adding || msg.repo !== adding) return;
     adding = null;
+    localTab.disabled = githubTab.disabled = false;
     if (msg.error || !msg.floor) {
       error = msg.error ?? 'The floor could not be added';
       renderAdd();
@@ -216,6 +239,16 @@ export function openElevator(opts: ElevatorOptions): void {
     renderAdd();
     net.send({ t: 'floor.repos', refresh: true });
   });
+  const setSource = (next: typeof source) => {
+    if (source === next) return;
+    source = next;
+    built = false;
+    if (source === 'github') needRepos();
+    renderAdd();
+    focusSource();
+  };
+  localTab.addEventListener('click', () => setSource('local'));
+  githubTab.addEventListener('click', () => setSource('github'));
 
   const intro = setup
     ? h(
@@ -223,7 +256,7 @@ export function openElevator(opts: ElevatorOptions): void {
         {},
         store.floors.length
           ? 'Every project is a floor of this building. Pick a floor to ride to, or add another project.'
-          : "Every project is a floor of this building, and it doesn't have any yet. Pick one of your repositories: the office clones it and it becomes the first floor.",
+          : 'Every project is a floor of this building. Open a folder on this computer or clone a GitHub repository to create your first floor.',
       )
     : null;
   const el = h(
@@ -231,7 +264,7 @@ export function openElevator(opts: ElevatorOptions): void {
     { role: 'dialog', 'aria-label': 'Elevator' },
     h('header', {}, h('h2', {}, setup ? '🏢 Welcome to Agent Office' : '🛗 Elevator'), close),
     h('div.body', {}, intro, floorsEl, addEl),
-    h('footer', {}, h('span.grow', {}, setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'), addBtn),
+    h('footer', {}, h('span.grow', {}, setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'), local.button, addBtn),
   );
   const unsubs = [store.on('floors', () => (renderFloors(), renderAdd())), store.on('repos', renderAdd), store.on('floor', renderFloors)];
   const modal = openModal(el, {
@@ -240,13 +273,13 @@ export function openElevator(opts: ElevatorOptions): void {
     onClose: () => {
       current = null;
       addedWaiters.delete(onAdded);
+      local.dispose();
       for (const off of unsubs) off();
     },
   });
   current = modal;
   close?.addEventListener('click', () => modal.close());
   renderFloors();
-  if (showAdd) needRepos();
   renderAdd();
-  if (showAdd) setTimeout(() => input.focus(), 30);
+  if (showAdd) setTimeout(focusSource, 30);
 }

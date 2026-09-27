@@ -85,6 +85,17 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
+/** Works whether Codex dispatches its Windows command through cmd or PowerShell. */
+function windowsHookCommand(hookPath: string, event: string): string {
+  const argv = [process.execPath, hookPath, event].map((value) => `'${value.replaceAll("'", "''")}'`);
+  // Read JSON as data, preserve Unicode through Windows PowerShell's pipeline, and propagate exit status.
+  // Encoding the script keeps paths with spaces, apostrophes, %, or & out of the outer shell's parser.
+  const script = `$ProgressPreference = 'SilentlyContinue'; ` +
+    `$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); ` +
+    `[Console]::In.ReadToEnd() | & ${argv.join(' ')}; exit $LASTEXITCODE`;
+  return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`;
+}
+
 /**
  * Build the CLI config overrides for all lifecycle hooks. The command is encoded as a TOML basic
  * string so paths containing spaces remain valid; the command itself is shell-quoted.
@@ -93,7 +104,8 @@ export function codexHookArgs(hookPath: string): string[] {
   const args: string[] = [];
   for (const event of CODEX_HOOK_EVENTS) {
     const command = [process.execPath, hookPath, event].map(shellQuote).join(' ');
-    const config = `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)},timeout=3}]}]`;
+    const windows = process.platform === 'win32' ? `,command_windows=${JSON.stringify(windowsHookCommand(hookPath, event))}` : '';
+    const config = `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)}${windows},timeout=3}]}]`;
     args.push('-c', config);
   }
   return args;

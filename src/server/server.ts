@@ -18,9 +18,11 @@ import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
+import { ModelUsageLedger } from './model-usage.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
 import { Building, type FloorDef } from './building.js';
+import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
 import { Sky } from './sky.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
@@ -322,6 +324,7 @@ export async function startServer(cfg: Config) {
     (state) => broadcast({ t: 'usage', state }),
     toastAll,
   );
+  const modelUsage = new ModelUsageLedger(cfg.dataDir);
 
   // The Claude plan's 5-hour and weekly limits, for the meter under the workers: one account for
   // every floor.
@@ -363,9 +366,12 @@ export async function startServer(cfg: Config) {
         if (c) sendTo(c, { t: 'changes', state });
       }
     },
-    workerChanged: (_floor, w) => {
+    workerChanged: (floor, w) => {
       if (typeof w === 'string') webhook.onWorkerGone(w);
-      else webhook.onWorker(w);
+      else {
+        modelUsage.record(floor.def.name, w, floor.project.defaultProvider);
+        webhook.onWorker(w);
+      }
       floorsChanged();
     },
     people: (floor) => {
@@ -595,6 +601,41 @@ export async function startServer(cfg: Config) {
         return;
       }
       if (p === '/api/whoami') return send(res, 200, { ok: true, me: meOf(session.account?.id) });
+      if (p === '/api/model-usage' && req.method === 'GET') {
+        const waiting = [];
+        for (const floor of floors.values()) {
+          for (const w of floor.workers.list()) {
+            if (w.kind !== 'agent') continue;
+            modelUsage.record(floor.def.name, w, floor.project.defaultProvider);
+            if (!w.usage) waiting.push({ provider: w.provider ?? floor.project.defaultProvider, floor: floor.def.name, worker: w.name });
+          }
+        }
+        return send(res, 200, { records: modelUsage.list(), waiting, saveError: modelUsage.saveError });
+      }
+      if (p === '/api/folders' && req.method === 'GET') {
+        try {
+          const dir = url.searchParams.get('dir') || (cfg.project ? path.dirname(cfg.project) : cfg.dir);
+          return send(res, 200, await listLocalFolders(dir));
+        } catch (err) {
+          return send(res, 400, { error: (err as Error).message });
+        }
+      }
+      if (p === '/api/floors/local' && req.method === 'POST') {
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: { dir?: unknown } | null;
+        try { body = JSON.parse(await readBody(req, 16 * 1024)); }
+        catch { return send(res, 400, { error: 'Enter a full folder path' }); }
+        const who = session.account?.name ?? 'the office';
+        const def = building.addLocal(body?.dir, who);
+        if (typeof def === 'string') return send(res, 400, { error: def });
+        const existing = floors.get(def.id);
+        const floor = existing ?? openFloor(def);
+        if (!floor) return send(res, 500, { error: 'The floor could not be opened. Check that the folder is writable and see the office log.' });
+        await floor.ready;
+        floorsChanged();
+        if (!existing) toastAll(`🛗 New floor: ${def.name}, added by ${who}`);
+        return send(res, 200, { floor: floor.id });
+      }
       if (p === '/api/agents/opencode/models' && req.method === 'GET') {
         try {
           return send(res, 200, { models: await openCodeModels.get() });
@@ -1435,6 +1476,7 @@ export async function startServer(cfg: Config) {
     sky.stop();
     for (const f of floors.values()) f.shutdown(keep);
     ledger.flush();
+    modelUsage.flush();
     limits.close();
     for (const c of clients.values()) c.ws.close();
     server.close();

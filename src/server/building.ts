@@ -4,6 +4,7 @@ import path from 'node:path';
 import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo } from '../shared/floors.js';
 import type { RepoChoice } from '../shared/protocol.js';
 import { gh } from './github.js';
+import { localFolder, localFolderKey } from './local-folders.js';
 
 /** A floor as floors.json keeps it. */
 export interface FloorDef {
@@ -59,12 +60,32 @@ export class Building {
    */
   ensureLocal(dir: string, by: string): FloorDef {
     const abs = path.resolve(dir);
-    const known = this.defs.find((d) => path.resolve(d.dir) === abs);
+    const known = this.defs.find((d) => localFolderKey(d.dir) === localFolderKey(abs));
     if (known) return known;
     // Named after its folder, as the office always called it.
     const def = this.newDef(path.basename(abs), originRepo(abs), abs, by);
     this.defs.unshift(def);
     this.save();
+    return def;
+  }
+
+  /** Register an existing workspace in place. It may contain one, several, or no Git repositories. */
+  addLocal(input: unknown, by: string): FloorDef | string {
+    let dir: string;
+    try { dir = localFolder(input); }
+    catch (err) { return (err as Error).message; }
+    const key = localFolderKey(dir);
+    const known = this.defs.find((d) => localFolderKey(d.dir) === key);
+    if (known) return known;
+    if ([...this.cloning.values()].some((d) => localFolderKey(d.dir) === key)) return 'That folder is still being cloned';
+    if (this.defs.length + this.cloning.size >= MAX_FLOORS) return `The building is full (${MAX_FLOORS} floors)`;
+    const def = this.newDef(path.basename(dir) || dir, originRepo(dir), dir, by);
+    this.defs.push(def);
+    const error = this.save();
+    if (error) {
+      this.defs.pop();
+      return error;
+    }
     return def;
   }
 
@@ -155,11 +176,12 @@ export class Building {
     }
   }
 
-  private save() {
+  private save(): string | undefined {
     try {
       writeFileSync(this.file, JSON.stringify(this.defs, null, 2), { mode: 0o600 });
     } catch (err) {
       console.error(`agent-office: couldn't save the floors: ${(err as Error).message}`);
+      return 'The floor list could not be saved. Check access to the office data folder.';
     }
   }
 }

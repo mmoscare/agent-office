@@ -1,0 +1,112 @@
+# Your agents in Agent Office
+
+## Open the app
+
+Double-click **Agent Office** on your Desktop, or search for it in Start. Right-click its Start entry and choose **Pin to Start** if you want it pinned.
+
+The shortcut opens your personal version and the building containing Personal-Portfolio and MFT-Trading-Dashboard. If the old PowerShell copy is running, let its workers finish and press Ctrl+C once before using the shortcut. The launcher may ask for your usual office password once, then remembers it encrypted for your Windows account.
+
+The icon near the Windows clock has **Open**, **Restart**, and **Stop** options. Closing the browser leaves the office running. More details: [Windows launcher](personal/windows/README.md).
+
+## Start using the Windows fix
+
+The fix is already built in your local personal version. You do not need to reinstall Claude or Codex.
+
+1. Let any active workers finish.
+2. In the PowerShell window running Agent Office, press Ctrl+C once.
+3. Run your usual Agent Office command again:
+
+```powershell
+agent-office.cmd "C:\Users\Owner\Documents\Development\Personal-Portfolio" --password 'YOUR-PASSWORD'
+```
+
+Use your chosen password in place of `YOUR-PASSWORD`. Open http://localhost:4600, then hire a Codex worker to try it. A browser refresh alone does not restart the server.
+
+The old Windows launcher could report "file not found" or "exited with code 193" even with the agent installed. The fix finds Windows commands and starts the real program behind npm's launcher.
+
+## Your floors
+
+Your building now contains **Personal-Portfolio** and **MFT-Trading-Dashboard**, using their existing folders under `C:\Users\Owner\Documents\Development`.
+
+Keep starting Agent Office with the Personal-Portfolio command above: that folder holds this building's settings and floor list. After restarting, click the project name at the top left and select the floor you want. You can also walk into the elevator and press **E**.
+
+To add another folder:
+
+1. Click the project name at the top left, then **Add a project**.
+2. Leave **Local folder** selected.
+3. Paste the full folder path, or click **Browse folders**.
+4. Click **Open folder**.
+
+It opens in place immediately and stays in your floor list. A parent folder containing both frontend and backend repositories can be one floor. Opening the same folder again takes you to its existing floor.
+
+The **Clone from GitHub** tab still lets you clone a repository when you want to.
+
+## Terminal keys
+
+**Esc goes to the agent**, so you can cancel a response or leave its menus. Click **X** at the top right to leave the terminal view. Closing that view does not stop the agent.
+
+## Usage and cost
+
+Click **Usage & cost** under the worker list or inside an agent terminal. It shows saved usage across all floors, including workers that have left. Click a record for input, output, reasoning, and cache tokens. You can filter by provider and download a CSV.
+
+- Claude: token counts and the app's USD cost estimates.
+- Codex: root-session tokens; subagent usage and dollar costs are not supplied.
+- OpenCode, including Grok: tokens and costs when the provider reports them.
+
+Dollar figures are **API-value estimates**: roughly what those tokens would cost at API prices. On a subscription, they are not extra charges and do not measure your remaining plan allowance. Use the provider's plan usage and reset times for that. Agent Office does not read your billing invoice. Unknown cost is shown as unavailable. Totals cover a worker/session; if you switch models in its terminal, those tokens stay in the same total. An OpenCode model selected when hiring is labelled as the initial model.
+
+History starts with sessions the office can still track; it cannot recover workers already removed before this feature. History is saved in the building's `.agent-office/model-usage.json`. The existing daily budget feature still covers Claude only.
+
+## Your two Codex accounts
+
+The normal Codex login is shared across directories and floors. To change it, finish active work, run `codex.cmd logout` then `codex.cmd login`, choose the other account in the browser, and restart your Codex workers.
+
+Two accounts can run side by side when each process has a different `CODEX_HOME` with its own saved login. Agent Office currently does not have a per-worker account selector. Changing floors alone does not switch accounts.
+
+## Add Grok once
+
+OpenCode is already installed. It runs Grok inside the existing OpenCode worker option.
+
+In a separate PowerShell window, run:
+
+```powershell
+opencode.cmd auth login --provider xai
+```
+
+Choose the API key login method and enter your xAI API key there. Get a key from https://console.x.ai if needed. Keep the key out of chat and repository files.
+
+Then hire an **OpenCode** worker in Agent Office. Choose an `xai/...` Grok model in its model field. You can list the available IDs with:
+
+```powershell
+opencode.cmd models xai
+```
+
+If the model suggestions have not refreshed yet, paste the model ID from that list into the model field. You can also select a model using `/models` inside the OpenCode worker's terminal. xAI API usage is billed through your xAI account.
+
+## Change model or effort while working
+
+Yes: click inside that worker's terminal, then type the command and press Enter.
+
+| Worker | What to type |
+| --- | --- |
+| Claude Code | `/model` to choose a model. `/effort` to choose effort. |
+| Codex | `/model` to choose a model and its available reasoning effort. `/status` to check the current setup. |
+| Grok through OpenCode | `/models` to choose the model. Reasoning controls depend on the model and OpenCode's supported variants. |
+
+These controls belong to the agent program. Some choices also save defaults for future sessions. In Claude's model picker, press `s` instead of Enter if you only want to change this session.
+
+For Codex's activity tracking in the game, review the Office hooks using `/hooks` in Codex.
+
+Hooks are the small callbacks that tell the game whether a worker is working, waiting, or finished. A Windows fix now supplies a correctly formatted command for them. After rebuilding, restart Agent Office to replace the commands held by running workers. If Codex asks you to review the updated hook definitions, use `/hooks`; old error messages may remain in the terminal history.
+
+## What was checked
+
+On September 27, 2026, the server build and 17 focused tests passed. Claude, Codex, and OpenCode each returned their version and exit code 0 through Agent Office's terminal host. All seven Codex hook events reached a local test receiver through Windows shell commands, and installed Codex recognized all seven Windows overrides without configuration errors. These are startup and callback checks, not a completed AI task. OpenCode had no saved provider credentials, so a Grok request has not been tested.
+
+The folder picker and usage history also passed type checking, a full app build, and 13 focused tests. A temporary-office browser check covered folder browsing, adding and reusing a floor, switching to GitHub mode, saved usage and CSV export, Esc reaching the terminal, clicking X to close the view, and the Windows host starting and stopping. Desktop and Start shortcuts were verified to target the personal checkout. No real AI tasks were started for those checks.
+
+The Windows launcher fix lives mainly in `src/server/windows-command.ts`; Codex's Windows hook command is in `src/server/codex.ts`. Keep these when merging author updates unless upstream supplies equivalent fixes. Your general fork/update instructions are in [PERSONAL-WORKFLOW.md](PERSONAL-WORKFLOW.md).
+
+Local folder handling lives in `local-folders.ts` and `ui/local-floor.ts`. Saved usage is a separate `model-usage.ts` feature; it leaves the author's daily budget ledger unchanged. The launcher source stays in `personal/windows`. Keep these small additions when merging updates.
+
+Official references: [Claude model and effort](https://code.claude.com/docs/en/model-config), [Codex terminal commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli), [OpenCode providers](https://opencode.ai/docs/providers/), [OpenCode CLI](https://opencode.ai/docs/cli/).

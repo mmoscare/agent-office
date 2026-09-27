@@ -22,6 +22,7 @@ import { reportedUsage } from './reported-usage.js';
 import { configuredProvider, isValidOpenCodeModel, validateWorkerModel } from './agents.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
+import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
@@ -866,7 +867,7 @@ export class WorkerManager {
       if (isShell) {
         proc = this.host.spawn({ file: shell, args, ...where });
       } else if (commandPath) {
-        proc = this.host.spawn({ file: commandPath, args, ...where });
+        proc = this.host.spawn({ ...commandLaunch(commandPath, args), ...where });
       } else {
         // Not found on PATH: let a login shell find it (nvm, asdf, ~/.local/bin ...).
         const line = ['exec', command, ...args].map((a, i) => (i < 2 ? a : shq(a))).join(' ');
@@ -1410,6 +1411,7 @@ function screenText(term: HeadlessTerminal, from = 0): string {
 }
 
 export function resolveCommand(cmd: string): string | null {
+  if (process.platform === 'win32') return resolveWindowsCommand(cmd);
   if (cmd.includes('/')) {
     try {
       accessSync(cmd, constants.X_OK);

@@ -43,6 +43,7 @@ import { openHelp, renderCaffeine, renderChat, renderPeople, renderWorkers, upda
 import { openCharacter } from './ui/character';
 import { openSettings } from './ui/settings';
 import { hiringPaused, renderUsage, usageLabel, usageTitle } from './ui/usage';
+import { openModelUsage } from './ui/model-usage';
 import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elevator';
 import { providerLabel, resolvedProvider } from './ui/provider';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
@@ -1561,6 +1562,7 @@ if (!window.isSecureContext) {
 }
 // The project in the corner is the floor you're on; click it for the others.
 $('project').addEventListener('click', () => showElevator());
+$('btn-model-usage').addEventListener('click', openModelUsage);
 $('btn-voice').addEventListener('click', () => void toggleVoice());
 $('btn-mute').addEventListener('click', () => voice.toggleMute());
 $('btn-share').addEventListener('click', () => void toggleShare());

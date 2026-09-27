@@ -6,6 +6,7 @@ import { store } from '../state';
 import { TERM_THEME } from '../world/laptop';
 import { h, openModal, STATUS_LABEL, timeAgo, toast, type Modal } from './dom';
 import { usageLabel, usageTitle } from './usage';
+import { openModelUsage } from './model-usage';
 import type { ServerMsg } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
 import { findLine } from '../../shared/search';
@@ -44,6 +45,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const title = h('h2', {}, info.kind === 'agent' ? `${providerLabel(info.provider, store.project)} · ${info.name}` : info.name);
   const pill = h('span.pill', {}, '');
   const cost = h('span.cost', {});
+  const usageBtn = h('button.btn', { type: 'button', title: 'Saved usage and cost across every floor' }, 'Usage & cost');
+  usageBtn.addEventListener('click', openModelUsage);
   const viewers = h('div.viewers', {});
   const modelsBtn = h('button.btn', {
     type: 'button',
@@ -52,9 +55,9 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   }, '🧠 Models');
   const typed = h('span.typed', {});
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
-  const closeBtn = h('button.btn.close', { title: 'Leave terminal (Esc) · Ctrl+[ sends Esc to the terminal', 'aria-label': 'Close' }, '✕');
+  const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
   const host = h('div.term-host');
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, onChanges ? changesBtn : null, closeBtn), host);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, onChanges ? changesBtn : null, closeBtn), host);
 
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
@@ -173,6 +176,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const ro = new ResizeObserver(() => sendSize());
 
   const modal = openModal(el, {
+    escCloses: false,
     backdropCloses: true,
     onClose: () => {
       listeners.delete(onMsg);
@@ -198,13 +202,6 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   });
 
   term.open(host);
-  term.attachCustomKeyEventHandler((e) => {
-    if (e.type === 'keydown' && e.ctrlKey && e.key === ']') {
-      modal.close();
-      return false;
-    }
-    return true;
-  });
   term.onData((data) => {
     sendSize(true);
     net.send({ t: 'term.input', workerId, data });

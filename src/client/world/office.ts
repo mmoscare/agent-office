@@ -181,6 +181,81 @@ function box(w: number, h: number, d: number) {
   return new THREE.BoxGeometry(w, h, d);
 }
 
+/** A frosted, sprinkled donut lying flat on y = 0. */
+function donut(frosting: string, sprinkles: boolean): THREE.Group {
+  const g = new THREE.Group();
+  const flat = (r: number, tube: number) => new THREE.TorusGeometry(r, tube, 8, 18).rotateX(Math.PI / 2);
+  g.add(mesh(flat(0.062, 0.034), toon('#e0a458'), 0, 0.034, 0, false));
+  const icing = mesh(flat(0.062, 0.03), toon(frosting), 0, 0.046, 0, false);
+  icing.scale.y = 0.55;
+  g.add(icing);
+  if (sprinkles) {
+    ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#fffaf3', '#ef476f', '#ffd166'].forEach((c, i) => {
+      const a = (i / 7) * Math.PI * 2 + 0.4;
+      const s = mesh(box(0.024, 0.008, 0.008), toon(c), Math.cos(a) * 0.064, 0.066, Math.sin(a) * 0.064, false);
+      s.rotation.y = a * 1.7;
+      g.add(s);
+    });
+  }
+  return g;
+}
+
+/** An open bakery box of donuts, a plate of extras and a pot of drip coffee on its warmer. */
+function donutSpread(): THREE.Group {
+  const g = new THREE.Group();
+  // The box: a pink tray with its lid swung open against the wall behind.
+  const pink = toon('#ffc8dd');
+  const spread = new THREE.Group();
+  spread.add(mesh(box(0.62, 0.05, 0.42), pink, 0, 0.025, 0));
+  spread.add(mesh(box(0.56, 0.008, 0.36), toon('#fffaf3'), 0, 0.052, 0, false));
+  const hinge = new THREE.Group();
+  hinge.position.set(0, 0.05, 0.21);
+  hinge.rotation.x = 1.72;
+  hinge.add(mesh(box(0.62, 0.012, 0.42), pink, 0, 0, -0.21));
+  hinge.add(mesh(box(0.34, 0.004, 0.12), toon('#ef476f'), 0, 0.008, -0.21, false));
+  spread.add(hinge);
+  const flavors: [string, boolean][] = [
+    ['#ff8fab', true],
+    ['#6f4518', false],
+    ['#fffaf3', true],
+    ['#ffd166', false],
+    ['#6f4518', true],
+    ['#ff8fab', false],
+  ];
+  flavors.forEach(([c, s], i) => {
+    const d = donut(c, s);
+    d.position.set(-0.19 + (i % 3) * 0.19, 0.055, i < 3 ? -0.09 : 0.09);
+    spread.add(d);
+  });
+  // A plate out front with a couple already pulled from the box.
+  spread.add(mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.015, 20), toon('#fffaf3'), 0.5, 0.008, -0.12));
+  const a = donut('#8ecae6', true);
+  a.position.set(0.47, 0.015, -0.14);
+  const b = donut('#6f4518', false);
+  b.position.set(0.53, 0.05, -0.1);
+  b.rotation.set(0.25, 0.8, 0.1);
+  spread.add(a, b);
+  // Napkins.
+  spread.add(mesh(box(0.14, 0.03, 0.14), toon('#f8f9fa'), 0.52, 0.015, 0.15, false));
+  g.add(mergeByMaterial(spread));
+
+  // The pot: a black warmer, a glass carafe of coffee, a lid and a handle.
+  const pot = new THREE.Group();
+  const black = toon('#343a40');
+  pot.add(mesh(roundedBox(0.26, 0.04, 0.26, 0.02), black, 0, 0.02, 0));
+  pot.add(mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.006, 16), toon('#ef476f', { emissive: '#ef476f' }), 0, 0.043, 0, false));
+  pot.add(mesh(new THREE.CylinderGeometry(0.075, 0.1, 0.12, 18), toon('#6f4518'), 0, 0.105, 0, false));
+  pot.add(mesh(new THREE.CylinderGeometry(0.075, 0.105, 0.22, 18, 1, true), toon('#bde0fe', { transparent: true, opacity: 0.45 }), 0, 0.155, 0, false));
+  pot.add(mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.05, 18), black, 0, 0.29, 0));
+  pot.add(mesh(new THREE.SphereGeometry(0.02, 8, 6), black, 0, 0.32, 0, false));
+  const handle = mesh(new THREE.TorusGeometry(0.065, 0.014, 6, 12, Math.PI), black, 0.1, 0.17, 0, false);
+  handle.rotation.z = -Math.PI / 2;
+  pot.add(handle);
+  pot.position.set(-0.52, 0, 0);
+  g.add(pot);
+  return g;
+}
+
 function plant(scale = 1): THREE.Group {
   const g = new THREE.Group();
   g.add(mesh(new THREE.CylinderGeometry(0.28, 0.22, 0.5, 12), toon(PALETTE.pot), 0, 0.25, 0));
@@ -1080,6 +1155,9 @@ export function buildOffice(): Office {
   coffee.add(mesh(new THREE.SphereGeometry(0.05, 8, 8), toon('#ef476f', { emissive: '#ef476f' }), 0.18, 0.55, 0.26));
   coffee.position.set(-1.2, 1.03, 0);
   kitchen.add(coffee);
+  const donuts = donutSpread();
+  donuts.position.set(0.1, 1.03, -0.05);
+  kitchen.add(donuts);
   kitchen.add(mesh(roundedBox(1.1, 2.2, 1, 0.1), toon('#f8f9fa'), 3.2, 1.1, 0));
   kitchen.add(mesh(box(0.06, 0.5, 0.06), toon('#adb5bd'), 2.75, 1.4, 0.52));
   kitchen.position.set(-14.5, 0, 12.2);
@@ -1092,6 +1170,7 @@ export function buildOffice(): Office {
   // Counter, coffee machine and fridge, in front of the south wall.
   fixture('south', -14.5, 0.55, 5.1, 1.1);
   fixture('south', -15.7, 0.9, 0.6, 1.8);
+  fixture('south', -14.35, 1.2, 1.3, 0.5); // the donut box's open lid and the coffee pot
   fixture('south', -11.3, 1.1, 1.1, 2.2);
 
   // Plants around the room

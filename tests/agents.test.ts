@@ -8,5 +8,7 @@ test('detects the configured provider from Unix and Windows command paths', () =
   assert.equal(configuredProvider('C:\\Users\\me\\bin\\opencode.exe'), 'opencode');
   assert.equal(configuredProvider('/opt/tools/codex'), 'codex');
   assert.equal(configuredProvider('CODEX.EXE'), 'codex');
+  assert.equal(configuredProvider('C:\\Users\\me\\npm\\codex.cmd'), 'codex');
+  assert.equal(configuredProvider('opencode.cmd'), 'opencode');
   assert.equal(configuredProvider('my-agent'), 'custom');
 });

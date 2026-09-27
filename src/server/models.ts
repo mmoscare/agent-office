@@ -1,5 +1,6 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { isValidOpenCodeModel } from './agents.js';
+import { commandLaunch } from './windows-command.js';
 
 export const MODEL_COMMAND_TIMEOUT_MS = 10_000;
 export const MODEL_COMMAND_MAX_BUFFER = 1024 * 1024;
@@ -18,7 +19,8 @@ export type ModelCommandRunner = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 const runModelCommand: ModelCommandRunner = (file, args, options) => new Promise((resolve, reject) => {
-  nodeExecFile(file, args, { ...options, encoding: 'utf8' }, (error, stdout, stderr) => {
+  const launch = commandLaunch(file, args);
+  nodeExecFile(launch.file, launch.args, { ...options, encoding: 'utf8' }, (error, stdout, stderr) => {
     if (error) return reject(error);
     resolve({ stdout: String(stdout), stderr: String(stderr) });
   });
