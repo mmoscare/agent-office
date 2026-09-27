@@ -29,6 +29,14 @@ export interface WorkerTask {
   summary: string;
 }
 
+/** A branch's PR, including completed PRs retained for its handoff/history. */
+export interface PullRequestRef {
+  number: number;
+  url: string;
+  /** Missing in worker records saved before PR state was tracked. */
+  state?: string;
+}
+
 export interface WorkerInfo {
   id: string;
   /** 'agent' runs the selected provider; 'shell' is a plain shared login shell. */
@@ -50,8 +58,8 @@ export interface WorkerInfo {
    * the branch the office was on when the worktree was cut, which its pull request targets.
    */
   worktree?: { path: string; branch: string; base: string; from?: string };
-  /** The pull request opened from this desk for the worktree branch (see 'worker.pr'). */
-  pr?: { number: number; url: string };
+  /** The worktree branch's PR, whether opened in the office or elsewhere. */
+  pr?: PullRequestRef;
   /** True while the branch is being pushed and its pull request opened. */
   prOpening?: boolean;
   title?: string;
@@ -540,8 +548,8 @@ export interface ChangesState {
   more: number;
   /** The branch a pull request would target, when this checkout is on a branch of its own. */
   prBase?: string;
-  /** An open pull request for the branch. */
-  pr?: { number: number; url: string };
+  /** The branch's PR, including merged and closed requests. */
+  pr?: PullRequestRef;
   /** A commit, discard or pull request in progress. */
   busy?: string;
   error?: string;

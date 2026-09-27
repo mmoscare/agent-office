@@ -6,6 +6,7 @@ import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB
 import { floorPalette } from '../shared/floors';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
 import { isAsleep, isBusy } from '../shared/status';
+import { pullRequestLabel } from '../shared/pulls';
 import { Net } from './net';
 import { store, loadProfile, loadSettings, saveSettings, workerForPull, type Profile, type Topic } from './state';
 import { EYE_HEIGHT, PlayerController, groundAt, isTyping } from './player';
@@ -1237,7 +1238,7 @@ function deskHint(deskId: string): Hint {
   const spent = w.kind === 'agent' && w.usage ? usageLabel(w.usage, workerProvider) : '';
   const shell = w.kind === 'shell';
   return {
-    k: w.status + w.id + (w.pr?.number ?? '') + (w.prOpening ? '!' : '') + doing + spent,
+    k: w.status + w.id + (w.pr?.number ?? '') + (w.pr?.state ?? '') + (w.prOpening ? '!' : '') + doing + spent,
     parts: [
       h('span.title', {}, `${w.name} · ${STATUS_LABEL[w.status]}`),
       doing ? aside(doing) : '',
@@ -1245,7 +1246,7 @@ function deskHint(deskId: string): Hint {
       key('E', 'Open terminal'),
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
-      w.pr ? key('O', `PR #${w.pr.number}`) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
+      w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
       key('X', 'Send home'),
     ],
   };

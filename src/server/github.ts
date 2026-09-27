@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState } from '../shared/protocol.js';
+import { pullForBranch } from '../shared/pulls.js';
 
 const REFRESH_MS = 90_000;
 
@@ -21,6 +22,12 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
       } else resolve(stdout);
     });
   });
+}
+
+/** Check all states before offering to create another PR for an existing worker branch. */
+export async function findBranchPr(branch: string, cwd: string, query = gh) {
+  const out = await query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,url,state,headRefName'], cwd);
+  return pullForBranch(JSON.parse(out || '[]'), branch);
 }
 
 function labels(raw: any[]): { name: string; color: string }[] {
