@@ -2,6 +2,7 @@ import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type Gh
 import type { Net } from '../net';
 import { AVATAR_COLORS, store, workerForPull } from '../state';
 import { checkoutNote, issuePrompt, repoFlag, type BoardActions } from './boards';
+import { issueMeeting } from './meeting';
 import { h, openModal, timeAgo, type Modal } from './dom';
 import { markdown, repoUrlOf } from './markdown';
 import { buildTree, looksGenerated, parseDiff, renderFileDiff, renderThread, repliesOf, Reviewed, STATUS_WORD, treeOrder, type DiffFile, type TreeDir } from './pulldiff';
@@ -604,6 +605,9 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
       w ? h('button.btn', { type: 'button', onclick: () => actions.goToDesk(w.deskId) }, `🪑 Go to ${w.name}'s desk`) : null,
       h('button.btn', { type: 'button', title: 'Send a worker your own prompt about this PR', onclick: () => actions.ask(pullContext(it), `Ask about PR #${it.number}`) }, '✍️ Ask a worker…'),
       isOpen ? h('button.btn', { type: 'button', onclick: () => actions.assign(reviewPrompt(it), `Review PR #${it.number}`) }, '🔍 Review') : null,
+      isOpen
+        ? h('button.btn', { type: 'button', title: 'A few workers review it in the meeting room, each through its own lens, and the office posts one combined review', onclick: () => actions.meeting({ pattern: 'review', pr: it.number, title: `Review of PR #${it.number}`, prompt: `Review pull request #${it.number}: “${it.title}”.` }) }, '🤝 Review panel…')
+        : null,
       conflicts
         ? h('button.btn.primary', { type: 'button', title: 'A new worker merges the base in, resolves the conflicts, gets the checks green, then merges', onclick: handToWorker }, '✨ Fix conflicts & merge')
         : isOpen
@@ -996,6 +1000,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     renderFrame();
   });
   const modal: Modal = openModal(el, {
+    doing: `🔀 reading PR #${it.number}`,
     onClose: () => {
       unsub();
       comment.dispose();
@@ -1032,9 +1037,10 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   const addIssueToQueue = () => {
     if (!queueProvider.valid()) return;
     modal.close();
-    actions.queue(issuePrompt(it), `${ghRef(it)} ${it.title}`, it.number, queueProvider.value(), queueProvider.model(), it.repo);
+    actions.queue(issuePrompt(it), `${ghRef(it)} ${it.title}`, it.number, queueProvider.value(), queueProvider.model(), queueProvider.effort(), it.repo);
   };
   const queue = h('button.btn', { type: 'button', onclick: addIssueToQueue }) as HTMLButtonElement;
+  const pickUp = h('button.btn', { type: 'button', title: 'Carry its card to an empty desk, a worker or the queue board, and press E there', onclick: () => actions.pickUp(it) }, '✋ Pick it up');
   const el = h(
     'div.modal.gh-window.issue',
     { role: 'dialog', 'aria-label': `Issue #${it.number}` },
@@ -1054,9 +1060,11 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
       {},
       h('a.grow', { href: it.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open on GitHub ↗'),
       h('button.btn', { type: 'button', title: 'Send a worker your own prompt about this issue', onclick: () => actions.ask(issueContext(it), `Ask about issue #${it.number}`) }, '✍️ Ask a worker…'),
+      h('button.btn', { type: 'button', title: 'Workers take it on together in the meeting room: a debate, lead & team, map-reduce or red / blue', onclick: () => actions.meeting(issueMeeting(it.number, it.title)) }, '🤝 Meeting…'),
       closeIssue,
       queueProvider.element,
       queue,
+      pickUp,
       h('button.btn.primary', { type: 'button', onclick: () => actions.assign(issuePrompt(it), `Hand issue #${it.number} to a worker`) }, '🤖 Hand to a worker'),
     ),
   );
@@ -1067,6 +1075,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
     const task = store.taskForIssue(it.number, it.repo);
     const onQueue = !!task && task.status !== 'done';
     closeIssue.classList.toggle('hidden', !isOpen);
+    pickUp.classList.toggle('hidden', !isOpen);
     queueProvider.element.classList.toggle('hidden', !isOpen || onQueue);
     queue.classList.toggle('hidden', !isOpen);
     queue.disabled = onQueue;
@@ -1106,6 +1115,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
     store.on('queue', renderFrame),
   ];
   const modal = openModal(el, {
+    doing: `📋 reading issue #${it.number}`,
     onClose: () => {
       comment.dispose();
       unsubs.forEach((u) => u());

@@ -1,10 +1,11 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghRef, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type WorkerInfo } from '../../shared/protocol';
+import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type WorkerInfo } from '../../shared/protocol';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
 import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
+import type { MeetingPreset } from './meeting';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
@@ -14,7 +15,11 @@ export interface BoardActions {
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
   /** Put an issue (of `repo`, on a floor of several) on the 📋 task queue; a worker is seated for it when there's room. */
-  queue(prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, repo?: string): void;
+  queue(prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string): void;
+  /** Take the issue's card off the board, to carry to a desk or the queue. */
+  pickUp(issue: GhIssue): void;
+  /** Call a meeting about it: the meeting room's form, filled in. */
+  meeting(preset: MeetingPreset): void;
 }
 
 /** ` --repo owner/name` for gh, on a floor that's a folder of checkouts: from there gh can't tell which repository is meant. */
@@ -27,8 +32,8 @@ export function checkoutNote(it: GhWhere): string {
   return it.repo ? `It's in ${it.repo}, which is checked out in the \`${it.repoDir ?? '.'}\` folder here: cd into it and do the work there.\n\n` : '';
 }
 
-/** The task a worker gets for an issue, from the board or the queue. */
-export function issuePrompt(it: GhIssue): string {
+/** The task a worker gets for an issue, from the board, a carried card or the queue. */
+export function issuePrompt(it: Pick<GhIssue, 'number' | 'title' | 'repo' | 'repoDir'>): string {
   return `Work on GitHub issue ${it.repo ? `${it.repo}` : ''}#${it.number}: "${it.title}".\n\n${checkoutNote(it)}Read it first with \`gh issue view ${it.number} --comments${repoFlag(it)}\`. Create a new branch, implement the change, verify it, then open a pull request that closes #${it.number}.`;
 }
 
@@ -69,19 +74,28 @@ function labelChips(labels: { name: string; color: string }[]) {
 
 const CHECK_ICON: Record<GhPull['checks'], string> = { pass: '🟢', fail: '🔴', pending: '🟡', none: '' };
 
+/** A chip naming a worker and desk, color-coded to match the worker back on the floor. */
+function workerChip(w: WorkerInfo, title: string) {
+  return h('span.desk-link', { style: `--dot:${w.color}`, title }, `🪑 ${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'a desk'}`);
+}
+
 /** A chip naming the worker and desk a pull request came from. */
 function deskChip(w: WorkerInfo) {
-  return h('span.desk-link', { style: `--dot:${w.color}`, title: `Opened from ${w.name}'s desk (${w.worktree?.branch ?? 'its branch'})` }, `🪑 ${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'a desk'}`);
+  return workerChip(w, `Opened from ${w.name}'s desk (${w.worktree?.branch ?? 'its branch'})`);
 }
 
 /** Where an issue stands on the 📋 queue, for its card. */
 function queueChip(issue: GhIssue): Node | '' {
   const t = store.taskForIssue(issue.number, issue.repo);
   if (!t) return '';
-  const provider = ` · ${providerLabel(t.provider, store.project)}`;
-  if (t.status === 'queued') return h('span.qchip', {}, `${store.queue.tasks.find((x) => x.status === 'queued') === t ? '📋 up next' : '📋 queued'}${provider}`);
-  if (t.status === 'running') return h('span.qchip.running', {}, `🤖 ${t.workerName ?? 'a worker'}${provider}`);
-  return t.pr ? h('span.qchip.done', {}, `🔀 PR #${t.pr.number}${provider}`) : '';
+  const provider = providerLabel(t.provider, store.project);
+  if (t.status === 'queued') return h('span.qchip', {}, `${store.queue.tasks.find((x) => x.status === 'queued') === t ? '📋 up next' : '📋 queued'} · ${provider}`);
+  if (t.status === 'running') {
+    const w = t.workerId ? store.workers.get(t.workerId) : undefined;
+    if (w) return workerChip(w, `${w.name} is working on this at ${DESK_BY_ID.get(w.deskId)?.label ?? 'a desk'} · ${provider}`);
+    return h('span.qchip.running', {}, `🤖 ${t.workerName ?? 'a worker'} · ${provider}`);
+  }
+  return t.pr ? h('span.qchip.done', {}, `🔀 PR #${t.pr.number} · ${provider}`) : '';
 }
 
 /** The repository a card is in, on a floor that's a folder of several. */
@@ -171,6 +185,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     status.textContent = st.loading ? 'Refreshing…' : st.fetchedAt ? `Updated ${timeAgo(st.fetchedAt)}` : '';
   }, 15000);
   const modal = openModal(el, {
+    doing: kind === 'issues' ? '📋 at the issues board' : '🔀 at the PR board',
     onClose: () => {
       unsubs.forEach((u) => u());
       clearInterval(timer);

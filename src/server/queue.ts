@@ -2,16 +2,16 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeRepo, sameRepo } from '../shared/floors.js';
-import { ghRef, isAgentProvider, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
+import { ghRef, isAgentEffort, isAgentProvider, isClaudeModel, type AgentEffort, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
-import { isValidOpenCodeModel, validateWorkerModel } from './agents.js';
+import { isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
 export interface QueueWorkers {
   readonly defaultProvider: AgentProvider;
   list(): WorkerInfo[];
   deskOccupied(deskId: string): boolean;
-  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string): WorkerInfo | string;
+  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort): WorkerInfo | string;
   /** Resolves with a line about what became of the worker's worktree. */
   kill(id: string): Promise<{ note?: string; error?: string }>;
 }
@@ -25,6 +25,8 @@ export interface QueueEvents {
   refreshGitHub(): void;
   /** Why no workers may be hired right now (today's budget is spent), if that's so. */
   hiringPaused(): string | undefined;
+  /** How many more workers the office has room for under its worker limit (Infinity without one). */
+  room?(): number;
   /** The last task on the queue just finished, done: nothing is left queued or running. */
   emptied(): void;
 }
@@ -76,10 +78,12 @@ export class TaskQueue {
     return this.maxWorkers;
   }
 
-  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, repo?: string): string | undefined {
+  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, effort?: AgentEffort, repo?: string): string | undefined {
     if (!isAgentProvider(provider) || (provider === 'custom' && this.workers.defaultProvider !== 'custom')) return 'Unknown agent provider';
     const modelError = validateWorkerModel('agent', provider, model);
     if (modelError) return modelError;
+    const effortError = validateWorkerEffort('agent', provider, effort);
+    if (effortError) return effortError;
     const clean = prompt.replace(/\r\n?/g, '\n').trim();
     if (!clean) return 'Empty task';
     if (issue === undefined) repo = undefined;
@@ -88,7 +92,8 @@ export class TaskQueue {
     const task: QueueTask = {
       id: randomBytes(6).toString('hex'),
       provider,
-      model: provider === 'opencode' ? model : undefined,
+      model: provider === 'opencode' || provider === 'claude' ? model : undefined,
+      effort: provider === 'claude' ? effort : undefined,
       issue,
       repo,
       title: (title?.trim() || firstLine(clean)).slice(0, 120),
@@ -142,7 +147,7 @@ export class TaskQueue {
     if (t.status !== 'done') return 'That task is still on the queue';
     if (t.issue !== undefined && this.tasks.some((x) => x !== t && sameIssue(x, t.issue!, t.repo) && x.status !== 'done')) return `Issue ${ghRef({ number: t.issue, repo: t.repo })} is already on the queue`;
     this.tasks.splice(this.tasks.indexOf(t), 1);
-    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, issue: t.issue, repo: t.repo, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
+    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
     this.changed();
     this.pump();
@@ -254,9 +259,9 @@ export class TaskQueue {
     return outcome === 'done';
   }
 
-  /** Agents holding a slot. The board agents don't: they stand by their boards, not at desks. */
+  /** Agents holding a slot. The board agents don't (they stand by their boards), nor do meetings (they have their own limits). */
   private busy(): number {
-    return this.workers.list().filter((w) => w.kind === 'agent' && BUSY.has(w.status) && !DESK_BY_ID.get(w.deskId)?.station).length;
+    return this.workers.list().filter((w) => w.kind === 'agent' && BUSY.has(w.status) && !DESK_BY_ID.get(w.deskId)?.station && !DESK_BY_ID.get(w.deskId)?.room).length;
   }
 
   /** A free desk, else a free bean bag. */
@@ -294,9 +299,13 @@ export class TaskQueue {
       if (this.busy() >= this.maxWorkers) break;
       // A spent budget holds the queue instead of failing every task; the pump seats them once hiring resumes.
       if (this.events.hiringPaused()) break;
-      const desk = this.freeDesk() ?? this.recycleDesk();
+      // So does an office at its worker limit (--max-workers), unless one of the queue's own finished
+      // workers going home makes room. Over the limit (it was just lowered), it waits for people to send some home.
+      const room = this.events.room?.() ?? Infinity;
+      if (room < 0) break;
+      const desk = (room > 0 ? this.freeDesk() : undefined) ?? this.recycleDesk();
       if (!desk) break;
-      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree ? WORKTREE_NOTE : ''), this.useWorktree, 'agent', t.provider ?? this.workers.defaultProvider, t.model);
+      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree ? WORKTREE_NOTE : ''), this.useWorktree, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort);
       changed = true;
       if (typeof r === 'string') {
         t.status = 'done';
@@ -349,7 +358,8 @@ export class TaskQueue {
         const t: QueueTask = {
           id: s.id,
           provider,
-          model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : undefined,
+          model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : provider === 'claude' && isClaudeModel(s.model) ? s.model : undefined,
+          effort: provider === 'claude' && isAgentEffort(s.effort) ? s.effort : undefined,
           issue: typeof s.issue === 'number' ? s.issue : undefined,
           repo: typeof s.issue === 'number' ? normalizeRepo(s.repo) : undefined,
           title: s.title,

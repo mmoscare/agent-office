@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import type { ChangedFile, ChangeStatus, ChangesState, PullRequestRef } from '../shared/protocol.js';
+import type { ImageResult } from './decor.js';
+import { changedImageType, type ChangedFile, type ChangeStatus, type ChangesState, type PullRequestRef } from '../shared/protocol.js';
 import { pullRequestLabel } from '../shared/pulls.js';
 import { findBranchPr } from './github.js';
 
@@ -15,6 +16,8 @@ const MAX_FILES = 400;
 const MAX_DIFF = 200_000;
 /** Untracked files bigger than this aren't read to count their lines. */
 const MAX_COUNT_BYTES = 8 * 1024 * 1024;
+/** Pictures bigger than this aren't previewed. */
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export interface ChangesTarget {
   /** The worker's name, for toasts. */
@@ -66,6 +69,20 @@ function run(cmd: string, args: string[], cwd: string, timeout = 30_000): Promis
   });
 }
 
+/** Like run(), for output that isn't text: a file's bytes at some commit. A failing command throws. */
+function runBytes(cmd: string, args: string[], cwd: string, maxBytes: number, timeout = 30_000): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { cwd, encoding: 'buffer', maxBuffer: maxBytes, timeout, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (err, stdout, stderr) => {
+      if (!err) return resolve(stdout);
+      const e = err as NodeJS.ErrnoException & { code?: number | string; killed?: boolean };
+      if (typeof e.code === 'number') return reject(new GitError(reason({ out: '', err: stderr.toString('utf8'), code: e.code }, `${cmd} ${args[0]} failed`)));
+      if (e.code === 'ENOENT') return reject(new GitError(`${cmd} is not installed on the server`));
+      if (e.killed) return reject(new GitError(`${cmd} ${args[0]} took more than ${Math.round(timeout / 1000)}s and was stopped`));
+      reject(new GitError(String(e.message || err)));
+    });
+  });
+}
+
 /** The line of stderr worth showing a person: git's "fatal:"/"error:" line, else the last one. */
 function reason(r: Result, fallback: string): string {
   const lines = r.err.trim().split('\n').map((l) => l.trim()).filter(Boolean);
@@ -107,6 +124,22 @@ async function countLines(file: string): Promise<{ lines: number; binary: boolea
     return { lines: n, binary: false };
   } catch {
     return { lines: 0, binary: false };
+  }
+}
+
+/**
+ * Where a file of a checkout really is, or undefined when it's missing or leads outside the checkout
+ * (a symlink pointing elsewhere, a path with `..` in it).
+ */
+export async function insideCheckout(cwd: string, file: string): Promise<string | undefined> {
+  try {
+    const root = await realpath(cwd);
+    const abs = await realpath(path.resolve(root, file));
+    const rel = path.relative(root, abs);
+    if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return undefined;
+    return abs;
+  } catch {
+    return undefined;
   }
 }
 
@@ -172,14 +205,22 @@ export class Changes {
 
   /** The diff of one changed file, as `git diff` prints it. */
   async diff(workerId: string, filePath: string): Promise<{ diff: string; truncated: boolean } | string> {
-    const t = this.target(workerId);
+    let t = this.target(workerId);
     if (!t) return 'No such worker';
     const w = this.watches.get(workerId);
     let state = w?.last;
     if (!state?.files.some((f) => f.path === filePath)) state = await this.compute(workerId, t);
-    const file = state.files.find((f) => f.path === filePath);
+    let file = state.files.find((f) => f.path === filePath);
     if (!file) return state.error ?? 'That file has no changes';
     try {
+      if (state.repositories) {
+        const repository = state.repositories.find((r) => filePath.startsWith(`${r.path}/`));
+        // Discover again: a directory could have been replaced by a link since the last poll.
+        if (!repository || !(await this.childRepositories(t))?.includes(repository.path)) return 'That repository is no longer available';
+        const prefix = repository.path.length + 1;
+        t = { ...t, cwd: path.join(t.cwd, repository.path) };
+        file = { ...file, path: file.path.slice(prefix), from: file.from?.slice(prefix) };
+      }
       let out: string;
       if (file.status === '?') {
         // Exit code 1 just means the file isn't empty.
@@ -196,6 +237,44 @@ export class Changes {
       return { diff: truncated ? out.slice(0, MAX_DIFF) : out, truncated };
     } catch (err) {
       return (err as Error).message;
+    }
+  }
+
+  /**
+   * One side of a changed picture, for the preview in the Changes window: 'old' is the file at the
+   * commit the diff is taken from, 'new' is what's in the checkout now. Only files in the worker's
+   * list of changes are served, and only pictures.
+   */
+  async file(workerId: string, filePath: string, side: 'old' | 'new'): Promise<ImageResult> {
+    if (!changedImageType(filePath)) return { status: 415, error: 'Only pictures can be previewed' };
+    const t = this.target(workerId);
+    if (!t) return { status: 404, error: 'No such worker' };
+    const file = await this.changedFile(workerId, t, filePath);
+    if (typeof file === 'string') return { status: 404, error: file };
+    // A renamed file was something else before; its old side is only a picture if that name was one.
+    const name = side === 'old' ? file.from ?? file.path : file.path;
+    const type = changedImageType(name);
+    if (!type) return { status: 415, error: 'Only pictures can be previewed' };
+    try {
+      if (side === 'new') {
+        if (file.status === 'D') return { status: 404, error: 'That file was deleted' };
+        const abs = await insideCheckout(t.cwd, name);
+        if (!abs) return { status: 404, error: 'That file is not in the checkout' };
+        const s = await stat(abs);
+        if (!s.isFile()) return { status: 404, error: 'That is not a file' };
+        if (s.size > MAX_IMAGE_BYTES) return { status: 413, error: `That picture is over ${MAX_IMAGE_BYTES / 1024 / 1024} MB` };
+        return { type, body: await readFile(abs) };
+      }
+      if (file.status === '?' || file.status === 'A') return { status: 404, error: 'That file is new' };
+      // `cat-file`, not `show`: show would run the file through any textconv filter the repo sets.
+      const object = `${(await this.baseCommit(t)).commit}:${name}`;
+      const size = Number(await git(['cat-file', '-s', object], t.cwd));
+      if (size > MAX_IMAGE_BYTES) return { status: 413, error: `That picture is over ${MAX_IMAGE_BYTES / 1024 / 1024} MB` };
+      return { type, body: await runBytes('git', ['cat-file', 'blob', object], t.cwd, MAX_IMAGE_BYTES + 1) };
+    } catch (err) {
+      // It went away between the last poll and this request.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { status: 404, error: 'That file is gone' };
+      return { status: 500, error: (err as Error).message };
     }
   }
 
@@ -268,10 +347,22 @@ export class Changes {
     this.watches.delete(workerId);
   }
 
+  /** A file in the worker's list of changes, looking again when it isn't in the last one. */
+  private async changedFile(workerId: string, t: ChangesTarget, filePath: string): Promise<ChangedFile | string> {
+    let state = this.watches.get(workerId)?.last;
+    if (!state?.files.some((f) => f.path === filePath)) state = await this.compute(workerId, t);
+    return state.files.find((f) => f.path === filePath) ?? state.error ?? 'That file has no changes';
+  }
+
   /** Runs one commit / discard / PR at a time per worker, showing watchers that it's in progress. */
   private async action(workerId: string, label: string, fn: (t: ChangesTarget, w: Watch) => Promise<string | undefined>): Promise<string | undefined> {
     const t = this.target(workerId);
     if (!t) return 'No such worker';
+    try {
+      if (await this.childRepositories(t)) return 'This view spans repositories. Use a single repository to commit, discard changes or open a pull request.';
+    } catch (err) {
+      return (err as Error).message;
+    }
     let w = this.watches.get(workerId);
     if (!w) {
       w = { clients: new Set(), polling: false };
@@ -319,9 +410,9 @@ export class Changes {
 
   /** The commit the diff is taken from, and what to call it. */
   private async baseCommit(t: ChangesTarget): Promise<{ commit: string; label: string; branch?: string; prBase?: string }> {
-    const head = await git(['rev-parse', '--verify', '--quiet', 'HEAD'], t.cwd).catch(() => {
-      throw new GitError('No commits yet');
-    });
+    const result = await run('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], t.cwd);
+    if (result.code !== 0) throw new GitError(reason(result, result.code === 1 ? 'No commits yet' : 'Could not read HEAD'));
+    const head = result.out.trim();
     const branch = (await gitMaybe(['rev-parse', '--abbrev-ref', 'HEAD'], t.cwd)) || 'HEAD';
     const onBranch = branch !== 'HEAD';
     let ref: string | undefined;
@@ -346,6 +437,47 @@ export class Changes {
   }
 
   private async compute(workerId: string, t: ChangesTarget): Promise<ChangesState> {
+    try {
+      const children = await this.childRepositories(t);
+      if (!children) return this.computeRepository(workerId, t);
+      const repositories: NonNullable<ChangesState['repositories']> = [];
+      const files: ChangedFile[] = [];
+      let more = 0;
+      // Bound the Git processes in flight even for folders containing many repositories.
+      for (const child of children) {
+        const state = await this.computeRepository(workerId, { ...t, cwd: path.join(t.cwd, child) });
+        repositories.push({ path: child, error: state.error });
+        files.push(...state.files.map((f) => ({ ...f, path: `${child}/${f.path}`, from: f.from ? `${child}/${f.from}` : undefined })));
+        more += state.more;
+      }
+      const list = files.slice(0, MAX_FILES);
+      return { workerId, dir: t.rel, base: 'HEAD', ahead: 0, files: list, more: more + files.length - list.length, repositories, at: Date.now() };
+    } catch (err) {
+      return errorState(workerId, t.rel, (err as Error).message);
+    }
+  }
+
+  /** Existing checkouts keep their normal behavior. A non-repository folder can contain sibling repos. */
+  private async childRepositories(t: ChangesTarget): Promise<string[] | undefined> {
+    const root = await run('git', ['rev-parse', '--show-toplevel'], t.cwd);
+    if (root.code === 0) return undefined;
+    if (!root.err.includes('not a git repository')) throw new GitError(reason(root, 'Could not read the repository'));
+    const children: string[] = [];
+    for (const entry of await readdir(t.cwd, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.')) continue;
+      try {
+        const marker = await lstat(path.join(t.cwd, entry.name, '.git'));
+        // Linked worktrees use a .git file. Directory links and .git links are never followed.
+        if (marker.isDirectory() || marker.isFile()) children.push(entry.name);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+    }
+    if (!children.length) throw new GitError('This folder is not a Git repository and has no Git repositories directly inside it');
+    return children.sort((a, b) => a.localeCompare(b));
+  }
+
+  private async computeRepository(workerId: string, t: ChangesTarget): Promise<ChangesState> {
     try {
       const base = await this.baseCommit(t);
       const [numstat, names, status] = await Promise.all([

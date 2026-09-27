@@ -60,3 +60,16 @@ test('bounded tail recovers cumulative usage after large non-metric records', t 
   writeFileSync(file, header() + JSON.stringify({ type: 'response_item', payload: 'x'.repeat(5 * 1024 * 1024) }) + '\n' + event() + '\n');
   assert.deepEqual(new CodexUsageReader().read(file, 'thread-1', home), codexTokenUsage(totals()));
 });
+
+test('picks up the model and effort of the latest turn', t => {
+  const { home, file } = fixture(t);
+  const reader = new CodexUsageReader();
+  const turn = (model: string, effort?: string) => JSON.stringify({ type: 'turn_context', payload: { model, effort } }) + '\n';
+  writeFileSync(file, header() + turn('gpt-5-codex', 'medium') + event() + '\n' + turn('gpt-6', 'high') + event() + '\n');
+  reader.read(file, 'thread-1', home);
+  assert.equal(reader.model, 'gpt-6');
+  assert.equal(reader.effort, 'high');
+  appendFileSync(file, turn('bad model id', 'high'));
+  reader.read(file, 'thread-1', home);
+  assert.equal(reader.model, 'gpt-6');
+});
