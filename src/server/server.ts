@@ -21,6 +21,7 @@ import { ModelUsageLedger } from './model-usage.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
 import { MAX_WORKER_LIMIT, Machine, parseWorkerLimit } from './machine.js';
+import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
@@ -30,7 +31,8 @@ import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunne
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
-import { GH_COMMENT_MAX, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
+import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
+import { normalizeRepo } from '../shared/floors.js';
 import { DESK_BY_ID, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
@@ -303,7 +305,7 @@ export async function startServer(cfg: Config) {
       const q = floor.queue.state();
       return {
         maxWorkers: q.maxWorkers,
-        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, outcome: t.outcome, issue: t.issue, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error })),
+        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, outcome: t.outcome, issue: t.issue, repo: t.repo, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error })),
       };
     };
     if (req.method === 'GET') return send(res, 200, view());
@@ -312,17 +314,19 @@ export async function startServer(cfg: Config) {
       return err ? send(res, 400, { error: err }) : send(res, 200, view());
     }
     if (req.method !== 'POST') return send(res, 405, { error: 'GET, POST or DELETE' });
-    let body: { prompt?: unknown; title?: unknown; issue?: unknown };
+    let body: { prompt?: unknown; title?: unknown; issue?: unknown; repo?: unknown };
     try {
       body = JSON.parse(await readBody(req));
     } catch {
       return send(res, 400, { error: 'Send JSON: {"title": "…", "prompt": "…", "issue": 12}' });
     }
     const issue = Number.isInteger(body?.issue) && (body.issue as number) > 0 ? (body.issue as number) : undefined;
-    const err = floor.queue.add(str(body?.prompt, 20000), agent.name, str(body?.title, 200) || undefined, issue);
+    const repo = normalizeRepo(body?.repo);
+    if (issue !== undefined && !repo && floor.github.checkouts.length > 1) return send(res, 400, { error: `This floor holds several repositories: send "repo" (owner/name) with "issue", one of ${floor.github.checkouts.map((c) => c.repo).join(', ')}` });
+    const err = floor.queue.add(str(body?.prompt, 20000), agent.name, str(body?.title, 200) || undefined, issue, undefined, undefined, undefined, repo);
     if (err) return send(res, 400, { error: err });
     const task = floor.queue.state().tasks.at(-1)!;
-    toastFloor(floor, `📋 The ${agent.name} queued ${issue !== undefined ? `issue #${issue}` : `“${task.title}”`}`);
+    toastFloor(floor, `📋 The ${agent.name} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : `“${task.title}”`}`);
     send(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status } });
   };
   // Workers' terminals outlive a restart of the office (see ptys.ts) with this address in their
@@ -371,6 +375,9 @@ export async function startServer(cfg: Config) {
     () => clients.size > 0,
     (state) => broadcast({ t: 'limits', state }),
   );
+
+  // The office phone: an agent finishing on one floor rings it on all the others.
+  const phone = new PhoneLine();
 
   // Slack / Discord pings for workers that need input or finish (set from ⚙️ Settings or --webhook).
   webhook = new Webhook(cfg.dataDir, (workerId) => (workerId && workerFloor(workerId)?.def.name) || officeName, (state) => broadcast({ t: 'notify', state }));
@@ -429,10 +436,15 @@ export async function startServer(cfg: Config) {
     workerChanged: (floor, w) => {
       if (typeof w === 'string') {
         webhook.onWorkerGone(w);
+        phone.onWorkerGone(w);
         pumpQueues(floor);
       } else {
         modelUsage.record(floor.def.name, w, floor.project.defaultProvider);
         webhook.onWorker(w);
+        if (phone.onWorker(w)) {
+          const msg: ServerMsg = { t: 'phone', floor: floor.id, name: floor.def.name, worker: w.name, task: w.task?.name };
+          for (const c of clients.values()) if (c.peer.floor !== floor.id) sendTo(c, msg);
+        }
       }
       machine.workersChanged();
       floorsChanged();
@@ -687,6 +699,21 @@ export async function startServer(cfg: Config) {
         return;
       }
       if (p === '/api/whoami') return send(res, 200, { ok: true, me: meOf(session.account?.id) });
+      const logoMatch = /^\/api\/floors\/([^/]+)\/logo$/.exec(p);
+      if (logoMatch && req.method === 'GET') {
+        const logo = floors.get(logoMatch[1])?.logo;
+        if (!logo) return send(res, 404, { error: 'No project logo' });
+        res.writeHead(200, {
+          'content-type': logo.type,
+          'content-length': logo.bytes.length,
+          'cache-control': 'private, max-age=3600',
+          'x-content-type-options': 'nosniff',
+          // An SVG is an image here, never an executable page if opened directly.
+          'content-security-policy': "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+        });
+        res.end(logo.bytes);
+        return;
+      }
       if (p === '/api/model-usage' && req.method === 'GET') {
         const waiting = [];
         for (const floor of floors.values()) {
@@ -796,12 +823,14 @@ export async function startServer(cfg: Config) {
         const n = Number(url.searchParams.get('number'));
         if (!Number.isSafeInteger(n) || n <= 0) return send(res, 400, { error: 'Bad number' });
         if (!floor) return send(res, 404, { error: 'No such floor' });
+        // On a floor that's a folder of checkouts, which repository it's in.
+        const repo = normalizeRepo(url.searchParams.get('repo') ?? undefined);
         const github = floor.github;
         try {
-          if (p === '/api/gh/pull') return send(res, 200, await github.pullDetail(n));
-          if (p === '/api/gh/issue') return send(res, 200, await github.issueDetail(n));
+          if (p === '/api/gh/pull') return send(res, 200, await github.pullDetail(n, repo));
+          if (p === '/api/gh/issue') return send(res, 200, await github.issueDetail(n, repo));
           if (p === '/api/gh/pull/diff') {
-            const diff = await github.pullDiff(n);
+            const diff = await github.pullDiff(n, repo);
             res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
             res.end(diff);
             return;
@@ -1344,13 +1373,15 @@ export async function startServer(cfg: Config) {
         const floor = here();
         const n = num(msg.number);
         const method = (['squash', 'merge', 'rebase'] as const).find((m) => m === msg.method);
+        const repo = normalizeRepo(msg.repo);
         if (!floor || !Number.isSafeInteger(n) || n <= 0 || !method) break;
-        void floor.github.merge(n, method, msg.deleteBranch === true, msg.auto === true).then((error) => {
-          sendTo(c, { t: 'gh.merged', number: n, error });
+        const ref = ghRef({ number: n, repo });
+        void floor.github.merge(n, method, msg.deleteBranch === true, msg.auto === true, repo).then((error) => {
+          sendTo(c, { t: 'gh.merged', number: n, repo: msg.repo, error });
           if (error) return;
-          toastFloor(floor, msg.auto ? `${who} set PR #${n} to merge once its checks pass` : `🎉 ${who} merged PR #${n}`);
+          toastFloor(floor, msg.auto ? `${who} set PR ${ref} to merge once its checks pass` : `🎉 ${who} merged PR ${ref}`);
           // An auto-merge rings once GitHub gets round to it and the boards see it merged.
-          if (!msg.auto) floor.merged(n, who);
+          if (!msg.auto) floor.merged(n, who, repo);
         });
         break;
       }
@@ -1358,17 +1389,18 @@ export async function startServer(cfg: Config) {
         const floor = here();
         const n = num(msg.number);
         const kind = msg.kind === 'pull' ? 'pull' : 'issue';
+        const repo = normalizeRepo(msg.repo);
         if (!floor || !Number.isSafeInteger(n) || n <= 0) break;
         const body = typeof msg.body === 'string' ? msg.body : '';
         // Refused rather than cut short: a comment that silently lost its end would read as finished.
         const invalid = !body.trim() ? 'The comment is empty' : body.length > GH_COMMENT_MAX ? `GitHub takes comments of up to ${GH_COMMENT_MAX} characters` : '';
         if (invalid) {
-          sendTo(c, { t: 'gh.commented', kind, number: n, error: invalid });
+          sendTo(c, { t: 'gh.commented', kind, number: n, repo: msg.repo, error: invalid });
           break;
         }
-        void floor.github.comment(kind, n, body).then((r) => {
-          sendTo(c, { t: 'gh.commented', kind, number: n, ...r });
-          if (r.comment) toastFloor(floor, `💬 ${who} commented on ${kind === 'pull' ? 'PR' : 'issue'} #${n}`);
+        void floor.github.comment(kind, n, body, repo).then((r) => {
+          sendTo(c, { t: 'gh.commented', kind, number: n, repo: msg.repo, ...r });
+          if (r.comment) toastFloor(floor, `💬 ${who} commented on ${kind === 'pull' ? 'PR' : 'issue'} ${ghRef({ number: n, repo })}`);
         });
         break;
       }
@@ -1391,15 +1423,17 @@ export async function startServer(cfg: Config) {
         const floor = here();
         const n = num(msg.number);
         const kind = msg.kind === 'issue' || msg.kind === 'pull' ? msg.kind : undefined;
+        const repo = normalizeRepo(msg.repo);
         if (!floor || !Number.isSafeInteger(n) || n <= 0 || !kind) break;
         const reason = msg.reason === 'not planned' ? 'not planned' : 'completed';
-        void floor.github.close(kind, n, { comment: str(msg.comment, 20000).trim() || undefined, reason, deleteBranch: msg.deleteBranch === true }).then((error) => {
-          sendTo(c, { t: 'gh.closed', kind, number: n, error });
+        const ref = ghRef({ number: n, repo });
+        void floor.github.close(kind, n, { comment: str(msg.comment, 20000).trim() || undefined, reason, deleteBranch: msg.deleteBranch === true }, repo).then((error) => {
+          sendTo(c, { t: 'gh.closed', kind, number: n, repo: msg.repo, error });
           if (error) return;
-          if (kind === 'pull') return toastFloor(floor, `${who} closed PR #${n} without merging`);
+          if (kind === 'pull') return toastFloor(floor, `${who} closed PR ${ref} without merging`);
           // Nobody should be seated for an issue that's closed.
-          const dropped = floor.queue.dropIssue(n);
-          toastFloor(floor, `${who} closed issue #${n}${reason === 'not planned' ? ' as not planned' : ''}${dropped ? ' and took it off the queue' : ''}`);
+          const dropped = floor.queue.dropIssue(n, repo);
+          toastFloor(floor, `${who} closed issue ${ref}${reason === 'not planned' ? ' as not planned' : ''}${dropped ? ' and took it off the queue' : ''}`);
         });
         break;
       }
@@ -1411,11 +1445,12 @@ export async function startServer(cfg: Config) {
           break;
         }
         const issue = Number.isInteger(msg.issue) && (msg.issue as number) > 0 ? (msg.issue as number) : undefined;
+        const repo = normalizeRepo(msg.repo);
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const err = floor.queue.add(str(msg.prompt, 20000), who, str(msg.title, 200), issue, msg.provider, model, effort);
+        const err = floor.queue.add(str(msg.prompt, 20000), who, str(msg.title, 200), issue, msg.provider, model, effort, repo);
         if (err) warn(c, err);
-        else toastFloor(floor, `📋 ${who} queued ${issue !== undefined ? `issue #${issue}` : 'a task'}`);
+        else toastFloor(floor, `📋 ${who} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : 'a task'}`);
         break;
       }
       case 'queue.remove': {

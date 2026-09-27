@@ -21,12 +21,10 @@ export interface Elevator {
   readonly open: boolean;
   /** Whether the doors have finished moving. */
   readonly settled: boolean;
-  /** The sign over the doors, and the display inside: which floor this is. */
-  setSign(text: string): void;
   update(dt: number): void;
 }
 
-export function buildElevator(): Elevator {
+export function buildElevator(sign: THREE.Group): Elevator {
   const { x, width, depth, wall, doorWidth, doorHeight } = ELEVATOR;
   const group = new THREE.Group();
   const colliders: Collider[] = [];
@@ -133,21 +131,8 @@ export function buildElevator(): Elevator {
   colliders.push(doorCollider);
 
   // What floor this is: a sign over the doors, facing the room.
-  let sign: ReturnType<typeof textPlane> | null = null;
-  const setSign = (text: string) => {
-    if (sign) {
-      group.remove(sign);
-      sign.material.map?.dispose();
-      sign.material.dispose();
-      sign.geometry.dispose();
-    }
-    sign = textPlane(text, { bg: '#2b2d42', color: '#fffaf3', size: 64, border: '#fffaf3' });
-    const { width: sw } = sign.geometry.parameters;
-    // As big as fits over the doors.
-    sign.scale.multiplyScalar(Math.min(1.6, (width + 0.6) / sw));
-    sign.position.set(x, doorHeight + 0.75, front + 0.03);
-    group.add(sign);
-  };
+  sign.position.set(x, doorHeight + 0.75, front + 0.06);
+  group.add(sign);
 
   let open = false;
   let openness = 0; // 0 shut, 1 open
@@ -181,7 +166,6 @@ export function buildElevator(): Elevator {
     get settled() {
       return openness === (open ? 1 : 0);
     },
-    setSign,
     update,
   };
 }

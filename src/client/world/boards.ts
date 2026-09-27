@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DESK_BY_ID } from '../../shared/layout';
-import type { GhIssue, GhPull, GhState, QueueState, QueueTask, ServiceInfo, WorkerInfo } from '../../shared/protocol';
+import { ghRef, type GhIssue, type GhPull, type GhState, type QueueState, type QueueTask, type ServiceInfo, type WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
 
 export const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
@@ -151,7 +151,7 @@ export class BoardTexture {
       const w = this.kind === 'pulls' && workers ? workerForPull(workers.values(), it as GhPull) : undefined;
       const footer = w ? fs * 1.3 : 0;
       g.font = `900 ${Math.round(fs * 1.35)}px Nunito, ui-rounded, system-ui, sans-serif`;
-      g.fillText(`#${it.number}`, -nw / 2 + 14, -nh / 2 + fs * 2);
+      g.fillText(clip(g, ghRef(it), nw - 28), -nw / 2 + 14, -nh / 2 + fs * 2);
       g.font = `700 ${fs}px Nunito, ui-rounded, system-ui, sans-serif`;
       wrap(g, it.title, nw - 28, Math.max(2, Math.floor((nh - fs * 3 - footer) / (fs * 1.1)))).forEach((line, li) => g.fillText(line, -nw / 2 + 14, -nh / 2 + fs * 3.4 + li * fs * 1.1));
       if (w) {
@@ -289,7 +289,11 @@ export class QueueBoardTexture {
   }
 
   render(state: QueueState, workers: Map<string, WorkerInfo>) {
-    const name = (t: QueueTask) => (t.issue !== undefined ? `#${t.issue}  ${t.title.replace(new RegExp(`^#${t.issue}\\s*`), '')}` : t.title);
+    const name = (t: QueueTask) => {
+      if (t.issue === undefined) return t.title;
+      const ref = ghRef({ number: t.issue, repo: t.repo });
+      return `${ref}  ${t.title.startsWith(ref) ? t.title.slice(ref.length).trimStart() : t.title.replace(new RegExp(`^#${t.issue}\\s*`), '')}`;
+    };
     const running = state.tasks.filter((t) => t.status === 'running');
     const queued = state.tasks.filter((t) => t.status === 'queued');
     const done = state.tasks.filter((t) => t.status === 'done').slice(-3).reverse();

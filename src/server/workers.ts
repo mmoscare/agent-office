@@ -14,7 +14,7 @@ import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
-import { QUEUE_AGENT_DISALLOWED_TOOLS, stationBrief } from './stations.js';
+import { QUEUE_AGENT_DISALLOWED_TOOLS, stationBrief, type Checkout } from './stations.js';
 import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
 import { isBusy } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
@@ -141,6 +141,8 @@ export class WorkerManager {
   private trees: Worktrees;
   private agentPath: string | null = null;
   readonly defaultProvider: AgentProvider;
+  /** On a floor that's a folder of GitHub checkouts rather than one, which (for the board agents' brief). */
+  checkouts: () => Checkout[] = () => [];
   private openCodePlugin: string;
   private codexHook: string;
   /** Where the office-queue command is, for the board agents' PATH (see writeQueueCommand). */
@@ -327,7 +329,7 @@ export class WorkerManager {
     this.workers.set(id, w);
     if (info.prompt) this.notePrompt(w, info.prompt);
     // A board agent is told what it's there for ahead of its first request (which is what shows).
-    this.launch(w, seat.station && info.prompt ? `${stationBrief(seat.station)}\n\n${info.prompt}` : info.prompt, undefined);
+    this.launch(w, seat.station && info.prompt ? `${stationBrief(seat.station, this.checkouts())}\n\n${info.prompt}` : info.prompt, undefined);
     this.persist();
     return info;
   }
@@ -341,7 +343,7 @@ export class WorkerManager {
     w.info.exitCode = undefined;
     const station = DESK_BY_ID.get(w.info.deskId)?.station;
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station)}\n\n${prompt}` : prompt;
+    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt;
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);

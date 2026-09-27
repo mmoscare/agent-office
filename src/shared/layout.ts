@@ -444,6 +444,12 @@ export const ELEVATOR_CAR = {
   maxZ: ELEVATOR_FRONT - ELEVATOR.wall,
 } as const;
 
+/**
+ * The office phone: on the elevator's left-hand pillar (the call button is on the right), facing
+ * into the room. It rings when an agent on another floor finishes. (x, y, z) is the middle of its face.
+ */
+export const PHONE = { x: ELEVATOR.x - ELEVATOR.doorWidth / 2 - (ELEVATOR.width - ELEVATOR.doorWidth) / 4, y: 1.35, z: ELEVATOR_FRONT } as const;
+
 /** Somewhere inside the car, facing the doors (+z), a little apart from anyone else arriving. */
 export function elevatorSpot(): { x: number; z: number } {
   return {

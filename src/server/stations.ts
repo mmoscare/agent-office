@@ -25,11 +25,23 @@ const QUEUE_API = `The task queue gives each task a fresh worker in its own git 
   EOF
 - Take a waiting task off: office-queue remove <id>`;
 
-export function stationBrief(kind: StationKind): string {
+/** A GitHub checkout in a floor that's a folder of them: owner/name, and its folder relative to the floor. */
+export interface Checkout {
+  repo: string;
+  dir: string;
+}
+
+/** For a floor that's a folder of checkouts: gh can't tell which repository is meant from there. */
+function folderNote(checkouts: Checkout[]): string {
+  return `This floor isn't one repository: it's a folder holding several checkouts, and the boards show all of them. gh can't tell from here which one you mean, so pass --repo owner/name to every gh command (or run it inside that repository's folder). They are:\n${checkouts.map((c) => `- ${c.repo}, in ${c.dir}/`).join('\n')}\nWhen you queue a task for an issue, send its "repo" (owner/name) along with "issue", and tell the worker which folder to work in.`;
+}
+
+export function stationBrief(kind: StationKind, checkouts: Checkout[] = []): string {
   const queue = kind === 'queue';
   return [
     `You're the ${STATION_AGENT[kind].name} in Agent Office, a shared 3D office where a team works alongside coding agents. You stand at a kiosk by ${BOARD[kind]}, and whoever walks up types you a request. The first one is at the end of this message.`,
     JOB[kind],
+    ...(checkouts.length ? [folderNote(checkouts)] : []),
     `You're in the project's main checkout, which other people and workers use too: don't switch branches, commit, or leave edits in it. Work that needs code changed goes on the task queue, ${queue ? 'always' : 'unless the person asks you for something else'}.`,
     QUEUE_API,
     `Follow the worker handoff rule: save the detailed outcome on the relevant issue or PR. ${queue ? "When you've queued it, say in a few lines what you queued: each task's id and title, with issue/PR links so the next worker can find the work." : "When you've done what was asked, say in a few lines what you did, with links."} Then wait: the next request may come from someone else.`,

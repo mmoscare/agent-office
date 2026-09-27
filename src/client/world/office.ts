@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, CABINET, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
-import { wallFacing, type WallId, type WallRect } from '../../shared/decor';
+import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
 import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { mergeByMaterial, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
+import { buildPhone, type Phone } from './phone';
 import { buildJukebox, type JukeboxView } from './jukebox';
 import { buildCabinet, type CabinetModel } from './cabinet';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
+import { buildProjectSigns } from './project-signs';
 
 export interface Collider {
   minX: number;
@@ -86,6 +88,8 @@ export interface Office {
   elevator: Elevator;
   /** The merge gong by the PR board. */
   gong: Gong;
+  /** The office phone on the elevator's pillar: rings when an agent on another floor finishes. */
+  phone: Phone;
   jukebox: JukeboxView;
   /** The arcade cabinet in the lounge, where BLOCKFALL plays (ui/cabinet.ts). */
   cabinet: CabinetModel;
@@ -93,8 +97,8 @@ export interface Office {
   whiteboard: WhiteboardStand;
   /** The ceiling, the floor, and the ladder and fire poles between the floors of the building. */
   stack: Stack;
-  /** The sign over the elevator doors: which floor you're on. */
-  setProjectName(name: string): void;
+  /** The repo/directory plaques behind the whiteboard and above every doorway. */
+  setProjectName(name: string, logo?: string, floor?: number): void;
   /** Paints the walls, their trim and the floor in a floor's colors, so each project looks like itself. */
   setLook(p: FloorPalette): void;
   /**
@@ -981,6 +985,7 @@ function wallBoard(width: number, height: number, frameColor: string): { group: 
 
 export function buildOffice(): Office {
   const group = new THREE.Group();
+  const projectSigns = buildProjectSigns();
   const colliders: Collider[] = [];
   const interactables: Interactable[] = [];
   const fixtures: WallRect[] = [];
@@ -1065,6 +1070,22 @@ export function buildOffice(): Office {
   // The rest of the building, above and below this floor.
   const tower = buildTower(colliders, night);
   group.add(tower.group);
+  // On both sides of the outside doors, above the EXIT light and clear of the windows. The exit door
+  // is the ground floor's, so its signs go down with it on the floors above.
+  for (const [location, opening, signWidth, y] of [
+    ['exit', EXIT_DOOR, 2.6, 3.55],
+    ['balcony', BALCONY_DOOR, 3.1, 3.15],
+  ] as const) {
+    for (const outside of [false, true]) {
+      const sign = projectSigns.create(`${location}-${outside ? 'outside' : 'inside'}`, signWidth);
+      const at = wallPose(opening.wall, opening.u, y, outside ? -WALL_T - 0.06 : 0.06);
+      sign.position.set(at.x, at.y, at.z);
+      sign.rotation.y = at.rotY + (outside ? Math.PI : 0);
+      (location === 'exit' ? ground : group).add(sign);
+    }
+    fixture(opening.wall, opening.u, y, signWidth + 0.1, signWidth / 4 + 0.1);
+  }
+
 
   // Desks
   const desks = new Map<string, DeskView>();
@@ -1290,11 +1311,15 @@ export function buildOffice(): Office {
   fixture('south', MEETING_BOARD.x, MEETING_BOARD.y, MEETING_BOARD.width + 0.4, MEETING_BOARD.height + 0.4);
 
   // The elevator to the other floors, against the north wall between the PR board and the gong.
-  const elevator = buildElevator();
+  const elevator = buildElevator(projectSigns.create('elevator', 2.42));
   group.add(elevator.group);
   colliders.push(...elevator.colliders);
   interactables.push(elevator.interactable);
   fixture('north', ELEVATOR.x, WALL_HEIGHT / 2, ELEVATOR.width + 0.1, WALL_HEIGHT);
+
+  // The office phone, on the elevator's other pillar from the call button.
+  const phone = buildPhone();
+  group.add(phone.group);
 
   // The gong, just past the elevator from the PR board.
   const gong = buildGong();
@@ -1308,6 +1333,27 @@ export function buildOffice(): Office {
   group.add(whiteboard.group);
   colliders.push(...whiteboard.colliders);
   interactables.push(whiteboard.interactable);
+  // The back of the rolling board carries the identity, with a matching raised header visible
+  // from the desks. Both are attached behind it, leaving the drawing and its controls clear.
+  const backSign = projectSigns.create('whiteboard-back', 3.65);
+  backSign.position.set(0, 1.6, -0.095);
+  backSign.rotation.y = Math.PI;
+  whiteboard.group.add(backSign);
+  const headerSign = projectSigns.create('whiteboard-header', 3.8);
+  headerSign.position.set(0, 3.65, -0.13);
+  whiteboard.group.add(headerSign);
+  // Include the raised header when jumping onto the stand.
+  for (const collider of whiteboard.colliders) collider.top = 4.17;
+  for (const x of [-1.75, 1.75]) {
+    whiteboard.group.add(mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.55, 8), toon('#aab4be'), x, 3.12, -0.13));
+  }
+  // The small doorway into the loft gets the same identity, facing the stairs and the office.
+  for (const inside of [false, true]) {
+    const sign = projectSigns.create(`loft-${inside ? 'inside' : 'stairs'}`, 1.5);
+    sign.position.set(LOFT.minX + (inside ? 0.19 : -0.07), LOFT.y + 2.55, (STAIRS.minZ + LOFT.maxZ) / 2);
+    sign.rotation.y = inside ? Math.PI / 2 : -Math.PI / 2;
+    group.add(sign);
+  }
   // Pictures stay clear of the stairs (step by step, so they can hang above them) and of what's on
   // the loft's walls upstairs, as buildLoft places it: the couch and the sign.
   const run = (STAIRS.toX - STAIRS.fromX) / STAIRS.steps;
@@ -1317,8 +1363,9 @@ export function buildOffice(): Office {
   fixture('east', loftZ, LOFT.y + 0.5, 2.4, 1);
   fixture('south', LOFT.maxX - 3, LOFT.y + 1.9, 2.6, 0.6);
 
-  const setProjectName = (name: string) => elevator.setSign(`🛗 ${name}`);
+  const setProjectName = projectSigns.setProject;
   const setLook = (p: FloorPalette) => {
+    projectSigns.setLook(p);
     looks.wall.color.set(p.wall);
     looks.trim.color.set(p.trim);
     for (const t of looks.planks) {
@@ -1363,9 +1410,10 @@ export function buildOffice(): Office {
     }
     elevator.update(dt);
     gong.update(dt);
+    phone.update(dt);
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, jukebox, cabinet, whiteboard, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */

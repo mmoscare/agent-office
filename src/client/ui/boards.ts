@@ -1,5 +1,5 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import type { AgentEffort, AgentProvider, GhIssue, GhPull, WorkerInfo } from '../../shared/protocol';
+import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type WorkerInfo } from '../../shared/protocol';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
@@ -14,17 +14,27 @@ export interface BoardActions {
   ask(context: string, title: string): void;
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
-  /** Put an issue on the 📋 task queue; a worker is seated for it when there's room. */
-  queue(prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort): void;
+  /** Put an issue (of `repo`, on a floor of several) on the 📋 task queue; a worker is seated for it when there's room. */
+  queue(prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string): void;
   /** Take the issue's card off the board, to carry to a desk or the queue. */
   pickUp(issue: GhIssue): void;
   /** Call a meeting about it: the meeting room's form, filled in. */
   meeting(preset: MeetingPreset): void;
 }
 
+/** ` --repo owner/name` for gh, on a floor that's a folder of checkouts: from there gh can't tell which repository is meant. */
+export function repoFlag(it: GhWhere): string {
+  return it.repo ? ` --repo ${it.repo}` : '';
+}
+
+/** Which checkout to work in, on a floor that's a folder of them ('' on a floor that's one). */
+export function checkoutNote(it: GhWhere): string {
+  return it.repo ? `It's in ${it.repo}, which is checked out in the \`${it.repoDir ?? '.'}\` folder here: cd into it and do the work there.\n\n` : '';
+}
+
 /** The task a worker gets for an issue, from the board, a carried card or the queue. */
-export function issuePrompt(it: Pick<GhIssue, 'number' | 'title'>): string {
-  return `Work on GitHub issue #${it.number}: "${it.title}".\n\nRead it first with \`gh issue view ${it.number} --comments\`. Create a new branch, implement the change, verify it, then open a pull request that closes #${it.number}.`;
+export function issuePrompt(it: Pick<GhIssue, 'number' | 'title' | 'repo' | 'repoDir'>): string {
+  return `Work on GitHub issue ${it.repo ? `${it.repo}` : ''}#${it.number}: "${it.title}".\n\n${checkoutNote(it)}Read it first with \`gh issue view ${it.number} --comments${repoFlag(it)}\`. Create a new branch, implement the change, verify it, then open a pull request that closes #${it.number}.`;
 }
 
 const TILTS = ['-1.2deg', '0.8deg', '-0.4deg', '1.4deg', '0deg', '-0.9deg'];
@@ -37,7 +47,7 @@ interface Column<T> {
 
 function issueColumns(items: GhIssue[]): Column<GhIssue>[] {
   const open = items.filter((i) => i.state === 'OPEN');
-  const inProgress = open.filter((i) => i.assignees.length > 0 || i.labels.some((l) => /progress|doing|wip|started/i.test(l.name)) || store.taskForIssue(i.number)?.status === 'running');
+  const inProgress = open.filter((i) => i.assignees.length > 0 || i.labels.some((l) => /progress|doing|wip|started/i.test(l.name)) || store.taskForIssue(i.number, i.repo)?.status === 'running');
   const todo = open.filter((i) => !inProgress.includes(i));
   const closed = items.filter((i) => i.state !== 'OPEN').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40);
   return [
@@ -75,8 +85,8 @@ function deskChip(w: WorkerInfo) {
 }
 
 /** Where an issue stands on the 📋 queue, for its card. */
-function queueChip(issue: number): Node | '' {
-  const t = store.taskForIssue(issue);
+function queueChip(issue: GhIssue): Node | '' {
+  const t = store.taskForIssue(issue.number, issue.repo);
   if (!t) return '';
   const provider = providerLabel(t.provider, store.project);
   if (t.status === 'queued') return h('span.qchip', {}, `${store.queue.tasks.find((x) => x.status === 'queued') === t ? '📋 up next' : '📋 queued'} · ${provider}`);
@@ -88,11 +98,18 @@ function queueChip(issue: number): Node | '' {
   return t.pr ? h('span.qchip.done', {}, `🔀 PR #${t.pr.number} · ${provider}`) : '';
 }
 
-function card(n: number, title: string, meta: (Node | string)[], i: number, onclick: () => void) {
+/** The repository a card is in, on a floor that's a folder of several. */
+function repoChip(it: GhWhere): Node | '' {
+  return it.repo ? h('span.qchip', { title: it.repo }, `📁 ${it.repoDir ?? it.repo}`) : '';
+}
+
+function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick: () => void) {
+  const n = it.number;
+  const title = it.title;
   return h(
     'li.card',
     { style: `--tilt:${TILTS[n % TILTS.length]};background:${NOTE_COLORS[n % NOTE_COLORS.length]};--pin:${['#ef476f', '#118ab2', '#06d6a0', '#ffd166'][i % 4]}`, tabindex: 0, onclick, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && onclick()) as EventListener },
-    h('div.num', {}, `#${n}`),
+    h('div.num', {}, ghRef(it)),
     h('div.ttl', {}, title),
     h('div.meta', {}, ...meta.filter((m) => m !== '').map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
   );
@@ -113,7 +130,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
     if (st.error && !st.items.length) {
-      body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, 'The server runs `gh` in the project directory — make sure it is installed and authenticated (gh auth login).')));
+      body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, "The server runs `gh` in the floor's folder, or in each GitHub checkout inside it when the folder isn't one itself — make sure it is installed and authenticated (gh auth login).")));
       return;
     }
     if (kind === 'issues') {
@@ -121,7 +138,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
         const ul = h('ul');
         col.items.forEach((it, i) =>
           ul.append(
-            card(it.number, it.title, [...labelChips(it.labels), queueChip(it.number), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
+            card(it, [repoChip(it), ...labelChips(it.labels), queueChip(it), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
           ),
         );
         if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
@@ -134,9 +151,9 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
           const w = workerForPull(store.workers.values(), it);
           ul.append(
             card(
-              it.number,
-              it.title,
+              it,
               [
+                repoChip(it),
                 w ? deskChip(w) : '',
                 ...labelChips(it.labels),
                 `by ${it.author}`,

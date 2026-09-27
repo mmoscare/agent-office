@@ -34,7 +34,7 @@ import { Confetti, type Area } from './world/confetti';
 import { Hanger } from './hanging';
 import { disposeSprite, textSprite } from './world/toon';
 import { Voice } from './voice';
-import { OfficeSound } from './sound';
+import { OfficeSound, PHONE_RING_SECONDS } from './sound';
 import { DesktopNotifier, askNotifyPermission, notifyPermission, waitingOnSomeone } from './notify';
 import { NextUp, waitingInOrder, waitingLabel } from './nextup';
 import { $, h, clip, closeAllModals, doingNow, modalOpen, onModalChange, openModal, toast, STATUS_LABEL } from './ui/dom';
@@ -595,6 +595,9 @@ net.onMessage((msg) => {
       sound.horn();
       if (msg.by !== store.profile.name) toast(`📯 ${msg.by} blew the air horn!`);
       break;
+    case 'phone':
+      phoneRang(msg.floor, msg.name, msg.worker, msg.task);
+      break;
   }
 });
 
@@ -628,7 +631,7 @@ function renderProject() {
   $('project-meta').classList.remove('lobby');
   $('project-name').textContent = `🏢 ${p.name}`;
   $('project-meta').textContent = [n >= 0 && `🛗 floor ${n + 1} of ${store.floors.length}`, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
-  office.setProjectName(p.name);
+  office.setProjectName(p.name, p.logo, n >= 0 ? n + 1 : undefined);
 }
 store.on('floors', renderProject);
 store.on('project', renderProject);
@@ -1452,7 +1455,7 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
 
 function boardActions() {
   return {
-    queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort) => net.send({ t: 'queue.add', prompt, title, issue, provider, model, effort }),
+    queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string) => net.send({ t: 'queue.add', prompt, title, issue, repo, provider, model, effort }),
     assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
     ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
     meeting: (preset: MeetingPreset) => showMeeting(preset),
@@ -1892,6 +1895,20 @@ function gongRang(why: GongWhy, pr?: number) {
       confetti.burst(top.x, top.y, top.z, 450, 1.5);
     }, 1700);
   }
+}
+
+/** When the office phone stops ringing, on performance.now()'s clock. */
+let phoneUntil = 0;
+/** An agent on another floor finished: the phone by the elevator rings, since you can't hear its ding from here. */
+function phoneRang(floor: string, name: string, worker: string, task?: string) {
+  if (!store.floor || floor === store.floor) return;
+  toast(`📞 ${worker} on the ${name} floor finished${task ? `: ${task}` : ''} — take the elevator up`);
+  office.phone.ring(PHONE_RING_SECONDS);
+  // Another call while it's still ringing doesn't start the bell over the top of itself.
+  const now = performance.now();
+  if (now < phoneUntil) return;
+  phoneUntil = now + PHONE_RING_SECONDS * 1000;
+  sound.officePhone();
 }
 
 // ---- Interaction targeting & hint -----------------------------------------------------------------

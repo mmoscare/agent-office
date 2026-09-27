@@ -1,5 +1,9 @@
 import { execFile } from 'node:child_process';
-import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState } from '../shared/protocol.js';
+import { existsSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { normalizeRepo } from '../shared/floors.js';
+import { ghKey } from '../shared/protocol.js';
+import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
 import { pullForBranch } from '../shared/pulls.js';
 
 const REFRESH_MS = 90_000;
@@ -28,6 +32,55 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
 export async function findBranchPr(branch: string, cwd: string, query = gh) {
   const out = await query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,url,state,headRefName'], cwd);
   return pullForBranch(JSON.parse(out || '[]'), branch);
+}
+
+function git(args: string[], cwd: string): Promise<string | undefined> {
+  return new Promise((resolve) => execFile('git', args, { cwd, timeout: 10_000 }, (err, stdout) => resolve(err ? undefined : stdout.trim())));
+}
+
+/** Where the boards ask GitHub: the floor's own checkout, or one of the checkouts in a floor that's a folder of them. */
+export interface GhSource {
+  /** Absolute; gh runs here, so it knows the repository from the checkout's remote. */
+  dir: string;
+  /** owner/name, on a floor of several repositories; unset on a floor that is one. */
+  repo?: string;
+  /** `dir` relative to the floor. */
+  rel?: string;
+}
+
+/** Folders never looked in for checkouts. */
+const SKIP = new Set(['node_modules', 'dist', 'build', 'out', 'target', 'vendor', 'venv', '__pycache__']);
+const MAX_SOURCES = 50;
+
+/**
+ * The GitHub repositories checked out in a folder that isn't a checkout itself: the folders in it
+ * (and in its folders, for an owner/repo layout) whose origin is on GitHub. One per repository.
+ */
+export async function findCheckouts(root: string, depth = 2): Promise<GhSource[]> {
+  const found: GhSource[] = [];
+  const seen = new Set<string>();
+  const walk = async (dir: string, left: number) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.') && !SKIP.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of dirs) {
+      if (found.length >= MAX_SOURCES) return;
+      const sub = path.join(dir, e.name);
+      if (existsSync(path.join(sub, '.git'))) {
+        const repo = normalizeRepo(await git(['remote', 'get-url', 'origin'], sub));
+        if (repo && !seen.has(repo.toLowerCase())) {
+          seen.add(repo.toLowerCase());
+          found.push({ dir: sub, repo, rel: path.relative(root, sub).split(path.sep).join('/') });
+        }
+      } else if (left > 1) await walk(sub, left - 1);
+    }
+  };
+  await walk(root, depth);
+  return found;
 }
 
 function labels(raw: any[]): { name: string; color: string }[] {
@@ -98,25 +151,26 @@ function commentsOf(raw: any[]): GhComment[] {
  * merged: from the PR window, by a worker's `gh pr merge`, by auto-merge, or on GitHub itself.
  */
 export class MergeWatch {
-  /** Open at the last look; unset until the first, so starting the office up rings for nothing. */
-  private open?: Set<number>;
+  /** Open at the last look (by ghKey); unset until the first, so starting the office up rings for nothing. */
+  private open?: Set<string>;
   /** Rang for already (merged from the PR window), so the next look doesn't ring them again. */
-  private rang = new Set<number>();
+  private rang = new Set<string>();
 
-  /** The gong rings for `n`: false if it already has. */
-  ring(n: number): boolean {
-    if (this.rang.has(n)) return false;
-    this.rang.add(n);
+  /** The gong rings for PR `n` (of `repo`, on a floor of several): false if it already has. */
+  ring(n: number, repo?: string): boolean {
+    const key = ghKey({ number: n, repo });
+    if (this.rang.has(key)) return false;
+    this.rang.add(key);
     return true;
   }
 
   /** A fresh list from GitHub: the pull requests that merged since the last look and haven't rung yet. */
   look(pulls: GhPull[]): GhPull[] {
     const open = this.open;
-    const merged = open ? pulls.filter((p) => p.state === 'MERGED' && open.has(p.number) && !this.rang.has(p.number)) : [];
+    const merged = open ? pulls.filter((p) => p.state === 'MERGED' && open.has(ghKey(p)) && !this.rang.has(ghKey(p))) : [];
     // Once GitHub says it merged, it never shows as open again to ring twice.
-    for (const p of pulls) if (p.state === 'MERGED') this.rang.delete(p.number);
-    this.open = new Set(pulls.filter((p) => p.state === 'OPEN').map((p) => p.number));
+    for (const p of pulls) if (p.state === 'MERGED') this.rang.delete(ghKey(p));
+    this.open = new Set(pulls.filter((p) => p.state === 'OPEN').map(ghKey));
     return merged;
   }
 }
@@ -124,8 +178,11 @@ export class MergeWatch {
 export class GitHub {
   issues: GhState<GhIssue> = { items: [], fetchedAt: 0, loading: false };
   pulls: GhState<GhPull> = { items: [], fetchedAt: 0, loading: false };
+  /** The checkouts in the floor's folder, when it's a folder of them rather than one (as last looked). */
+  checkouts: GhSource[] = [];
   private timer?: NodeJS.Timeout;
-  private repo?: Promise<GhRepoInfo>;
+  private sources?: Promise<GhSource[]>;
+  private repos = new Map<string, Promise<GhRepoInfo>>();
   private login?: Promise<string>;
 
   constructor(
@@ -144,18 +201,57 @@ export class GitHub {
   }
 
   async refresh() {
+    // Looked for again each time, so a repository cloned into the folder shows up on the boards.
+    this.sources = undefined;
     await Promise.all([this.refreshIssues(), this.refreshPulls()]);
   }
 
-  /** The repository's full name and how it lets PRs merge. Asked once (again after a failure). */
-  repoInfo(): Promise<GhRepoInfo> {
-    this.repo ??= gh(['repo', 'view', '--json', 'nameWithOwner,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed'], this.dir).then((out) => {
-      const r = JSON.parse(out);
-      const methods = (['squash', 'merge', 'rebase'] as const).filter((m) => r[{ squash: 'squashMergeAllowed', merge: 'mergeCommitAllowed', rebase: 'rebaseMergeAllowed' }[m]]);
-      return { nameWithOwner: String(r.nameWithOwner), methods: methods.length ? methods : ['squash', 'merge', 'rebase'] };
+  /**
+   * Where to ask GitHub: the floor itself when it's a checkout (gh finds the repository from its
+   * remote), else each GitHub checkout in the floor's folder.
+   */
+  private where(): Promise<GhSource[]> {
+    this.sources ??= (async () => {
+      if ((await git(['rev-parse', '--is-inside-work-tree'], this.dir)) === 'true') {
+        this.checkouts = [];
+        return [{ dir: this.dir }];
+      }
+      const found = await findCheckouts(this.dir);
+      this.checkouts = found;
+      if (!found.length) throw new Error("This floor's folder isn't a git repository, and none of the folders in it is a checkout of a GitHub repository");
+      return found;
+    })();
+    const sources = this.sources;
+    sources.catch(() => {
+      if (this.sources === sources) this.sources = undefined;
     });
-    this.repo.catch(() => (this.repo = undefined));
-    return this.repo;
+    return sources;
+  }
+
+  /** The checkout an issue or PR of `repo` is in: the floor's own on a one-repo floor. */
+  private async source(repo?: string): Promise<GhSource> {
+    const all = await this.where();
+    if (!all[0].repo) return all[0];
+    const hit = repo ? all.find((s) => s.repo!.toLowerCase() === repo.toLowerCase()) : all.length === 1 ? all[0] : undefined;
+    if (!hit) throw new Error(repo ? `${repo} isn't checked out on this floor` : 'Say which repository: this floor holds several');
+    return hit;
+  }
+
+  /** The repository's full name and how it lets PRs merge. Asked once (again after a failure). */
+  async repoInfo(repo?: string): Promise<GhRepoInfo> {
+    const src = await this.source(repo);
+    const key = src.repo?.toLowerCase() ?? '';
+    let info = this.repos.get(key);
+    if (!info) {
+      info = gh(['repo', 'view', '--json', 'nameWithOwner,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed'], src.dir).then((out) => {
+        const r = JSON.parse(out);
+        const methods = (['squash', 'merge', 'rebase'] as const).filter((m) => r[{ squash: 'squashMergeAllowed', merge: 'mergeCommitAllowed', rebase: 'rebaseMergeAllowed' }[m]]);
+        return { nameWithOwner: String(r.nameWithOwner), methods: methods.length ? methods : ['squash', 'merge', 'rebase'] };
+      });
+      this.repos.set(key, info);
+      info.catch(() => this.repos.delete(key));
+    }
+    return info;
   }
 
   /** Who gh is signed in as, which is who the office comments as. Asked once; '' when gh can't say. */
@@ -166,13 +262,14 @@ export class GitHub {
   }
 
   /** A PR's description, conversation, line comments, checks and whether it can merge. */
-  async pullDetail(n: number): Promise<GhPullDetail> {
+  async pullDetail(n: number, repo?: string): Promise<GhPullDetail> {
+    const { dir } = await this.source(repo);
     const fields = 'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
-    const [view, lines, repo, viewer] = await Promise.all([
-      gh(['pr', 'view', String(n), '--json', fields], this.dir),
-      gh(['api', `repos/{owner}/{repo}/pulls/${n}/comments?per_page=100`, '--paginate', '--jq', jq], this.dir),
-      this.repoInfo(),
+    const [view, lines, info, viewer] = await Promise.all([
+      gh(['pr', 'view', String(n), '--json', fields], dir),
+      gh(['api', `repos/{owner}/{repo}/pulls/${n}/comments?per_page=100`, '--paginate', '--jq', jq], dir),
+      this.repoInfo(repo),
       this.viewer(),
     ]);
     const p = JSON.parse(view);
@@ -207,18 +304,19 @@ export class GitHub {
       reviews: commentsOf(p.reviews).filter((r) => r.body.trim() || r.state !== 'COMMENTED'),
       reviewComments,
       checks: (p.statusCheckRollup ?? []).map(checkOf),
-      repo,
+      repo: info,
       viewer,
     };
   }
 
   /** The PR's unified diff, as `git diff` prints it. */
-  pullDiff(n: number): Promise<string> {
-    return gh(['pr', 'diff', String(n), '--color', 'never'], this.dir, 60_000);
+  async pullDiff(n: number, repo?: string): Promise<string> {
+    return gh(['pr', 'diff', String(n), '--color', 'never'], (await this.source(repo)).dir, 60_000);
   }
 
-  async issueDetail(n: number): Promise<GhIssueDetail> {
-    const [view, viewer] = await Promise.all([gh(['issue', 'view', String(n), '--json', 'number,state,body,comments'], this.dir), this.viewer()]);
+  async issueDetail(n: number, repo?: string): Promise<GhIssueDetail> {
+    const { dir } = await this.source(repo);
+    const [view, viewer] = await Promise.all([gh(['issue', 'view', String(n), '--json', 'number,state,body,comments'], dir), this.viewer()]);
     const i = JSON.parse(view);
     return { number: i.number, state: i.state, body: String(i.body ?? ''), comments: commentsOf(i.comments), viewer };
   }
@@ -227,12 +325,13 @@ export class GitHub {
    * Comments on an issue, or on a PR's conversation (to GitHub a PR is an issue too), as whoever gh
    * is signed in as. Returns the comment as GitHub saved it, or why it couldn't.
    */
-  async comment(kind: 'issue' | 'pull', n: number, body: string): Promise<{ comment?: GhComment; error?: string }> {
+  async comment(kind: 'issue' | 'pull', n: number, body: string, repo?: string): Promise<{ comment?: GhComment; error?: string }> {
     let comment: GhComment;
     try {
+      const { dir } = await this.source(repo);
       // -f sends the body as a plain string: no @file reading, no {owner} filling in.
       const jq = '{id: .node_id, author: {login: .user.login}, body, createdAt: .created_at, url: .html_url}';
-      const out = await gh(['api', '--method', 'POST', `repos/{owner}/{repo}/issues/${n}/comments`, '-f', `body=${body}`, '--jq', jq], this.dir);
+      const out = await gh(['api', '--method', 'POST', `repos/{owner}/{repo}/issues/${n}/comments`, '-f', `body=${body}`, '--jq', jq], dir);
       [comment] = commentsOf([JSON.parse(out)]);
     } catch (err) {
       return { error: (err as Error).message };
@@ -254,15 +353,16 @@ export class GitHub {
   }
 
   /** Merges a PR, or with `auto` has GitHub merge it once its requirements pass. Returns an error. */
-  async merge(n: number, method: GhMergeMethod, deleteBranch: boolean, auto: boolean): Promise<string | undefined> {
+  async merge(n: number, method: GhMergeMethod, deleteBranch: boolean, auto: boolean, repo?: string): Promise<string | undefined> {
     try {
-      const repo = await this.repoInfo();
+      const { dir } = await this.source(repo);
+      const info = await this.repoInfo(repo);
       // --repo keeps gh out of the office's own checkout: without it, --delete-branch also deletes
       // the local branch and switches the project folder over to the base branch.
-      const args = ['pr', 'merge', String(n), `--${method}`, '--repo', repo.nameWithOwner];
+      const args = ['pr', 'merge', String(n), `--${method}`, '--repo', info.nameWithOwner];
       if (deleteBranch) args.push('--delete-branch');
       if (auto) args.push('--auto');
-      await gh(args, this.dir, 90_000);
+      await gh(args, dir, 90_000);
     } catch (err) {
       return (err as Error).message;
     }
@@ -271,36 +371,56 @@ export class GitHub {
   }
 
   /** Closes an issue, or a pull request without merging it, optionally saying why. Returns an error. */
-  async close(kind: 'issue' | 'pull', n: number, opts: { comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }): Promise<string | undefined> {
+  async close(kind: 'issue' | 'pull', n: number, opts: { comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }, repo?: string): Promise<string | undefined> {
     try {
-      const repo = await this.repoInfo();
+      const { dir } = await this.source(repo);
+      const info = await this.repoInfo(repo);
       // --repo for the same reason as merge: --delete-branch must leave the office's checkout alone.
-      const args = [kind === 'issue' ? 'issue' : 'pr', 'close', String(n), '--repo', repo.nameWithOwner];
+      const args = [kind === 'issue' ? 'issue' : 'pr', 'close', String(n), '--repo', info.nameWithOwner];
       // --flag=value, so a comment starting with "-" isn't read as a flag.
       if (opts.comment) args.push(`--comment=${opts.comment}`);
       if (kind === 'issue' && opts.reason) args.push(`--reason=${opts.reason}`);
       if (kind === 'pull' && opts.deleteBranch) args.push('--delete-branch');
-      await gh(args, this.dir);
+      await gh(args, dir);
     } catch (err) {
       return (err as Error).message;
     }
     const refresh = () => (kind === 'issue' ? this.refreshIssues() : this.refreshPulls());
+    const key = ghKey({ number: n, repo });
     // A refresh already in flight returns at once and can still list it as open, so look again shortly after.
     void refresh().then(() => {
-      if ((kind === 'issue' ? this.issues : this.pulls).items.some((i) => i.number === n && i.state === 'OPEN')) setTimeout(() => void refresh(), 3000);
+      if ((kind === 'issue' ? this.issues : this.pulls).items.some((i) => ghKey(i) === key && i.state === 'OPEN')) setTimeout(() => void refresh(), 3000);
     });
     return undefined;
   }
 
   /** Assigns the issue to whoever gh is signed in as, which moves it to In progress on the board. */
-  async claim(issue: number): Promise<string | undefined> {
+  async claim(issue: number, repo?: string): Promise<string | undefined> {
     try {
-      await gh(['issue', 'edit', String(issue), '--add-assignee', '@me'], this.dir);
+      await gh(['issue', 'edit', String(issue), '--add-assignee', '@me'], (await this.source(repo)).dir);
     } catch (err) {
       return (err as Error).message;
     }
     void this.refreshIssues();
     return undefined;
+  }
+
+  /**
+   * Runs `list` in every checkout the boards cover and puts the results together, each item marked
+   * with its repository on a floor of several. Fails only when every checkout does.
+   */
+  private async fromAll<T extends GhWhere>(list: (dir: string) => Promise<T[]>): Promise<{ items: T[]; error?: string }> {
+    const sources = await this.where();
+    const results = await Promise.allSettled(sources.map((s) => list(s.dir)));
+    const items: T[] = [];
+    const errors: string[] = [];
+    results.forEach((r, i) => {
+      const s = sources[i];
+      if (r.status === 'rejected') errors.push(s.repo ? `${s.repo}: ${(r.reason as Error).message}` : (r.reason as Error).message);
+      else for (const it of r.value) items.push(s.repo ? { ...it, repo: s.repo, repoDir: s.rel } : it);
+    });
+    if (errors.length === sources.length) throw new Error(errors.join('; '));
+    return { items, error: errors.length ? errors.join('; ') : undefined };
   }
 
   private async refreshIssues() {
@@ -310,27 +430,29 @@ export class GitHub {
     try {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
       const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
-      const [open, closed] = await Promise.all([
-        gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], this.dir),
-        gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
-      ]);
-      const items: GhIssue[] = [...JSON.parse(open), ...JSON.parse(closed)].map((i: any) => ({
-        number: i.number,
-        title: i.title,
-        state: i.state,
-        url: i.url,
-        author: i.author?.login ?? '',
-        labels: labels(i.labels),
-        assignees: (i.assignees ?? []).map((a: any) => a.login),
-        createdAt: i.createdAt,
-        updatedAt: i.updatedAt,
-        body: String(i.body ?? '').slice(0, 4000),
-        comments: Array.isArray(i.comments) ? i.comments.length : Number(i.comments ?? 0),
-      }));
-      // Highest priority first, so the board (and the notes that fit on the wall) lead with it.
-      // The sort is stable: within a priority, gh's newest-first order stays.
-      items.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels));
-      this.issues = { items, fetchedAt: Date.now(), loading: false };
+      const { items, error } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
+        const [open, closed] = await Promise.all([
+          gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], dir),
+          gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], dir),
+        ]);
+        return [...JSON.parse(open), ...JSON.parse(closed)].map((i: any) => ({
+          number: i.number,
+          title: i.title,
+          state: i.state,
+          url: i.url,
+          author: i.author?.login ?? '',
+          labels: labels(i.labels),
+          assignees: (i.assignees ?? []).map((a: any) => a.login),
+          createdAt: i.createdAt,
+          updatedAt: i.updatedAt,
+          body: String(i.body ?? '').slice(0, 4000),
+          comments: Array.isArray(i.comments) ? i.comments.length : Number(i.comments ?? 0),
+        }));
+      });
+      // Highest priority first, so the board (and the notes that fit on the wall) lead with it. Within
+      // a priority, open before closed and newest first, as gh lists them, across every repository.
+      items.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels) || Number(a.state !== 'OPEN') - Number(b.state !== 'OPEN') || b.createdAt.localeCompare(a.createdAt));
+      this.issues = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
       this.issues = { ...this.issues, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
     }
@@ -343,34 +465,36 @@ export class GitHub {
     this.onPulls(this.pulls);
     try {
       const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
-      const [open, merged, closed] = await Promise.all([
-        gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], this.dir),
-        gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], this.dir),
-        gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], this.dir),
-      ]);
-      // `--state closed` includes merged PRs; keep only the ones closed without merging.
-      const seen = new Set<number>();
-      const all = [...JSON.parse(open), ...JSON.parse(merged), ...JSON.parse(closed)].filter((p: any) => !seen.has(p.number) && seen.add(p.number));
-      const items: GhPull[] = all.map((p: any) => ({
-        number: p.number,
-        title: p.title,
-        state: p.state,
-        isDraft: !!p.isDraft,
-        url: p.url,
-        author: p.author?.login ?? '',
-        labels: labels(p.labels),
-        reviewDecision: p.reviewDecision ?? '',
-        headRefName: p.headRefName,
-        baseRefName: p.baseRefName,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        additions: p.additions ?? 0,
-        deletions: p.deletions ?? 0,
-        checks: checksOf(p.statusCheckRollup),
-        body: String(p.body ?? '').slice(0, 4000),
-        closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
-      }));
-      this.pulls = { items, fetchedAt: Date.now(), loading: false };
+      const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
+        const [open, merged, closed] = await Promise.all([
+          gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], dir),
+          gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], dir),
+          gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], dir),
+        ]);
+        // `--state closed` includes merged PRs; keep only the ones closed without merging.
+        const seen = new Set<number>();
+        const all = [...JSON.parse(open), ...JSON.parse(merged), ...JSON.parse(closed)].filter((p: any) => !seen.has(p.number) && seen.add(p.number));
+        return all.map((p: any) => ({
+          number: p.number,
+          title: p.title,
+          state: p.state,
+          isDraft: !!p.isDraft,
+          url: p.url,
+          author: p.author?.login ?? '',
+          labels: labels(p.labels),
+          reviewDecision: p.reviewDecision ?? '',
+          headRefName: p.headRefName,
+          baseRefName: p.baseRefName,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          additions: p.additions ?? 0,
+          deletions: p.deletions ?? 0,
+          checks: checksOf(p.statusCheckRollup),
+          body: String(p.body ?? '').slice(0, 4000),
+          closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
+        }));
+      });
+      this.pulls = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
       this.pulls = { ...this.pulls, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
     }

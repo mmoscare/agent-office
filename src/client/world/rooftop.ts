@@ -6,7 +6,7 @@ import { buildCity, type City } from './city';
 import { buildElevator, type Elevator } from './elevator';
 import type { Collider, Interactable } from './office';
 import { bulb, type NightParts } from './outside';
-import { mergeByMaterial, mesh, roundedBox, toon, toonUnique } from './toon';
+import { mergeByMaterial, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 
 // The rooftop bar, on top of the building (see shared/rooftop.ts): a deck with a glass railing round
 // it and the city all around, the elevator's housing where you arrive, a DJ on a stage under a rig
@@ -294,8 +294,12 @@ export function buildRooftop(night: NightParts, floors: number): Rooftop {
   }
 
   // The elevator, in its housing: a back wall and a roof over the shaft (as tall as a floor), with a light on top.
-  const elevator = buildElevator();
-  elevator.setSign('🍸 Rooftop bar');
+  // Up here the sign over its doors says where you are, rather than a project's plaque.
+  const elevatorSign = new THREE.Group();
+  const label = textPlane('🍸 Rooftop bar', { bg: '#2b2d42', color: '#fffaf3', size: 64, border: '#fffaf3' });
+  label.scale.multiplyScalar(Math.min(1.6, (ELEVATOR.width + 0.6) / label.geometry.parameters.width));
+  elevatorSign.add(label);
+  const elevator = buildElevator(elevatorSign);
   group.add(elevator.group);
   colliders.push(...elevator.colliders);
   interactables.push(elevator.interactable);
