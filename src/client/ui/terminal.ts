@@ -7,6 +7,7 @@ import { TERM_THEME } from '../world/laptop';
 import { h, openModal, STATUS_LABEL, timeAgo, toast, type Modal } from './dom';
 import { usageLabel, usageTitle } from './usage';
 import { openModelUsage } from './model-usage';
+import { terminalBranches } from './terminal-branches';
 import type { ServerMsg } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
 import { findLine } from '../../shared/search';
@@ -41,6 +42,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const info = store.workers.get(workerId);
   if (!info) return;
 
+  const branches = terminalBranches();
   const dot = h('span.dot', { style: `background:${info.color}` });
   const title = h('h2', {}, info.kind === 'agent' ? `${providerLabel(info.provider, store.project)} · ${info.name}` : info.name);
   const pill = h('span.pill', {}, '');
@@ -57,7 +59,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
   const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
   const host = h('div.term-host');
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, onChanges ? changesBtn : null, closeBtn), host);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, onChanges ? changesBtn : null, closeBtn), branches.element, host);
 
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
@@ -106,7 +108,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       modal.close();
       return;
     }
-    title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title, w.worktree && `🌿 ${w.worktree.branch}`].filter(Boolean).join(' · ');
+    title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title].filter(Boolean).join(' · ');
+    branches.refresh(w, store.project?.branch);
     pill.className = `pill ${w.status}`;
     pill.textContent = STATUS_LABEL[w.status] ?? w.status;
     const workerProvider = w.kind === 'agent' ? resolvedProvider(w.provider, store.project) : undefined;
@@ -182,6 +185,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       listeners.delete(onMsg);
       unsub();
       ro.disconnect();
+      branches.dispose();
       net.send({ t: 'worker.detach', workerId });
       term.dispose();
       if (current?.modal === modal) current = null;

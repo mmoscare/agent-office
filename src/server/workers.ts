@@ -4,6 +4,8 @@ import { execFile, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { CodexUsageReader } from './codex-usage.js';
+import { workerBranches } from './worker-branches.js';
+import { codexInputPrompt } from './codex-input.js';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
 import type { AgentProvider, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
@@ -94,10 +96,9 @@ interface Worker {
   openCodeError?: boolean;
   codexUsage: CodexUsageReader;
   codexHome?: string;
+  readingBranches?: boolean;
   codexTranscript?: string;
-  codexTools: Map<string, string>;
-  codexPending: Set<string>;
-  codexPermissionUnknown?: boolean;
+  codexInput?: { status: WorkerStatus; activity?: string };
   /** Its latest prompts and tool calls, for naming its task. */
   prompts: string[];
   tools: string[];
@@ -138,6 +139,7 @@ export class WorkerManager {
   private closing = false;
   private namer: TaskNamer;
   private usageTimer: NodeJS.Timeout;
+  private branchTimer: NodeJS.Timeout;
   /** Runs the workers' terminals outside the office, so they outlive a restart of it (see ptys.ts). */
   private host: PtyHost;
   /** Each worker's terminal on disk, so a restart doesn't wipe it (see history.ts). */
@@ -176,6 +178,9 @@ export class WorkerManager {
     // A session may have ended (and written its final tally) while the office was down.
     for (const w of this.workers.values()) this.scanUsage(w);
     this.screenTimer = setInterval(() => this.flushScreens(), SCREEN_INTERVAL_MS);
+    this.branchTimer = setInterval(() => {
+      for (const w of this.workers.values()) if (w.viewers.size) void this.refreshBranches(w);
+    }, 5000);
     this.usageTimer = setInterval(() => {
       for (const w of this.workers.values()) this.scanUsage(w);
     }, USAGE_SCAN_MS);
@@ -381,6 +386,7 @@ export class WorkerManager {
     const w = this.workers.get(id);
     if (!w) return undefined;
     w.viewers.set(clientId, name);
+    void this.refreshBranches(w);
     let changed = this.syncViewers(w);
     if (!w.info.acked && w.info.status !== 'needs_input') {
       w.info.acked = true;
@@ -624,21 +630,20 @@ export class WorkerManager {
     if (report.transcriptPath) w.codexTranscript = report.transcriptPath;
     this.scheduleScan(w);
     w.bootBlocked = false;
-    const clearPending = () => {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
+    const clearInput = () => { w.codexInput = undefined; };
+    const busy = () => {
+      if (w.codexInput) w.codexInput.status = 'working';
+      this.setStatus(w, w.codexInput ? 'needs_input' : 'working');
     };
-    const busy = () => this.setStatus(w, w.codexPending.size || w.codexPermissionUnknown ? 'needs_input' : 'working');
     switch (report.event) {
       case 'SessionStart':
-        clearPending();
+        clearInput();
         if (report.source === 'clear') this.clearTask(w);
         w.info.activity = undefined;
         if (w.info.status === 'starting' || w.info.status === 'needs_input') this.setStatus(w, 'idle');
         break;
       case 'UserPromptSubmit':
-        clearPending();
+        clearInput();
         if (report.prompt) {
           w.info.activity = truncate(withoutWorkerHandoff(report.prompt), 80) || undefined;
           this.notePrompt(w, report.prompt);
@@ -646,33 +651,20 @@ export class WorkerManager {
         this.setStatus(w, 'working');
         break;
       case 'PreToolUse':
-        w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
-        if (report.toolUseId && w.codexTools.size < 256) w.codexTools.set(report.toolUseId, report.tool ?? '');
-        if (/(?:^|[.])(?:AskUserQuestion|request_user_input)$/.test(report.tool ?? '')) {
-          if (report.toolUseId) w.codexPending.add(report.toolUseId);
-          else w.codexPermissionUnknown = true;
-        }
+        if (!w.codexInput) w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
         busy();
         break;
       case 'PermissionRequest':
-        w.info.activity = `Wants permission: ${truncate(report.tool ?? 'tool', 80)}`;
-        // PermissionRequest has no tool_use_id in the native schema. Keep every matching
-        // active call pending so an unrelated parallel tool cannot dismiss the prompt.
-        const candidates = [...w.codexTools].filter(([, tool]) => tool === report.tool);
-        if (!candidates.length) w.codexPermissionUnknown = true;
-        for (const [id] of candidates) w.codexPending.add(id);
-        this.setStatus(w, 'needs_input');
+        // A hook can be auto-approved before a human sees anything. The rendered
+        // question/approval controls, checked below, are what warrant an alert.
+        busy();
         break;
       case 'PostToolUse':
-        if (report.toolUseId) {
-          w.codexTools.delete(report.toolUseId);
-          w.codexPending.delete(report.toolUseId);
-        }
         busy();
         break;
       case 'Stop':
       case 'Interrupt':
-        clearPending();
+        clearInput();
         this.setStatus(w, 'done');
         break;
     }
@@ -777,6 +769,7 @@ export class WorkerManager {
     this.closing = true;
     clearInterval(this.screenTimer);
     clearInterval(this.usageTimer);
+    clearInterval(this.branchTimer);
     clearInterval(this.saveTimer);
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
@@ -841,11 +834,7 @@ export class WorkerManager {
       // Custom wrappers receive the same task and handoff contract, after their configured flags.
       args.push('--', prompt);
     }
-    if (isCodex) {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
-    }
+    if (isCodex) w.codexInput = undefined;
     if (isOpenCode || isCodex) {
       w.hookToken = randomBytes(16).toString('hex');
       w.openCodeError = false;
@@ -993,11 +982,14 @@ export class WorkerManager {
     // blocked on a human: folder trust dialog, login, first-run onboarding. Flag it so it jumps.
     setTimeout(() => {
       if (info.status !== 'starting' || w.pty !== proc) return;
-      if (isClaude || isCodex) {
+      if (isCodex) {
+        // Slow startup or missing hooks alone does not mean a person is needed.
+        this.checkBlocked(w);
+        return;
+      }
+      if (isClaude) {
         w.bootBlocked = true;
-        info.activity = isCodex
-          ? 'Open the terminal: complete login and review Office hooks in /hooks'
-          : 'Waiting on a setup prompt (trust / login) — open the terminal';
+        info.activity = 'Waiting on a setup prompt (trust / login) — open the terminal';
         this.setStatus(w, 'needs_input');
       } else this.setStatus(w, 'idle');
     }, 12000);
@@ -1020,6 +1012,23 @@ export class WorkerManager {
   private command(info: WorkerInfo): string {
     if (info.kind === 'shell') return process.env.SHELL || '/bin/bash';
     return info.provider === this.defaultProvider ? this.agentCmd : info.provider ?? this.agentCmd;
+  }
+
+  /** Only terminals being viewed need live branch polling; never block PTY input. */
+  private async refreshBranches(w: Worker) {
+    if (w.readingBranches || this.closing) return;
+    w.readingBranches = true;
+    const workspace = w.info.workspace;
+    try {
+      const branches = await workerBranches(this.dir, w.info);
+      if (this.closing || this.workers.get(w.info.id) !== w || w.info.workspace !== workspace) return;
+      if (JSON.stringify(branches) !== JSON.stringify(w.info.branches)) {
+        w.info.branches = branches;
+        this.emitUpdate(w);
+      }
+    } finally {
+      w.readingBranches = false;
+    }
   }
 
   private cwd(info: WorkerInfo): string {
@@ -1127,6 +1136,26 @@ export class WorkerManager {
    * in on this machine. Flag that as needing a human, and clear it once the screen moves on.
    */
   private checkBlocked(w: Worker) {
+    if (w.info.kind === 'agent' && w.info.provider === 'codex' && w.term && w.pty) {
+      const prompt = codexInputPrompt(screenText(w.term));
+      if (prompt) {
+        w.codexInput ??= {
+          status: w.info.status === 'needs_input' ? 'working' : w.info.status,
+          activity: w.info.activity,
+        };
+        w.info.activity = prompt;
+        this.setStatus(w, 'needs_input');
+      } else if (w.codexInput || w.info.status === 'needs_input') {
+        // Includes alerts adopted from an older server. No visible prompt means
+        // there is nothing for the person to answer, even if a hook had no ID.
+        const previous = w.codexInput;
+        w.codexInput = undefined;
+        w.bootBlocked = false;
+        w.info.activity = previous?.activity;
+        this.setStatus(w, previous?.status ?? 'working');
+      }
+      return;
+    }
     if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
     const s = w.info.status;
     if (s !== 'starting' && s !== 'idle' && !(w.bootBlocked && s === 'needs_input')) return;
@@ -1300,8 +1329,6 @@ function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBy
     keyframeAt: 0,
     hookToken,
     codexUsage: new CodexUsageReader(),
-    codexTools: new Map(),
-    codexPending: new Set(),
     prompts: [],
     tools: [],
     toolsSinceNamed: 0,
