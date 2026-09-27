@@ -6,6 +6,7 @@ import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB
 import { floorPalette } from '../shared/floors';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
 import { isAsleep, isBusy } from '../shared/status';
+import { summarizeWorkers } from '../shared/attention';
 import { Net } from './net';
 import { store, loadProfile, loadSettings, saveSettings, workerForPull, type Profile, type Topic } from './state';
 import { EYE_HEIGHT, PlayerController, groundAt, isTyping } from './player';
@@ -48,6 +49,7 @@ import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elev
 import { providerLabel, resolvedProvider } from './ui/provider';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
+import { mountAttention } from './ui/attention';
 import { openJukebox } from './ui/jukebox';
 import { Arcade } from './ui/arcade';
 import { trackTitle } from '../shared/jukebox';
@@ -330,9 +332,15 @@ net.onMessage((msg) => {
       voice.syncPeers();
       break;
     }
-    case 'floor.enter':
+    case 'floor.enter': {
+      const workerId = riding?.floor === store.floor ? riding.workerId : undefined;
       arrive();
+      if (workerId) {
+        if (store.workers.has(workerId)) openWorkerTerminal(workerId);
+        else toast('That worker has already left this floor.');
+      }
       break;
+    }
     case 'floors':
       noticeWaiting();
       break;
@@ -408,7 +416,7 @@ store.on('project', renderProject);
 function renderTitle() {
   const name = store.project?.name;
   const elsewhere = store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0);
-  const waiting = [...store.workers.values()].filter(waitingOnSomeone).length + elsewhere;
+  const waiting = summarizeWorkers(store.workers.values()).waiting + elsewhere;
   document.title = `${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
 }
 
@@ -430,19 +438,19 @@ function fade(on: boolean) {
 }
 
 /** A ride under way: the doors are shut and the lights are down until the next floor arrives. */
-let riding: { floor: string; timer: number } | null = null;
+let riding: { floor: string; timer: number; workerId?: string } | null = null;
 
 function showElevator() {
   openElevator({ net, ride });
 }
 
 /** Rides the elevator to another floor. From outside the car, you step in while the lights are down. */
-function ride(floorId: string) {
+function ride(floorId: string, workerId?: string) {
   if (riding || floorId === store.floor) return;
   closeAllModals();
   if (hanger.active) hanger.cancel();
   const inside = inElevator(player.pos.x, player.pos.z);
-  riding = { floor: floorId, timer: window.setTimeout(rideFailed, 10_000) };
+  riding = { floor: floorId, workerId, timer: window.setTimeout(rideFailed, 10_000) };
   player.enabled = false;
   player.clearKeys();
   office.elevator.setOpen(false);
@@ -650,6 +658,11 @@ function arrangeBeanbags() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+mountAttention((floorId, workerId) => {
+  if (riding) return;
+  if (floorId === store.floor) openWorkerTerminal(workerId);
+  else ride(floorId, workerId);
+}, ride);
 store.on('workers', renderUsage);
 store.on('usage', renderUsage);
 store.on('limits', renderLimits);

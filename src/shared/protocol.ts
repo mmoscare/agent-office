@@ -362,6 +362,15 @@ export interface ProjectInfo {
   agentProviders: AgentProvider[];
 }
 
+/** A worker notification shared with people on every floor. */
+export interface WorkerAttention {
+  id: string;
+  name: string;
+  color: string;
+  reason: 'needs_input' | 'done' | 'error';
+  detail?: string;
+}
+
 /**
  * One floor of the building: a project in its own checkout, with its own desks, workers, boards
  * and queue. You go between them in the elevator.
@@ -383,8 +392,9 @@ export interface FloorInfo {
   /** For the elevator panel: who's there and what they're up to. */
   workers: number;
   busy: number;
-  /** Workers waiting on someone: a question, a permission, or a finished turn nobody looked at. */
+  /** Workers waiting on someone: input, an unread completion, or an unread failure. */
   waiting: number;
+  attention: WorkerAttention[];
   people: number;
 }
 

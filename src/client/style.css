@@ -57,7 +57,7 @@ button { font-family: inherit; }
 /* The project name gives way (ellipsis) before the buttons wrap under the side panel. */
 .controls { display: flex; gap: 8px; padding: 8px; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; max-width: 100%; }
 
-.side { position: absolute; top: 90px; right: 12px; width: 250px; display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 110px); pointer-events: none; }
+.side { position: absolute; top: 90px; right: 12px; width: 250px; display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 110px); overflow-y: auto; padding-bottom: 5px; pointer-events: none; }
 .side > * { pointer-events: auto; }
 .side h3 { margin: 0 0 6px; font-size: 14px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
 .side .count { color: var(--muted); font-weight: 700; }
@@ -76,6 +76,27 @@ button { font-family: inherit; }
 .workers h3 .cost { margin-left: auto; font-size: 12px; text-transform: none; letter-spacing: 0; }
 .workers .cost { font-size: 11px; font-weight: 800; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .workers .name .cost { display: block; white-space: normal; overflow-wrap: anywhere; }
+/* Notifications from every floor, directly below the current floor's workers. */
+.side .attention { flex: none; }
+.attention h3 { display: flex; align-items: center; justify-content: space-between; }
+.attention-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 25px; height: 25px; padding: 0 6px; border: 2px solid var(--ink); border-radius: 999px; background: var(--bad); color: #fff; font-size: 13px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.attention-badge.quiet { background: var(--paper-2); color: var(--muted); }
+.attention-badge.small { min-width: 21px; height: 21px; padding: 0 4px; font-size: 11px; }
+#attention-summary { margin: 0 0 8px; font-size: 12px; font-weight: 700; color: var(--muted); }
+#attention-floors { max-height: min(280px, 30vh); overflow-y: auto; }
+.attention-floor + .attention-floor { margin-top: 7px; padding-top: 7px; border-top: 1px solid #d9cbb9; }
+.attention-floor-button, .attention-worker { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 3px; border: 0; border-radius: 8px; text-align: left; background: transparent; color: var(--ink); cursor: pointer; }
+.attention-floor-button:hover:enabled, .attention-worker:hover { background: var(--paper-2); }
+.attention-floor-button:focus-visible, .attention-worker:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; background: var(--paper-2); }
+.attention-floor-button:disabled { cursor: default; }
+.attention-floor-number { display: grid; place-items: center; width: 23px; height: 23px; flex: none; border: 2px solid var(--ink); border-radius: 7px; font-size: 12px; font-weight: 900; }
+.attention-text { flex: 1; min-width: 0; }
+.attention-name, .attention-detail { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attention-name { font-size: 12px; font-weight: 900; }
+.attention-detail { font-size: 11px; color: var(--muted); font-weight: 600; }
+.attention-reason { flex: none; padding: 2px 5px; border-radius: 6px; background: #ffe4ad; font-size: 10px; font-weight: 900; }
+.attention-reason.done { background: #c9f4e7; }
+.attention-reason.error { background: #ffe0e7; }
 /* Spend: today, the budget and all time */
 .usage { margin-top: 8px; padding-top: 8px; border-top: 2px dashed rgba(43, 45, 66, .25); font-size: 12px; font-weight: 700; display: flex; flex-direction: column; gap: 5px; }
 .usage .row { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

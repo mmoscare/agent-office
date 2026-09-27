@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
+import { summarizeWorkers } from '../shared/attention.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
 import { configuredProvider } from './agents.js';
@@ -215,9 +216,7 @@ export class Floor {
       palette: this.def.palette,
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
-      workers: ws.length,
-      busy: ws.filter((w) => w.status === 'working').length,
-      waiting: ws.filter((w) => w.kind === 'agent' && (w.status === 'needs_input' || (w.status === 'done' && !w.acked))).length,
+      ...summarizeWorkers(ws),
       people: this.ctx.people(this),
     };
   }

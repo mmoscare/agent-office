@@ -980,6 +980,7 @@ export class WorkerManager {
       }
       info.exitCode = exitCode;
       info.status = 'exited';
+      info.acked = exitCode === 0 || w.viewers.size > 0;
       const hint = info.kind === 'shell' ? ' — press R to restart' : info.sessionId ? ' — press R to resume' : '';
       const msg = `\r\n\x1b[2m[${info.name} exited with code ${exitCode}${hint}]\x1b[0m\r\n`;
       term.write(msg);
@@ -1008,6 +1009,7 @@ export class WorkerManager {
     const msg = `\r\n\x1b[31mFailed to start ${what}: ${message}\x1b[0m\r\n`;
     w.info.status = 'exited';
     w.info.exitCode = -1;
+    w.info.acked = w.viewers.size > 0;
     w.term?.write(msg);
     if (w.viewers.size) this.events.data(w.info.id, msg, [...w.viewers.keys()]);
     w.screenDirty = true;
