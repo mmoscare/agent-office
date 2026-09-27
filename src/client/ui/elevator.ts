@@ -1,5 +1,6 @@
 import type { FloorInfo, RepoChoice, ServerMsg } from '../../shared/protocol';
 import { floorPalette, normalizeRepo, sameRepo } from '../../shared/floors';
+import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, openModal, timeAgo, type Modal } from './dom';
@@ -98,9 +99,29 @@ export function openElevator(opts: ElevatorOptions): void {
     return btn;
   };
 
+  /** The roof, over every floor: the rooftop bar. */
+  const roofButton = () => {
+    const here = store.floor === ROOF;
+    const people = [...store.peers.values()].filter((p) => p.floor === ROOF).length;
+    const btn = h(
+      'button.floor-btn',
+      { type: 'button', class: here ? 'here' : '', disabled: here, title: here ? "You're up on the roof" : `Ride up to the ${ROOF_NAME.toLowerCase()}` },
+      h('span.floor-no', { style: 'background:#2b2d42' }, '🍸'),
+      h('span.floor-text', {}, h('span.floor-name', {}, ROOF_NAME, here ? h('span.here-tag', {}, 'you are here') : null), h('span.floor-sub', {}, 'The roof: a DJ playing drum and bass, a bar, and the city all around')),
+      h('span.floor-stats', {}, people ? h('span', { title: 'People up there' }, `🧑 ${people}`) : ''),
+    );
+    btn.addEventListener('click', () => {
+      if (here) return;
+      modal.close();
+      opts.ride(ROOF);
+    });
+    return btn;
+  };
+
   const renderFloors = () => {
     const floors = store.floors;
     floorsEl.replaceChildren(
+      ...(floors.some((f) => !f.cloning) ? [roofButton()] : []),
       ...(floors.length ? floors.map(floorButton) : [h('p.empty', {}, 'No floors yet.')]),
     );
   };
@@ -171,11 +192,11 @@ export function openElevator(opts: ElevatorOptions): void {
     if (matches.length > SHOWN) rows.push(h('p.empty', { style: 'padding:8px 10px' }, `…and ${matches.length - SHOWN} more — type to narrow it down`));
     listEl.replaceChildren(...rows);
     const pick = choice();
-    const dest = pick ? `${store.projectsDir}/${pick}` : `${store.projectsDir}/<owner>/<repo>`;
+    const dest = pick ? `${store.projectsDir.dir}/${pick}` : `${store.projectsDir.dir}/<owner>/<repo>`;
     statusEl.replaceChildren(
       adding
-        ? h('p.note.busy', {}, `⏳ Cloning ${adding} into ${store.projectsDir}/${adding}… A big repository can take a minute.`)
-        : h('p.note', {}, `Cloned into ${dest} with this machine's gh login. Everything on the new floor works in that checkout.`),
+        ? h('p.note.busy', {}, `⏳ Cloning ${adding} into ${store.projectsDir.dir}/${adding}… A big repository can take a minute.`)
+        : h('p.note', {}, `Cloned into ${dest} with this machine's gh login. Everything on the new floor works in that checkout.${store.me.admin ? ' Pick another folder in ⚙️ Settings.' : ''}`),
       ...[r.error, error].filter(Boolean).map((e) => h('p.err', {}, e)),
     );
     addBtn.disabled = !!adding || !pick || store.floors.some((f) => sameRepo(f.repo, pick));
@@ -266,8 +287,9 @@ export function openElevator(opts: ElevatorOptions): void {
     h('div.body', {}, intro, floorsEl, addEl),
     h('footer', {}, h('span.grow', {}, setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'), local.button, addBtn),
   );
-  const unsubs = [store.on('floors', () => (renderFloors(), renderAdd())), store.on('repos', renderAdd), store.on('floor', renderFloors)];
+  const unsubs = [store.on('floors', () => (renderFloors(), renderAdd())), store.on('repos', renderAdd), store.on('projectsDir', renderAdd), store.on('floor', renderFloors), store.on('peers', renderFloors)];
   const modal = openModal(el, {
+    doing: '🛗 at the elevator',
     escCloses: !setup,
     backdropCloses: !setup,
     onClose: () => {
