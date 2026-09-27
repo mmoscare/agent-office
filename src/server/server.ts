@@ -21,6 +21,7 @@ import { Ledger } from './usage.js';
 import { ModelUsageLedger } from './model-usage.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
+import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
@@ -335,6 +336,9 @@ export async function startServer(cfg: Config) {
     (state) => broadcast({ t: 'limits', state }),
   );
 
+  // The office phone: an agent finishing on one floor rings it on all the others.
+  const phone = new PhoneLine();
+
   // Slack / Discord pings for workers that need input or finish (set from ⚙️ Settings or --webhook).
   webhook = new Webhook(cfg.dataDir, (workerId) => (workerId && workerFloor(workerId)?.def.name) || officeName, (state) => broadcast({ t: 'notify', state }));
   if (cfg.webhook !== undefined) {
@@ -367,10 +371,16 @@ export async function startServer(cfg: Config) {
       }
     },
     workerChanged: (floor, w) => {
-      if (typeof w === 'string') webhook.onWorkerGone(w);
-      else {
+      if (typeof w === 'string') {
+        webhook.onWorkerGone(w);
+        phone.onWorkerGone(w);
+      } else {
         modelUsage.record(floor.def.name, w, floor.project.defaultProvider);
         webhook.onWorker(w);
+        if (phone.onWorker(w)) {
+          const msg: ServerMsg = { t: 'phone', floor: floor.id, name: floor.def.name, worker: w.name, task: w.task?.name };
+          for (const c of clients.values()) if (c.peer.floor !== floor.id) sendTo(c, msg);
+        }
       }
       floorsChanged();
     },

@@ -25,7 +25,7 @@ import { Confetti } from './world/confetti';
 import { Hanger } from './hanging';
 import { disposeSprite, textSprite } from './world/toon';
 import { Voice } from './voice';
-import { OfficeSound } from './sound';
+import { OfficeSound, PHONE_RING_SECONDS } from './sound';
 import { DesktopNotifier, askNotifyPermission, notifyPermission, waitingOnSomeone } from './notify';
 import { $, h, clip, closeAllModals, modalOpen, onModalChange, openModal, toast, STATUS_LABEL } from './ui/dom';
 import { openTerminal, openTerminalFor, routeTerminalMessage, type TerminalFind } from './ui/terminal';
@@ -371,6 +371,9 @@ net.onMessage((msg) => {
     }
     case 'gong':
       gongRang(msg.why, msg.pr);
+      break;
+    case 'phone':
+      phoneRang(msg.floor, msg.name, msg.worker, msg.task);
       break;
   }
 });
@@ -1091,6 +1094,20 @@ function gongRang(why: GongWhy, pr?: number) {
       confetti.burst(top.x, top.y, top.z, 450, 1.5);
     }, 1700);
   }
+}
+
+/** When the office phone stops ringing, on performance.now()'s clock. */
+let phoneUntil = 0;
+/** An agent on another floor finished: the phone by the elevator rings, since you can't hear its ding from here. */
+function phoneRang(floor: string, name: string, worker: string, task?: string) {
+  if (!store.floor || floor === store.floor) return;
+  toast(`📞 ${worker} on the ${name} floor finished${task ? `: ${task}` : ''} — take the elevator up`);
+  office.phone.ring(PHONE_RING_SECONDS);
+  // Another call while it's still ringing doesn't start the bell over the top of itself.
+  const now = performance.now();
+  if (now < phoneUntil) return;
+  phoneUntil = now + PHONE_RING_SECONDS * 1000;
+  sound.officePhone();
 }
 
 // ---- Interaction targeting & hint -----------------------------------------------------------------
