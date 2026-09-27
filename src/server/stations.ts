@@ -32,7 +32,7 @@ export function stationBrief(kind: StationKind): string {
     JOB[kind],
     `You're in the project's main checkout, which other people and workers use too: don't switch branches, commit, or leave edits in it. Work that needs code changed goes on the task queue, ${queue ? 'always' : 'unless the person asks you for something else'}.`,
     QUEUE_API,
-    `When you've done what was asked, follow the worker handoff rule: save the detailed outcome on the relevant issue or PR, then give a short summary with links. For queue changes, include task IDs and issue/PR links so the next worker can find the work. Then wait: the next request may come from someone else.`,
+    `Follow the worker handoff rule: save the detailed outcome on the relevant issue or PR. ${queue ? "When you've queued it, say in a few lines what you queued: each task's id and title, with issue/PR links so the next worker can find the work." : "When you've done what was asked, say in a few lines what you did, with links."} Then wait: the next request may come from someone else.`,
     `The request:`,
   ].join('\n\n');
 }
