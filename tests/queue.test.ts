@@ -139,3 +139,13 @@ test('a board agent at work does not hold one of the queue\'s slots', (t) => {
   // Its seat is a desk, never the kiosk.
   assert.match(f.workers[1].deskId, /^desk-/);
 });
+
+test('on a floor of several repositories, the same issue number in two of them are two tasks', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(0);
+  assert.equal(q.add('Fix A', 'Tester', undefined, 3, undefined, undefined, 'me/a'), undefined);
+  assert.equal(q.add('Fix B', 'Tester', undefined, 3, undefined, undefined, 'me/b'), undefined);
+  assert.match(q.add('Fix A again', 'Tester', undefined, 3, undefined, undefined, 'me/a') ?? '', /a#3 is already/);
+  assert.equal(q.dropIssue(3, 'me/b'), true);
+  assert.deepEqual(q.state().tasks.map((x) => x.repo), ['me/a']);
+});

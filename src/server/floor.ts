@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
@@ -147,8 +147,8 @@ export class Floor {
         if (state.loading || state.error) return;
         this.workers.onPulls(state.items);
         for (const p of this.merges.look(state.items)) {
-          ctx.toast(this, `🎉 PR #${p.number} merged: ${p.title}`);
-          this.merged(p.number);
+          ctx.toast(this, `🎉 PR ${ghRef(p)} merged: ${p.title}`);
+          this.merged(p.number, undefined, p.repo);
         }
       },
     );
@@ -156,7 +156,7 @@ export class Floor {
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
       update: (state) => ctx.emit(this, { t: 'queue', state }),
       toast: (text, level) => ctx.toast(this, text, level),
-      claimIssue: (issue) => this.github.claim(issue),
+      claimIssue: (issue, repo) => this.github.claim(issue, repo),
       refreshGitHub: () => void this.github.refresh(),
       hiringPaused: () => ctx.ledger.hiringPaused,
       emptied: () => {
@@ -185,6 +185,8 @@ export class Floor {
       },
     );
 
+    // On a floor that's a folder of checkouts, the board agents are told which ones.
+    this.workers.checkouts = () => this.github.checkouts.map((c) => ({ repo: c.repo!, dir: c.rel! }));
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
@@ -197,9 +199,9 @@ export class Floor {
     }, REFRESH_MS);
   }
 
-  /** Pull request `n` merged (`by` someone, from the PR window): the gong rings, once per PR. */
-  merged(n: number, by?: string) {
-    if (this.merges.ring(n)) this.ctx.emit(this, { t: 'gong', why: 'merged', pr: n, by });
+  /** Pull request `n` (of `repo`, on a floor of several) merged (`by` someone, from the PR window): the gong rings, once per PR. */
+  merged(n: number, by?: string, repo?: string) {
+    if (this.merges.ring(n, repo)) this.ctx.emit(this, { t: 'gong', why: 'merged', pr: n, by });
   }
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */

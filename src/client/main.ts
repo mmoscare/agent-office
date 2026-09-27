@@ -877,7 +877,7 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
 
 function boardActions() {
   return {
-    queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string) => net.send({ t: 'queue.add', prompt, title, issue, provider, model }),
+    queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, repo?: string) => net.send({ t: 'queue.add', prompt, title, issue, repo, provider, model }),
     assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
     ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
     goToDesk,

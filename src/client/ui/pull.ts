@@ -1,7 +1,7 @@
-import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhReviewComment, ServerMsg } from '../../shared/protocol';
+import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type GhIssue, type GhIssueDetail, type GhMergeMethod, type GhPull, type GhPullDetail, type GhReviewComment, type GhWhere, type ServerMsg } from '../../shared/protocol';
 import type { Net } from '../net';
 import { AVATAR_COLORS, store, workerForPull } from '../state';
-import { issuePrompt, type BoardActions } from './boards';
+import { checkoutNote, issuePrompt, repoFlag, type BoardActions } from './boards';
 import { h, openModal, timeAgo, type Modal } from './dom';
 import { markdown, repoUrlOf } from './markdown';
 import { buildTree, looksGenerated, parseDiff, renderFileDiff, renderThread, repliesOf, Reviewed, STATUS_WORD, treeOrder, type DiffFile, type TreeDir } from './pulldiff';
@@ -16,6 +16,11 @@ function onFloor(url: string): string {
   return store.floor ? `${url}&floor=${encodeURIComponent(store.floor)}` : url;
 }
 
+/** The query naming an issue or PR: its number, and its repository on a floor of several. */
+function itemQuery(it: { number: number } & GhWhere): string {
+  return `number=${it.number}${it.repo ? `&repo=${encodeURIComponent(it.repo)}` : ''}`;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const r = await fetch(onFloor(url), { credentials: 'same-origin' });
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
@@ -28,16 +33,17 @@ async function getText(url: string): Promise<string> {
   return r.text();
 }
 
-const mergeWaiters = new Map<number, (msg: Extract<ServerMsg, { t: 'gh.merged' }>) => void>();
+/** Open merge dialogs, by ghKey. */
+const mergeWaiters = new Map<string, (msg: Extract<ServerMsg, { t: 'gh.merged' }>) => void>();
 const commentWaiters = new Map<string, (msg: Extract<ServerMsg, { t: 'gh.commented' }>) => void>();
-/** Open close dialogs, by "issue:N" or "pull:N". */
+/** Open close dialogs, by "issue:" or "pull:" and the ghKey. */
 const closeWaiters = new Map<string, (msg: Extract<ServerMsg, { t: 'gh.closed' }>) => void>();
 
 /** Main feeds server messages through here so an open merge or close dialog or comment box hears back. */
 export function routePullMessage(msg: ServerMsg) {
-  if (msg.t === 'gh.merged') mergeWaiters.get(msg.number)?.(msg);
-  if (msg.t === 'gh.commented') commentWaiters.get(`${msg.kind}#${msg.number}`)?.(msg);
-  if (msg.t === 'gh.closed') closeWaiters.get(`${msg.kind}:${msg.number}`)?.(msg);
+  if (msg.t === 'gh.merged') mergeWaiters.get(ghKey(msg))?.(msg);
+  if (msg.t === 'gh.commented') commentWaiters.get(`${msg.kind}:${ghKey(msg)}`)?.(msg);
+  if (msg.t === 'gh.closed') closeWaiters.get(`${msg.kind}:${ghKey(msg)}`)?.(msg);
 }
 
 function pref<T>(key: string, fallback: T): T {
@@ -197,9 +203,10 @@ interface CommentBox {
  * as that account rather than as you. The draft is kept per item until it is posted, so Esc or a
  * closed window doesn't lose it.
  */
-function commentBox(kind: 'issue' | 'pull', number: number, itemUrl: string, net: Net, onPosted: (c: GhComment) => void): CommentBox {
+function commentBox(kind: 'issue' | 'pull', it: { number: number } & GhWhere, itemUrl: string, net: Net, onPosted: (c: GhComment) => void): CommentBox {
+  const { number, repo } = it;
   const draftKey = `${DRAFT_KEY}${itemUrl}`;
-  const waitKey = `${kind}#${number}`;
+  const waitKey = `${kind}:${ghKey(it)}`;
   let busy = false;
   let timer = 0;
   const ta = h('textarea', { rows: 4, placeholder: 'Leave a comment. Markdown works; ⌘/Ctrl+Enter posts it.', 'aria-label': 'Comment' }) as HTMLTextAreaElement;
@@ -272,7 +279,7 @@ function commentBox(kind: 'issue' | 'pull', number: number, itemUrl: string, net
       fail('No answer from the office. Reload the conversation to see whether the comment went through before posting it again.');
       sync();
     }, 45_000);
-    net.send({ t: 'gh.comment', kind, number, body });
+    net.send({ t: 'gh.comment', kind, number, repo, body });
   };
 
   ta.addEventListener('input', () => (saveDraft(), sync()));
@@ -298,7 +305,7 @@ function commentBox(kind: 'issue' | 'pull', number: number, itemUrl: string, net
 // ---- Prompts for workers ------------------------------------------------------------------------
 
 function reviewPrompt(it: GhPull) {
-  return `Review pull request #${it.number}: "${it.title}".\n\nUse \`gh pr view ${it.number} --comments\` and \`gh pr diff ${it.number}\`. Look for bugs, risky changes and missing tests, then give me a short summary with concrete suggestions. Don't push any commits.`;
+  return `Review pull request ${it.repo ?? ''}#${it.number}: "${it.title}".\n\nUse \`gh pr view ${it.number} --comments${repoFlag(it)}\` and \`gh pr diff ${it.number}${repoFlag(it)}\`. Look for bugs, risky changes and missing tests, then give me a short summary with concrete suggestions. Don't push any commits.`;
 }
 
 function checkoutStep(it: GhPull) {
@@ -315,6 +322,7 @@ function fixAndMergePrompt(it: GhPull, method: GhMergeMethod, deleteBranch: bool
   return [
     `Get pull request #${n} "${it.title}" (${it.url}) ready and merge it.`,
     '',
+    ...(it.repo ? [checkoutNote(it).trim(), ''] : []),
     `1. ${checkoutStep(it)}`,
     `2. Read all the feedback: \`gh pr view ${n} --comments\`, and the comments on lines of code with \`gh api repos/${repo}/pulls/${n}/comments\`.`,
     `3. Address every review comment that is still open: fix it, or if you disagree, reply on the PR saying why. If the branch conflicts with \`${it.baseRefName}\`, merge \`${it.baseRefName}\` in and resolve the conflicts.`,
@@ -330,6 +338,7 @@ function fixConflictsPrompt(it: GhPull, method: GhMergeMethod, deleteBranch: boo
   return [
     `Pull request #${n} "${it.title}" (${it.url}) has merge conflicts with \`${base}\`. Resolve them and merge it.`,
     '',
+    ...(it.repo ? [checkoutNote(it).trim(), ''] : []),
     `1. ${checkoutStep(it)}`,
     `2. Bring in the latest \`${base}\`: \`git fetch origin ${base} && git merge origin/${base}\`.`,
     `3. Resolve every conflict so both sides' changes survive. Read the PR (\`gh pr view ${n}\`) and the \`${base}\` commits that touched the same code to see what each side meant; don't just take one side.`,
@@ -340,11 +349,11 @@ function fixConflictsPrompt(it: GhPull, method: GhMergeMethod, deleteBranch: boo
 }
 
 function pullContext(it: GhPull) {
-  return `This is about pull request #${it.number} "${it.title}" (${it.url}), branch \`${it.headRefName}\` into \`${it.baseRefName}\`. Read it with \`gh pr view ${it.number} --comments\` and see its changes with \`gh pr diff ${it.number}\`.`;
+  return `This is about pull request #${it.number} "${it.title}" (${it.url}), branch \`${it.headRefName}\` into \`${it.baseRefName}\`. Read it with \`gh pr view ${it.number} --comments${repoFlag(it)}\` and see its changes with \`gh pr diff ${it.number}${repoFlag(it)}\`.${it.repo ? ` It's checked out in the \`${it.repoDir}\` folder.` : ''}`;
 }
 
 function issueContext(it: GhIssue) {
-  return `This is about GitHub issue #${it.number} "${it.title}" (${it.url}). Read it with \`gh issue view ${it.number} --comments\`.`;
+  return `This is about GitHub issue #${it.number} "${it.title}" (${it.url}). Read it with \`gh issue view ${it.number} --comments${repoFlag(it)}\`.${it.repo ? ` It's checked out in the \`${it.repoDir}\` folder.` : ''}`;
 }
 
 // ---- Merge dialog -------------------------------------------------------------------------------
@@ -402,7 +411,7 @@ function openMerge(it: GhPull, d: GhPullDetail, net: Net, handToWorker: () => vo
   renderMethods();
   if (!st.can) go.disabled = true;
 
-  const modal = openModal(el, { onClose: () => mergeWaiters.delete(it.number) });
+  const modal = openModal(el, { onClose: () => mergeWaiters.delete(ghKey(it)) });
   cancel.addEventListener('click', () => modal.close());
   worker.addEventListener('click', () => {
     modal.close();
@@ -414,8 +423,8 @@ function openMerge(it: GhPull, d: GhPullDetail, net: Net, handToWorker: () => vo
     go.disabled = true;
     result.className = 'gh-merge-result';
     result.replaceChildren(h('span.spinner'), auto.checked && st.auto ? 'Asking GitHub to merge it when ready…' : 'Merging…');
-    mergeWaiters.set(it.number, (msg) => {
-      mergeWaiters.delete(it.number);
+    mergeWaiters.set(ghKey(it), (msg) => {
+      mergeWaiters.delete(ghKey(it));
       busy = false;
       if (msg.error) {
         go.disabled = false;
@@ -426,7 +435,7 @@ function openMerge(it: GhPull, d: GhPullDetail, net: Net, handToWorker: () => vo
       modal.close();
       onMerged();
     });
-    net.send({ t: 'gh.merge', number: it.number, method, deleteBranch, auto: auto.checked && st.auto });
+    net.send({ t: 'gh.merge', number: it.number, repo: it.repo, method, deleteBranch, auto: auto.checked && st.auto });
   });
   setTimeout(() => (st.can ? go : cancel).focus(), 30);
 }
@@ -437,7 +446,7 @@ const REASON_LABEL: Record<GhCloseReason, string> = { completed: '✅ Completed'
 
 /** Closes an issue (as completed or not planned) or a PR without merging, with an optional comment. */
 function openClose(kind: 'issue' | 'pull', it: GhIssue | GhPull, net: Net, onClosed: () => void) {
-  const key = `${kind}:${it.number}`;
+  const key = `${kind}:${ghKey(it)}`;
   const pull = kind === 'pull' ? (it as GhPull) : null;
   let reason: GhCloseReason = 'completed';
   let busy = false;
@@ -494,7 +503,7 @@ function openClose(kind: 'issue' | 'pull', it: GhIssue | GhPull, net: Net, onClo
       modal.close();
       onClosed();
     });
-    net.send({ t: 'gh.close', kind, number: it.number, comment: comment.value.trim() || undefined, reason: pull ? undefined : reason, deleteBranch: !!pull && del.checked });
+    net.send({ t: 'gh.close', kind, number: it.number, repo: it.repo, comment: comment.value.trim() || undefined, reason: pull ? undefined : reason, deleteBranch: !!pull && del.checked });
   });
   setTimeout(() => comment.focus(), 30);
 }
@@ -530,7 +539,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
   // The comment box stays put while the conversation above it is redrawn, so a load finishing
   // doesn't take the focus (or the text) away from someone typing.
   const thread = h('div.gh-items');
-  const comment = commentBox('pull', it.number, itemUrl, net, (c) => {
+  const comment = commentBox('pull', it, itemUrl, net, (c) => {
     if (!detail) return loadAll();
     detail.comments.push(c);
     renderConv();
@@ -559,7 +568,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     const [word, cls] = stateOf(it);
     pill.className = `pill ${cls}`;
     pill.textContent = word;
-    title.textContent = `#${it.number} ${it.title}`;
+    title.textContent = `${ghRef(it)} ${it.title}`;
     title.title = it.title;
     const commits = detail ? `${detail.commits} commit${detail.commits === 1 ? '' : 's'}` : 'its commits';
     meta.replaceChildren(
@@ -955,7 +964,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     detailError = '';
     diffError = '';
     renderConv();
-    getJson<GhPullDetail>(`/api/gh/pull?number=${it.number}`)
+    getJson<GhPullDetail>(`/api/gh/pull?${itemQuery(it)}`)
       .then((d) => {
         if (g !== generation) return;
         detail = d;
@@ -966,7 +975,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
       })
       .catch((err) => g === generation && (detailError = (err as Error).message))
       .finally(() => g === generation && (renderFrame(), renderConv()));
-    getText(`/api/gh/pull/diff?number=${it.number}`)
+    getText(`/api/gh/pull/diff?${itemQuery(it)}`)
       .then((text) => {
         if (g !== generation) return;
         files = parseDiff(text);
@@ -981,7 +990,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
   });
 
   const unsub = store.on('pulls', () => {
-    const fresh = store.pulls.items.find((p) => p.number === it.number);
+    const fresh = store.pulls.items.find((p) => ghKey(p) === ghKey(it));
     if (!fresh) return;
     it = detail ? { ...fresh, state: fresh.state === 'OPEN' ? detail.state : fresh.state } : fresh;
     renderFrame();
@@ -1010,7 +1019,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   const pill = h('span.pill');
   const conv = h('div.gh-conv');
   const thread = h('div.gh-items');
-  const comment = commentBox('issue', it.number, itemUrl, net, (c) => {
+  const comment = commentBox('issue', it, itemUrl, net, (c) => {
     if (!detail) return load();
     detail.comments.push(c);
     render();
@@ -1019,17 +1028,17 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   // The footer stays put and renderFrame only shows, hides and relabels, so a board refresh never
   // pulls focus out of the provider picker.
   const closeIssue = h('button.btn', { type: 'button', title: 'Close this issue on GitHub', onclick: () => openClose('issue', it, net, load) }, '✔️ Close issue…');
-  const queueProvider = providerPicker(store.project, `issue-provider-${it.number}`, 'Queue provider');
+  const queueProvider = providerPicker(store.project, `issue-provider-${ghKey(it).replace(/\W/g, '-')}`, 'Queue provider');
   const addIssueToQueue = () => {
     if (!queueProvider.valid()) return;
     modal.close();
-    actions.queue(issuePrompt(it), `#${it.number} ${it.title}`, it.number, queueProvider.value(), queueProvider.model());
+    actions.queue(issuePrompt(it), `${ghRef(it)} ${it.title}`, it.number, queueProvider.value(), queueProvider.model(), it.repo);
   };
   const queue = h('button.btn', { type: 'button', onclick: addIssueToQueue }) as HTMLButtonElement;
   const el = h(
     'div.modal.gh-window.issue',
     { role: 'dialog', 'aria-label': `Issue #${it.number}` },
-    h('header', {}, pill, h('h2', { title: it.title }, `#${it.number} ${it.title}`), close),
+    h('header', {}, pill, h('h2', { title: it.repo ? `${it.repo}: ${it.title}` : it.title }, `${ghRef(it)} ${it.title}`), close),
     h(
       'div.gh-meta',
       {},
@@ -1055,7 +1064,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
     const isOpen = it.state === 'OPEN';
     pill.className = `pill ${isOpen ? 'done' : 'offline'}`;
     pill.textContent = isOpen ? 'open' : 'closed';
-    const task = store.taskForIssue(it.number);
+    const task = store.taskForIssue(it.number, it.repo);
     const onQueue = !!task && task.status !== 'done';
     closeIssue.classList.toggle('hidden', !isOpen);
     queueProvider.element.classList.toggle('hidden', !isOpen || onQueue);
@@ -1076,7 +1085,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
     const g = ++generation;
     error = '';
     render();
-    getJson<GhIssueDetail>(`/api/gh/issue?number=${it.number}`)
+    getJson<GhIssueDetail>(`/api/gh/issue?${itemQuery(it)}`)
       .then((d) => {
         if (g !== generation) return;
         detail = d;
@@ -1088,7 +1097,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   }
   const unsubs = [
     store.on('issues', () => {
-      const fresh = store.issues.items.find((i) => i.number === it.number);
+      const fresh = store.issues.items.find((i) => ghKey(i) === ghKey(it));
       if (!fresh) return;
       // The board can lag behind a close made from here.
       it = detail ? { ...fresh, state: fresh.state === 'OPEN' ? detail.state : fresh.state } : fresh;

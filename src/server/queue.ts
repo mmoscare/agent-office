@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { isAgentProvider, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
+import { normalizeRepo, sameRepo } from '../shared/floors.js';
+import { ghRef, isAgentProvider, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { isValidOpenCodeModel, validateWorkerModel } from './agents.js';
 
@@ -19,7 +20,7 @@ export interface QueueEvents {
   update(state: QueueState): void;
   toast(text: string, level: 'info' | 'warn' | 'error'): void;
   /** Mark the issue as taken on GitHub, so the board moves it to In progress. Resolves to an error message when it can't. */
-  claimIssue(issue: number): Promise<string | undefined>;
+  claimIssue(issue: number, repo?: string): Promise<string | undefined>;
   /** Ask GitHub for fresh pull requests, to pick up the one a worker just opened. */
   refreshGitHub(): void;
   /** Why no workers may be hired right now (today's budget is spent), if that's so. */
@@ -75,19 +76,21 @@ export class TaskQueue {
     return this.maxWorkers;
   }
 
-  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string): string | undefined {
+  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, repo?: string): string | undefined {
     if (!isAgentProvider(provider) || (provider === 'custom' && this.workers.defaultProvider !== 'custom')) return 'Unknown agent provider';
     const modelError = validateWorkerModel('agent', provider, model);
     if (modelError) return modelError;
     const clean = prompt.replace(/\r\n?/g, '\n').trim();
     if (!clean) return 'Empty task';
-    if (issue !== undefined && this.tasks.some((t) => t.issue === issue && t.status !== 'done')) return `Issue #${issue} is already on the queue`;
+    if (issue === undefined) repo = undefined;
+    if (issue !== undefined && this.tasks.some((t) => sameIssue(t, issue, repo) && t.status !== 'done')) return `Issue ${ghRef({ number: issue, repo })} is already on the queue`;
     if (this.tasks.filter((t) => t.status !== 'done').length >= MAX_TASKS) return `The queue is full (${MAX_TASKS} tasks)`;
     const task: QueueTask = {
       id: randomBytes(6).toString('hex'),
       provider,
       model: provider === 'opencode' ? model : undefined,
       issue,
+      repo,
       title: (title?.trim() || firstLine(clean)).slice(0, 120),
       prompt: clean,
       addedBy: by,
@@ -111,8 +114,8 @@ export class TaskQueue {
   }
 
   /** Takes a closed issue's waiting task off the queue (a running one carries on). Returns whether there was one. */
-  dropIssue(issue: number): boolean {
-    const i = this.tasks.findIndex((t) => t.issue === issue && t.status === 'queued');
+  dropIssue(issue: number, repo?: string): boolean {
+    const i = this.tasks.findIndex((t) => sameIssue(t, issue, repo) && t.status === 'queued');
     if (i < 0) return false;
     this.tasks.splice(i, 1);
     this.changed();
@@ -137,9 +140,9 @@ export class TaskQueue {
     const t = this.tasks.find((x) => x.id === taskId);
     if (!t) return 'No such task';
     if (t.status !== 'done') return 'That task is still on the queue';
-    if (t.issue !== undefined && this.tasks.some((x) => x !== t && x.issue === t.issue && x.status !== 'done')) return `Issue #${t.issue} is already on the queue`;
+    if (t.issue !== undefined && this.tasks.some((x) => x !== t && sameIssue(x, t.issue!, t.repo) && x.status !== 'done')) return `Issue ${ghRef({ number: t.issue, repo: t.repo })} is already on the queue`;
     this.tasks.splice(this.tasks.indexOf(t), 1);
-    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, issue: t.issue, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
+    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, issue: t.issue, repo: t.repo, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
     this.changed();
     this.pump();
@@ -179,7 +182,9 @@ export class TaskQueue {
     for (const t of this.tasks) {
       if (t.status === 'queued') continue;
       const since = (t.startedAt ?? t.addedAt) - 60_000;
+      // On a floor of several repositories, only a PR in the issue's own repository closes it.
       const match = pulls
+        .filter((p) => !t.repo || sameRepo(p.repo, t.repo))
         .filter((p) => (t.branch && p.headRefName === t.branch) || (t.issue !== undefined && p.closes.includes(t.issue) && Date.parse(p.createdAt) >= since))
         .sort((a, b) => Number(b.headRefName === t.branch) - Number(a.headRefName === t.branch) || b.createdAt.localeCompare(a.createdAt))[0];
       if (!match) continue;
@@ -311,8 +316,9 @@ export class TaskQueue {
       this.events.toast(`📋 ${r.name} sat down at ${DESK_BY_ID.get(desk)?.label ?? 'a desk'} to work on ${label(t)}`, 'info');
       if (t.issue !== undefined) {
         const issue = t.issue;
-        void this.events.claimIssue(issue).then((err) => {
-          if (err) this.events.toast(`Couldn't assign issue #${issue} on GitHub: ${err}`, 'warn');
+        const repo = t.repo;
+        void this.events.claimIssue(issue, repo).then((err) => {
+          if (err) this.events.toast(`Couldn't assign issue ${ghRef({ number: issue, repo })} on GitHub: ${err}`, 'warn');
         });
       }
     }
@@ -345,6 +351,7 @@ export class TaskQueue {
           provider,
           model: provider === 'opencode' && isValidOpenCodeModel(s.model) ? s.model : undefined,
           issue: typeof s.issue === 'number' ? s.issue : undefined,
+          repo: typeof s.issue === 'number' ? normalizeRepo(s.repo) : undefined,
           title: s.title,
           prompt: s.prompt,
           addedBy: s.addedBy ?? '?',
@@ -374,8 +381,13 @@ export class TaskQueue {
   }
 }
 
+/** Whether the task is for issue `issue` of `repo` (unset on a floor that's one repository). */
+function sameIssue(t: QueueTask, issue: number, repo?: string): boolean {
+  return t.issue === issue && (t.repo ?? '').toLowerCase() === (repo ?? '').toLowerCase();
+}
+
 function label(t: QueueTask): string {
-  return t.issue !== undefined ? `#${t.issue}` : `“${t.title.length > 40 ? `${t.title.slice(0, 39)}…` : t.title}”`;
+  return t.issue !== undefined ? ghRef({ number: t.issue, repo: t.repo }) : `“${t.title.length > 40 ? `${t.title.slice(0, 39)}…` : t.title}”`;
 }
 
 function firstLine(s: string): string {
