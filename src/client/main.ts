@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
-import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
@@ -653,6 +653,18 @@ function placeInCar(at?: { x: number; z: number }) {
   player.pos.set(spot.x, 0, spot.z);
   player.vy = 0;
   player.facing = 0;
+  player.camYaw = player.facing - Math.PI;
+  player.lookPitch = -0.08;
+}
+
+/** Q: straight to the elevator, standing just outside its doors and facing them. */
+function toElevator() {
+  if (trip) return;
+  if (climber.active) climber.abort();
+  if (player.seat) standUp();
+  player.pos.set(ELEVATOR.x, 0, ELEVATOR_FRONT + 1.2);
+  player.vy = 0;
+  player.facing = Math.PI;
   player.camYaw = player.facing - Math.PI;
   player.lookPitch = -0.08;
 }
@@ -2361,9 +2373,11 @@ function officeKey(e: KeyboardEvent): boolean {
       goToNextWaiting();
       return true;
     case 'KeyQ':
-      if (!carrying) return false;
-      reach();
-      putBack();
+      // Q puts back the issue card in your hands; with nothing in them, it takes you to the elevator.
+      if (carrying) {
+        reach();
+        putBack();
+      } else toElevator();
       return true;
   }
   // By the character, so it's / on any keyboard layout. The search box opens without it.
