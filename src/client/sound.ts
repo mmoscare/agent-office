@@ -2,12 +2,12 @@
  * Office sounds, synthesized with Web Audio so there are no audio files to ship: the room's air and a
  * humming fridge, workers typing while they work, footsteps, the coffee machine, birds outside the
  * windows by day and crickets at night, rain and thunder, the odd rustle or phone, the gong, the dog
- * barking, and the dings when a worker needs you. And the lounge jukebox, whose tunes are in music.ts.
+ * barking, the office phone when a worker on another floor finishes, and the dings when a worker needs you. And the lounge jukebox, whose tunes are in music.ts.
  *
  * Everything goes through one master gain that Settings turns down or mutes. Voice chat doesn't, and
  * the jukebox has a volume of its own.
  */
-import { DESKS, FLOOR, GONG, JUKEBOX, WINDOWS as OPENINGS } from '../shared/layout';
+import { DESKS, FLOOR, GONG, JUKEBOX, PHONE, WINDOWS as OPENINGS } from '../shared/layout';
 import type { GongWhy } from '../shared/protocol';
 import { STREAM } from '../shared/jukebox';
 import { TunePlayer } from './music';
@@ -44,6 +44,10 @@ const WINDOWS: Pos[] = OPENINGS.filter((o) => o.y0 < 2).map((o) =>
 );
 /** The middle of the gong's disc. */
 const GONG_AT: Pos = { x: GONG.x, y: GONG.height - 1.36, z: GONG.z };
+/** The office phone's bells, on the elevator's pillar. */
+const PHONE_AT: Pos = { x: PHONE.x, y: PHONE.y + 0.1, z: PHONE.z + 0.1 };
+/** How long the office phone rings for: two bursts of the bell. */
+export const PHONE_RING_SECONDS = 5.1;
 /** A gong's overtones don't line up like a string's: [ratio to the lowest, loudness, seconds to die away]. */
 const GONG_PARTIALS: [number, number, number][] = [
   [1, 0.8, 7],
@@ -803,6 +807,65 @@ export class OfficeSound {
     wash.connect(biquad(ctx, 'bandpass', 3200, 1.2)).connect(washG).connect(out);
     wash.start(t0);
     wash.stop(t0 + 3.5 * long + 0.05);
+  }
+
+  // ---- The office phone ---------------------------------------------------------------------------
+
+  /**
+   * The phone on the elevator's pillar rings: an agent on another floor finished. An old bell phone,
+   * its clapper rattling between two bells, in two bursts. It's news like a ding, so it carries across
+   * the room and plays from another tab too.
+   */
+  officePhone() {
+    this.unlock();
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (ctx.state === 'suspended') void ctx.resume();
+    this.count('officePhone');
+    const out = this.panner(PHONE_AT, 4, 0.6);
+    out.connect(this.alerts);
+    const t0 = ctx.currentTime + 0.03;
+    for (const burst of [0, 3.5]) {
+      const t = t0 + burst;
+      const len = 1.6;
+      const env = ctx.createGain();
+      envelope(env.gain, t, [
+        [0.01, 0.16],
+        [len - 0.05, 0.14],
+        [len, 0],
+      ]);
+      env.connect(out);
+      // The clapper: a square wave that flips which bell it's hitting 22 times a second.
+      const clapper = ctx.createOscillator();
+      clapper.type = 'square';
+      clapper.frequency.value = 22;
+      for (const [f0, side] of [
+        [940, 0.5],
+        [1210, -0.5],
+      ]) {
+        const bell = ctx.createGain();
+        bell.gain.value = 0.5;
+        const swing = ctx.createGain();
+        swing.gain.value = side;
+        clapper.connect(swing).connect(bell.gain);
+        bell.connect(env);
+        for (const [ratio, amp] of [
+          [1, 0.6],
+          [2.41, 0.25],
+          [3.93, 0.12],
+        ]) {
+          const o = ctx.createOscillator();
+          o.frequency.value = f0 * ratio * rand(0.995, 1.005);
+          const g = ctx.createGain();
+          g.gain.value = amp;
+          o.connect(g).connect(bell);
+          o.start(t);
+          o.stop(t + len + 0.05);
+        }
+      }
+      clapper.start(t);
+      clapper.stop(t + len + 0.05);
+    }
   }
 
   // ---- Alerts ----------------------------------------------------------------------------------

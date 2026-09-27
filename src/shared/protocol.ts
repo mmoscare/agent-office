@@ -805,6 +805,11 @@ export type ServerMsg =
    * over the desk it came from), or the last task on the queue just finished (a bigger party).
    */
   | { t: 'gong'; why: GongWhy; by?: string; pr?: number }
+  /**
+   * The office phone rings: an agent worker on another floor (`floor`, called `name`) just finished.
+   * Sent to everyone who isn't on that floor, since they can't hear its ding from where they are.
+   */
+  | { t: 'phone'; floor: string; name: string; worker: string; task?: string }
   /** Sent to whoever asked to close it. */
   | { t: 'gh.closed'; kind: 'issue' | 'pull'; number: number; error?: string }
   | { t: 'rtc'; from: string; data: unknown }
