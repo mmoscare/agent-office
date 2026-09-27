@@ -11,6 +11,7 @@ import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG } from '../shared/protocol.
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief } from './stations.js';
+import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
 import { isBusy } from '../shared/status.js';
 import { gh } from './github.js';
 import type { ServiceOwner } from './services.js';
@@ -447,7 +448,8 @@ export class WorkerManager {
     const clean = text.replace(/\r\n?/g, '\n').trim();
     if (!clean) return 'Empty prompt';
     // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
-    w.pty.write(`\x1b[200~${clean}\x1b[201~`);
+    const submitted = w.info.kind === 'agent' ? withWorkerHandoff(clean) : clean;
+    w.pty.write(`\x1b[200~${submitted}\x1b[201~`);
     setTimeout(() => w.pty?.write('\r'), 120);
     w.info.activity = truncate(clean, 80);
     this.notePrompt(w, clean);
@@ -562,7 +564,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         w.bootBlocked = false;
         if (typeof payload?.prompt === 'string') {
-          w.info.activity = truncate(payload.prompt, 80);
+          w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
           this.notePrompt(w, payload.prompt);
         }
         if (w.info.status !== 'working') this.setStatus(w, 'working');
@@ -637,7 +639,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         clearPending();
         if (report.prompt) {
-          w.info.activity = truncate(report.prompt, 80);
+          w.info.activity = truncate(withoutWorkerHandoff(report.prompt), 80) || undefined;
           this.notePrompt(w, report.prompt);
         }
         this.setStatus(w, 'working');
@@ -709,7 +711,7 @@ export class WorkerManager {
     if (payload.type === 'error') w.openCodeError = true;
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
     if (payload.prompt) {
-      w.info.activity = truncate(payload.prompt, 80);
+      w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
       this.notePrompt(w, payload.prompt);
     } else if (payload.tool) {
       w.info.activity = truncate(payload.tool, 80);
@@ -727,7 +729,7 @@ export class WorkerManager {
   /** A new message for the worker: show it right away, and have its task (re)named. */
   private notePrompt(w: Worker, prompt: string) {
     if (w.info.kind !== 'agent') return;
-    const clean = prompt.replace(/\s+/g, ' ').trim();
+    const clean = withoutWorkerHandoff(prompt).replace(/\s+/g, ' ').trim();
     // Bare slash commands (/model, /compact) and repeats aren't new work.
     if (!clean || /^\/\S+$/.test(clean) || w.prompts.at(-1) === clean) return;
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
@@ -819,6 +821,7 @@ export class WorkerManager {
     const command = this.command(info);
     const commandPath = isShell ? undefined : configured ? this.agentPath : resolveCommand(command);
     let args = isShell ? ['-l'] : configured ? [...this.agentArgs] : [];
+    if (!isShell) prompt = withWorkerHandoff(prompt, resumeSessionId);
     if (isClaude) {
       args.unshift('--settings', this.settingsPath);
       if (resumeSessionId) args.push('--resume', resumeSessionId);
@@ -833,6 +836,9 @@ export class WorkerManager {
       args.push(...codexHookArgs(this.codexHook), '--no-alt-screen');
       if (resumeSessionId) args.push('resume', resumeSessionId);
       if (prompt) args.push('--', prompt);
+    } else if (!isShell && prompt) {
+      // Custom wrappers receive the same task and handoff contract, after their configured flags.
+      args.push('--', prompt);
     }
     if (isCodex) {
       w.codexTools.clear();

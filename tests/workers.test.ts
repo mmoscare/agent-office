@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Ledger } from '../src/server/usage.js';
 import { WorkerManager, type WorkerEvents } from '../src/server/workers.js';
+import { withoutWorkerHandoff } from '../src/server/handoff.js';
 import type { AgentProvider, WorkerInfo } from '../src/shared/protocol.js';
 
 type Invocation = {
@@ -176,7 +177,7 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean, timeo
 }
 
 function hasPrompt(invocation: Invocation, prompt: string): boolean {
-  return invocation.args.includes(prompt) || invocation.stdin?.includes(prompt) === true;
+  return invocation.args.some((arg) => withoutWorkerHandoff(arg) === prompt) || invocation.stdin?.includes(prompt) === true;
 }
 
 test('Claude workers use the configured executable, pass prompts and resume ids, and stay hook-operational', async (t) => {
@@ -507,7 +508,7 @@ test('Codex workers preserve native approvals, follow authenticated root hooks, 
   const token = first.env.hookToken!;
   assert.equal(worker.status, 'starting');
   assert.ok(first.args.includes('--no-alt-screen'));
-  assert.deepEqual(first.args.slice(-2), ['--', '- fix the login']);
+  assert.deepEqual(first.args.slice(-2).map(withoutWorkerHandoff), ['--', '- fix the login']);
   assert.equal(first.args.some(a => /bypass|--yolo|--claude-only|--settings/.test(a)), false);
   assert.equal(first.args.filter(a => a.startsWith('hooks.')).length, 7);
   assert.equal(calls.some(r => r.kind === 'claude'), false);
@@ -636,7 +637,7 @@ test('a board agent is hired with its brief on the first prompt, then prompted, 
   assert.equal(hired.info.deskId, 'station-issues');
   assert.equal(hired.info.activity, 'File an issue about the dog');
   const [first] = await waitFor(launches, (l) => l.length === 1);
-  const initial = first.args.at(-1)!;
+  const initial = withoutWorkerHandoff(first.args.at(-1)!);
   assert.match(initial, /Issues agent/);
   assert.match(initial, /office\/queue/);
   assert.ok(initial.endsWith('File an issue about the dog'));
@@ -665,5 +666,5 @@ test('a board agent is hired with its brief on the first prompt, then prompted, 
   assert.deepEqual(typeof woken === 'object' && [woken.hired, woken.info.id], [false, id]);
   const [, second] = await waitFor(launches, (l) => l.length === 2);
   assert.ok(second.args.includes('--resume') && second.args.includes('issues-session'));
-  assert.equal(second.args.at(-1), 'Close the duplicates');
+  assert.equal(withoutWorkerHandoff(second.args.at(-1)!), 'Close the duplicates');
 });
