@@ -7,6 +7,7 @@ import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { mergeByMaterial, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
+import { buildPhone, type Phone } from './phone';
 import { buildJukebox, type JukeboxView } from './jukebox';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
 
@@ -72,6 +73,8 @@ export interface Office {
   elevator: Elevator;
   /** The merge gong by the PR board. */
   gong: Gong;
+  /** The office phone on the elevator's pillar: rings when an agent on another floor finishes. */
+  phone: Phone;
   jukebox: JukeboxView;
   /** The rolling whiteboard everyone draws on together. */
   whiteboard: WhiteboardStand;
@@ -1126,6 +1129,10 @@ export function buildOffice(): Office {
   interactables.push(elevator.interactable);
   fixture('north', ELEVATOR.x, WALL_HEIGHT / 2, ELEVATOR.width + 0.1, WALL_HEIGHT);
 
+  // The office phone, on the elevator's other pillar from the call button.
+  const phone = buildPhone();
+  group.add(phone.group);
+
   // The gong, just past the elevator from the PR board.
   const gong = buildGong();
   group.add(gong.group);
@@ -1174,9 +1181,10 @@ export function buildOffice(): Office {
     }
     elevator.update(dt);
     gong.update(dt);
+    phone.update(dt);
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, fixtures: () => fixtures, elevator, gong, jukebox, whiteboard, setProjectName, setLook, night, update };
+  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, fixtures: () => fixtures, elevator, gong, phone, jukebox, whiteboard, setProjectName, setLook, night, update };
 }
 
 /** The materials and textures a floor paints in its own colors. */
