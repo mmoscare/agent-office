@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
-import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
 import { isAsleep, isBusy } from '../shared/status';
@@ -422,6 +422,17 @@ function placeInCar(at?: { x: number; z: number }) {
   player.pos.set(spot.x, 0, spot.z);
   player.vy = 0;
   player.facing = 0;
+  player.camYaw = player.facing - Math.PI;
+  player.lookPitch = -0.08;
+}
+
+/** Q: straight to the elevator, standing just outside its doors and facing them. */
+function toElevator() {
+  if (riding) return;
+  if (player.seat) standUp();
+  player.pos.set(ELEVATOR.x, 0, ELEVATOR_FRONT + 1.2);
+  player.vy = 0;
+  player.facing = Math.PI;
   player.camYaw = player.facing - Math.PI;
   player.lookPitch = -0.08;
 }
@@ -1357,6 +1368,9 @@ function officeKey(e: KeyboardEvent): boolean {
       return true;
     case 'KeyF':
       hanger.start();
+      return true;
+    case 'KeyQ':
+      toElevator();
       return true;
   }
   // By the character, so it's / on any keyboard layout. The search box opens without it.
