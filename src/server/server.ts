@@ -12,6 +12,7 @@ import type { Config } from './config.js';
 import { Auth, type Session } from './auth.js';
 import { Accounts } from './accounts.js';
 import { childEnv, resolveCommand } from './workers.js';
+import { ConsoleShells } from './console-shell.js';
 import { configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
 import { createOpenCodeModelCatalogue } from './models.js';
 import { Team } from './team.js';
@@ -224,6 +225,13 @@ export async function startServer(cfg: Config) {
     }
   };
   const toastAll = (text: string, level: ToastLevel = 'info') => broadcast({ t: 'toast', text, level });
+  const consoleStale = new Set<string>();
+  const consoles = new ConsoleShells((id, msg) => {
+    const c = clients.get(id);
+    if (!c || c.out) return;
+    if (msg.t === 'console.data' && (consoleStale.has(id) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES)) consoleStale.add(id);
+    else sendTo(c, msg);
+  });
 
   // --- The building: a floor per project, each with its own workers, boards and queue -----------
   const building = new Building(cfg.dataDir, cfg.projectsDir);
@@ -254,7 +262,7 @@ export async function startServer(cfg: Config) {
   };
   const floorInfos = (): FloorInfo[] => [
     ...[...floors.values()].map((f) => f.info()),
-    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
+    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, ...(d.backOffice ? { backOffice: true } : {}), cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
   ];
   // The elevator's counts change with every worker update; tell everyone at most a few times a second.
   let floorsSent = '';
@@ -988,11 +996,11 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/floors/local' && req.method === 'POST') {
         if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
-        let body: { dir?: unknown } | null;
+        let body: { dir?: unknown; backOffice?: unknown } | null;
         try { body = JSON.parse(await readBody(req, 16 * 1024)); }
         catch { return send(res, 400, { error: 'Enter a full folder path' }); }
         const who = session.account?.name ?? 'the office';
-        const def = building.addLocal(body?.dir, who);
+        const def = building.addLocal(body?.dir, who, body?.backOffice === true);
         if (typeof def === 'string') return send(res, 400, { error: def });
         const existing = floors.get(def.id);
         const floor = existing ?? openFloor(def);
@@ -1254,6 +1262,8 @@ export async function startServer(cfg: Config) {
       handleMessage(client, msg);
     });
     ws.on('close', () => {
+      consoles.close(id);
+      consoleStale.delete(id);
       clients.delete(id);
       if (client.whiteboard) drawingChanged(floorOf(client));
       stopPlaying(client);
@@ -1472,7 +1482,7 @@ export async function startServer(cfg: Config) {
           .add(repo, who, (def) => {
             floorsChanged();
             toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
-          })
+          }, msg.backOffice === true)
           .then((r) => {
             floorsChanged();
             if (typeof r === 'string') return sendTo(c, { t: 'floor.added', repo, error: r });
@@ -1482,6 +1492,17 @@ export async function startServer(cfg: Config) {
             toastAll(`🛗 New floor: ${r.name}, added by ${who}`);
             sendTo(c, { t: 'floor.added', repo, floor: floor.id });
           });
+        break;
+      }
+      case 'floor.backOffice': {
+        const on = msg.on === true;
+        const r = building.setBackOffice(str(msg.floor, 64), on);
+        if (typeof r === 'string') {
+          warn(c, r);
+          break;
+        }
+        floorsChanged();
+        toastAll(on ? `🗄️ ${who} filed ${r.name} in the Back Office` : `🛗 ${who} brought ${r.name} back up to the floors`);
         break;
       }
       case 'floor.projectsDir': {
@@ -1514,7 +1535,7 @@ export async function startServer(cfg: Config) {
         }
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace);
+        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace, msg.pullWork);
         const issue = kind === 'agent' ? issueNumber(msg.issue) : undefined;
         const plan = kind === 'agent' ? str(msg.plan, 64) || undefined : undefined;
         if (typeof r === 'string') warn(c, r);
@@ -1523,6 +1544,12 @@ export async function startServer(cfg: Config) {
         if (typeof r !== 'string' && plan) takePlan(floor, plan, r);
         break;
       }
+      case 'console.attach':
+      case 'console.detach':
+      case 'console.input':
+      case 'console.resize':
+        consoles.handle(c.id, msg, floorOf(c)?.dir ?? cfg.dir);
+        break;
       case 'worker.workspace.add': {
         const w = worker(msg.workerId);
         if (!w) break;
@@ -1576,7 +1603,7 @@ export async function startServer(cfg: Config) {
       }
       case 'worker.prompt': {
         const w = worker(msg.workerId);
-        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who) : 'No such worker';
+        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who, msg.pullWork ?? (msg.issue || msg.plan ? null : msg.pullWork)) : 'No such worker';
         warn(c, err);
         const issue = w?.info.kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (w && !err && issue) {
@@ -2179,6 +2206,12 @@ export async function startServer(cfg: Config) {
   };
 
   const resync = setInterval(() => {
+    for (const id of consoleStale) {
+      const c = clients.get(id);
+      if (c && c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
+      consoleStale.delete(id);
+      if (c && !c.out) consoles.resync(id);
+    }
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
       for (const key of c.stale) {
@@ -2221,6 +2254,7 @@ export async function startServer(cfg: Config) {
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
   const shutdown = (keep = false): Promise<void> => {
+    consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
     clearTimeout(floorsTimer);

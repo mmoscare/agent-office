@@ -858,7 +858,8 @@ test('a Claude worker acts out its latest tool call, and puts its head in its ha
   // Failed once (by exit code): still watching. An interrupt isn't a failure.
   hook('PostToolUseFailure', { ...npmTest, error: 'Exit code 1\n# fail 2', is_interrupt: false });
   hook('PostToolUseFailure', { ...npmTest, error: 'Interrupted', is_interrupt: true });
-  assert.equal(action(), 'test');
+  assert.equal(action(), undefined);
+  assert.equal(workers.get(worker.id)?.status, 'interrupted');
   hook('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: 'src/a.ts' } });
   assert.equal(action(), 'edit');
   // Failed again, by the summary it printed through the pipe: head in hands, until its next tool call.

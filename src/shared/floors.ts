@@ -56,3 +56,28 @@ export function normalizeRepo(value: unknown): string | undefined {
 export function sameRepo(a: string | undefined, b: string | undefined): boolean {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }
+
+/** What the elevator and floor menu need to group floors: the main list or the basement's Back Office. */
+interface Filed {
+  id: string;
+  backOffice?: boolean;
+}
+
+/** The floors on the elevator's main list, in building order. */
+export function mainFloors<T extends Filed>(floors: readonly T[]): T[] {
+  return floors.filter((f) => !f.backOffice);
+}
+
+/** The floors filed in the basement's Back Office, in building order. */
+export function backOfficeFloors<T extends Filed>(floors: readonly T[]): T[] {
+  return floors.filter((f) => f.backOffice);
+}
+
+/** A floor's number on the panel: 1, 2, … on the main list and B1, B2, … in the Back Office; '' if it isn't there. */
+export function floorNumber(floors: readonly Filed[], id: string): string {
+  const f = floors.find((x) => x.id === id);
+  if (!f) return '';
+  const list = f.backOffice ? backOfficeFloors(floors) : mainFloors(floors);
+  const n = list.indexOf(f) + 1;
+  return f.backOffice ? `B${n}` : String(n);
+}

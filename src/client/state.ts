@@ -112,11 +112,7 @@ export function saveSettings(s: Settings) {
   }
 }
 
-/** The worker whose worktree branch a pull request came from, if it is still at a desk. */
-export function workerForPull(workers: Iterable<WorkerInfo>, pr: { number: number; headRefName: string }): WorkerInfo | undefined {
-  for (const w of workers) if (w.pr?.number === pr.number || (w.worktree && w.worktree.branch === pr.headRefName)) return w;
-  return undefined;
-}
+export { workerForPull } from '../shared/pull-work';
 
 class Store {
   you = '';
