@@ -235,7 +235,8 @@ export class TaskQueue {
       if (t.status !== 'running' || !t.workerId) continue;
       const w = byId.get(t.workerId);
       if (!w) this.finish(t, 'killed');
-      else if (FINISHED.has(w.status)) done = this.finish(t, w.status === 'done' ? 'done' : 'exited') || done;
+      // Offline is a worker restored from disk that the office hasn't woken yet, not one that stopped.
+      else if (FINISHED.has(w.status) && w.status !== 'offline') done = this.finish(t, w.status === 'done' ? 'done' : 'exited') || done;
       else continue;
       changed = true;
     }
@@ -352,6 +353,7 @@ export class TaskQueue {
     try {
       const saved = JSON.parse(readFileSync(this.statePath, 'utf8')) as { maxWorkers?: number; tasks?: Partial<QueueTask>[] };
       if (typeof saved.maxWorkers === 'number' && Number.isFinite(saved.maxWorkers)) this.maxWorkers = Math.max(0, Math.min(SEATS.length, Math.floor(saved.maxWorkers)));
+      const workers = new Map(this.workers.list().map((w) => [w.id, w]));
       for (const s of saved.tasks ?? []) {
         if (typeof s.id !== 'string' || typeof s.prompt !== 'string' || typeof s.title !== 'string') continue;
         const provider = isAgentProvider(s.provider) ? s.provider : this.workers.defaultProvider;
@@ -377,7 +379,10 @@ export class TaskQueue {
           pr: s.pr,
         };
         // Whatever was running died with the old office process; its worker comes back asleep at best.
-        if (t.status === 'running') {
+        // One whose agent never reported a session is woken with its task again (see WorkerManager.resume),
+        // so it's still on it: finishing it here would offer a Requeue that seats a second worker for it.
+        const worker = t.workerId ? workers.get(t.workerId) : undefined;
+        if (t.status === 'running' && !(worker && !worker.sessionId)) {
           t.status = 'done';
           t.outcome = 'exited';
           t.finishedAt = Date.now();

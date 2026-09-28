@@ -12,6 +12,15 @@ Finish with a concise user-facing summary linking to the durable handoff. A term
 
 const WAIT_FOR_TASK = 'No task has been assigned yet. Keep these standing instructions for future tasks and wait for the user\'s request.';
 
+const RETOLD_NOTE = `
+
+(Agent Office restarted you in a fresh session because the earlier one could not be continued. This is your original task again: check the working tree, branch and any pull request for work already done before starting over.)`;
+
+/** A worker's original task, for a fresh session that replaces one it can't continue. */
+export function retoldTask(task: string | undefined): string | undefined {
+  return task ? `${task}${RETOLD_NOTE}` : undefined;
+}
+
 /** Preserve native slash commands and avoid submitting a new turn on a bare resume. */
 export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: string): string | undefined {
   if (!prompt && resumeSessionId) return undefined;
@@ -23,5 +32,6 @@ export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: 
 export function withoutWorkerHandoff(prompt: string): string {
   if (!prompt.endsWith(HANDOFF_NOTE)) return prompt;
   const request = prompt.slice(0, -HANDOFF_NOTE.length);
-  return request === WAIT_FOR_TASK ? '' : request;
+  if (request === WAIT_FOR_TASK) return '';
+  return request.endsWith(RETOLD_NOTE) ? request.slice(0, -RETOLD_NOTE.length) : request;
 }
