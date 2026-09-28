@@ -1138,7 +1138,11 @@ export class WorkerManager {
     // Scrollback and all, the history from before this run included: only what it prints from here
     // on can say it's stuck on a login.
     term.write(adopted.snapshot, () => {
-      if (w.term === term) w.fresh = term.registerMarker(0);
+      if (w.term !== term) return;
+      w.fresh = term.registerMarker(0);
+      // No prompt hook is replayed for an adopted turn. Exclude old notices in the
+      // restored screen, then recognize a new Esc on this still-active turn.
+      if (!w.turnStart && info.status === 'working') markTurnStart(w);
     });
     this.setTitle(w, adopted.title);
     // A hook that came in since the office started already says how it's doing.

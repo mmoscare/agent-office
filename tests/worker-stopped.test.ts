@@ -424,3 +424,33 @@ test('stopped workers restore offline and retain their stopped state when a live
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test('an adopted active Claude turn ignores old notices and recognizes a new Esc', async () => {
+  const f = fixture('claude');
+  f.manager.follow = () => {};
+  f.w.info.status = 'offline';
+  f.manager.adopt(f.w, {
+    pty: { id: 'live-terminal' }, cols: 80, rows: 24, title: '', busy: true,
+    snapshot: `> earlier\r\n${ESC_NOTICE}\r\n> current${INPUT_BOX}`,
+  }, { status: 'working', acked: true });
+  const term = f.w.term;
+  const output = (text: string) => new Promise<void>(resolve => term.write(text, resolve));
+  try {
+    await output('');
+    assert.ok(f.w.turnStart && f.w.turnStart.line >= 0);
+    await output('\x1b]9;4;0\x07');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused', 'the restored notice belongs to an earlier turn');
+    await output(`\x1b]9;4;3\x07${OVER_INPUT_BOX}> current\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    assert.ok(!f.updates.includes('done'));
+    f.hook('UserPromptSubmit', { prompt: 'continue' });
+    assert.equal(f.w.info.status, 'working');
+  } finally {
+    term.dispose();
+  }
+});
