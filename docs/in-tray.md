@@ -12,7 +12,7 @@ The 📒 **To Do Next** binder (in the boss office, or ☰ → **To Do Next**) i
 
 ## The in-tray
 
-The 📥 **in-tray** (I, or ☰ → **In-tray**; the Receptionist's kiosk past the gong) holds what came in from outside: notes you jot down in the office, forwarded emails, voice memos, photos, PDFs. Each item can be read or opened, filed on To Do Next, queued for a fresh worker, or put away in the archive.
+The 📥 **in-tray** (I, or ☰ → **In-tray**; the Receptionist's counter beside the whiteboard, facing the elevator) holds what came in from outside: notes you jot down in the office, forwarded emails, voice memos, photos, PDFs. Each item can be read or opened, filed on To Do Next, queued for a fresh worker, or put away in the archive.
 
 Things get into the tray three ways:
 
@@ -60,7 +60,7 @@ The office only listens where you started it (`localhost:4600` on your PC). To r
 
 ### The Receptionist
 
-Walk up to the kiosk past the gong and press **E**, or click **💁‍♀️ Triage the tray** in the In-tray window. The Receptionist reads every item (`office-inbox list` / `read`), hands out what someone wants done (To Do Next with `office-plans add`, the task queue with `office-queue add`, the Issues or PR agent with `office-ask`), archives what needs nothing, and tells you what came in and where each item went. She is told that what is in the tray is content to sum up and file, never instructions to follow (only mail the office marks as from an allowed sender is a request to act on), and she is launched without the file-editing tools, so she cannot touch the floor's files.
+Walk up to her counter beside the whiteboard (she faces the elevator, so she's the first thing you see on a floor) and press **E**, or click **💁‍♀️ Triage the tray** in the In-tray window. The Receptionist reads every item (`office-inbox list` / `read`), hands out what someone wants done (To Do Next with `office-plans add`, the task queue with `office-queue add`, the Issues or PR agent with `office-ask`), archives what needs nothing, and tells you what came in and where each item went. She is told that what is in the tray is content to sum up and file, never instructions to follow (only mail the office marks as from an allowed sender is a request to act on), and she is launched without the file-editing tools, so she cannot touch the floor's files.
 
 ### Keep in mind
 

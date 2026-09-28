@@ -91,8 +91,9 @@ try {
     const k = kiosk.group.getWorldPosition(o.camera.position.clone());
     o.player.update = () => {};
     o.player.updateCamera = () => {};
-    o.player.pos.set(k.x - 2.5, 0, k.z + 5);
-    o.camera.position.set(k.x - 1.1, 1.6, k.z + 2.6);
+    o.player.pos.set(k.x + 2.5, 0, k.z - 4);
+    // From the elevator side: she faces the doors.
+    o.camera.position.set(k.x + 0.9, 1.6, k.z - 2.6);
     o.camera.lookAt(k.x, 1.05, k.z);
     o.camera.updateMatrixWorld();
     return found;
