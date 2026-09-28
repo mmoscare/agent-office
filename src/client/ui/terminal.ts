@@ -196,7 +196,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     renderPresence(w);
     const openCode = w.kind === 'agent' && resolvedProvider(w.provider, store.project) === 'opencode';
     modelsBtn.classList.toggle('hidden', !openCode);
-    modelsBtn.toggleAttribute('disabled', !openCode || !ready || isAsleep(w.status));
+    modelsBtn.toggleAttribute('disabled', !openCode || !ready || isAsleep(w.status) || !!w.didNotStart);
     // Someone else resized the shared PTY (the latest typist wins): follow it so this view renders
     // correctly. Typing here fits the terminal back to this window and reclaims the size.
     const ptySize = `${w.cols}x${w.rows}`;
