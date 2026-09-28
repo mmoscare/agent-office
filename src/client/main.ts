@@ -6,6 +6,7 @@ import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FR
 import { floorPalette } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
+import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
@@ -226,10 +227,10 @@ const showPullsWall = () => {
 };
 onPullsWallMode(showPullsWall);
 showPullsWall();
-// PR notes name the desk they came from. Redraw when that changes, not on every worker update.
+// PR notes name the desk they came from, or the agent a PR was handed to and how it's going.
 let deskLinks = '';
 store.on('workers', () => {
-  const k = JSON.stringify([...store.workers.values()].filter((w) => w.worktree).map((w) => [w.worktree!.branch, w.pr?.number, w.name, w.color, w.deskId]));
+  const k = pullBoardKey(store.workers.values());
   if (k === deskLinks) return;
   deskLinks = k;
   renderPullsBoard();

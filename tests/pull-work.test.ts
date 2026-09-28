@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { readPullWork, pullWorkers, workerForPull, pullWorkStatus } from '../src/shared/pull-work.js';
+import { readPullWork, pullWorkers, workerForPull, pullWorkStatus, pullBoardKey } from '../src/shared/pull-work.js';
 import type { PullWork, WorkerInfo } from '../src/shared/protocol.js';
 import { WorkerManager } from '../src/server/workers.js';
 import { PtyHost } from '../src/server/ptys.js';
@@ -50,6 +50,22 @@ test('status distinguishes submission, activity, questions, completion and stopp
   }
   assert.equal(pullWorkStatus({ ...w, status: 'done', waitingSince: 5 }).text, 'Assigned');
   assert.equal(pullWorkStatus({ ...w, status: 'done', waitingSince: 15 }).text, 'Turn finished');
+});
+
+test('the 3D board redraws for assignments and their status, not for unrelated worker updates', () => {
+  const original = worker('original', { pr, worktree: { branch: pr.headRefName, path: '.', base: 'abc' } });
+  const fixer = worker('fixer', { status: 'idle' });
+  const key = pullBoardKey([original, fixer]);
+  // An existing worker without a worktree is handed the PR.
+  const assigned = { ...fixer, pullWork: { ...link, assignedAt: 10 } };
+  assert.notEqual(pullBoardKey([original, assigned]), key);
+  const working = { ...assigned, status: 'working' as const };
+  assert.notEqual(pullBoardKey([original, working]), pullBoardKey([original, assigned]));
+  const finished = { ...working, status: 'done' as const, waitingSince: 20 };
+  assert.notEqual(pullBoardKey([original, finished]), pullBoardKey([original, working]));
+  // Busy/idle churn on unassigned workers, and other fields, don't redraw it.
+  assert.equal(pullBoardKey([{ ...original, status: 'idle', title: 'Something else' }, fixer]), key);
+  assert.equal(pullBoardKey([original, { ...fixer, status: 'working' }]), key);
 });
 
 test('new/existing workers broadcast and persist assignments only after accepted requests', async t => {

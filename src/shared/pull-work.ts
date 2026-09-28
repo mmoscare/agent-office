@@ -50,3 +50,14 @@ export function pullWorkStatus(w: WorkerInfo): { text: string; tone: string; act
   if (w.status === 'done' && (w.waitingSince ?? 0) >= (w.pullWork?.assignedAt ?? 0)) return { text: 'Turn finished', tone: 'finished', active: false };
   return { text: 'Assigned', tone: 'waiting', active: false };
 }
+
+/**
+ * What the 3D PR board draws from the workers: the desk a PR came from, or who it was handed to and
+ * how that's going. Redraw when this changes, not on every worker update.
+ */
+export function pullBoardKey(workers: Iterable<WorkerInfo>): string {
+  return JSON.stringify([...workers].filter(w => w.worktree || w.pr || w.pullWork).map(w => [
+    w.kind, w.worktree?.branch, w.pr?.number, w.pr?.url, !!w.workspace, w.name, w.color, w.deskId,
+    w.pullWork?.url, w.pullWork?.assignedAt, w.pullWork && pullWorkStatus(w).text,
+  ]));
+}
