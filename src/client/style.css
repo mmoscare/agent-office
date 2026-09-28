@@ -506,8 +506,8 @@ button { font-family: inherit; }
 /* The desk a PR came from, with a dot in the worker's color. */
 .desk-link { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 800; white-space: nowrap; }
 .desk-link::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); border: 1px solid var(--ink); }
-/* The agent a PR's branch was made for, once its worker has left the desk. */
-.pr-agent { font-size: 10px; font-weight: 700; opacity: 0.8; white-space: nowrap; }
+/* The worker whose desk a PR came from, once it has left the desk. */
+.pr-submitter { font-size: 10px; font-weight: 700; opacity: 0.8; white-space: nowrap; }
 .label { padding: 1px 6px; border-radius: 999px; border: 1.5px solid var(--ink); color: var(--ink); font-size: 10px; font-weight: 800; }
 .board-status { font-size: 12px; font-weight: 700; color: var(--muted); }
 .queue-warn { color: var(--warn-ink); font-weight: 900; }

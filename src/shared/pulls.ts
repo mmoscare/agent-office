@@ -16,10 +16,11 @@ export function pullRequestLabel(pr: PullRequestRef): string {
 }
 
 /**
- * The agent a branch was made for, from the office's `office/<worker>-<id>` naming (server/worktrees.ts),
- * so a PR still names its agent after the worker has gone home. Undefined for other branches and meetings.
+ * The worker a branch was made for, from the office's `office/<worker>-<id>` naming (server/worktrees.ts),
+ * so a PR still names where it came from after the worker has gone home. Agents and shell workers given
+ * a worktree are named alike, so the branch doesn't say which it was. Undefined for other branches and meetings.
  */
-export function agentForBranch(branch: string): string | undefined {
+export function branchWorker(branch: string): string | undefined {
   const m = /^office\/([a-z][a-z0-9]*)-[0-9a-f]{4,}$/.exec(branch);
   if (!m || m[1] === 'meeting') return undefined;
   return m[1][0].toUpperCase() + m[1].slice(1);

@@ -10,7 +10,7 @@ import { providerLabel } from './provider';
 import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
 import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './pr-board-model';
-import { agentChip, diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
+import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows, submitterChip } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
 
 export interface BoardActions {
@@ -154,7 +154,7 @@ function pullRow(p: GhPull, showRepo: boolean, net: Net, actions: BoardActions):
       h('span.prb-branch', { title: `${p.headRefName} into ${p.baseRefName}` }, `🌿 ${p.headRefName}`, h('span.prb-base', {}, ` → ${p.baseRefName}`)),
       ...pullWorkIndicators(p, actions.goToDesk),
       // A worker still at its desk names itself; once it's gone, its branch still says who it was.
-      w && !pullWorkers([w], p).length ? deskChip(w) : agentChip(p.headRefName),
+      w && !pullWorkers([w], p).length ? deskChip(w) : submitterChip(p.headRefName),
       ...labelChips(p.labels),
       `by ${p.author}`,
       checks,
