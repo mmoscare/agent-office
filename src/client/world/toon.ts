@@ -125,12 +125,16 @@ export interface CardOpts {
   /** A small tab on the bottom edge beside the tail, e.g. the model a worker runs: "Opus 5.5 · high". */
   tag?: string;
   bg: string;
+  /** A thick band of colour down the card's left edge, e.g. the kind of work a worker is on. */
+  stripe?: string;
   /** Widest a line of text may get, in textSprite `size` pixels. */
   maxWidth?: number;
 }
 
 /** Cards are drawn at twice the pixels of other labels so their smaller text stays crisp up close. */
 const CARD_RES = 2;
+/** How wide a card's stripe is, in textSprite `size` pixels. */
+const STRIPE = 14;
 const INK = '#2b2d42';
 const FONT = 'Nunito, ui-rounded, system-ui, sans-serif';
 
@@ -168,7 +172,9 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   // Room for the tab between the tail and the rounded corner.
   const tagRoom = o.tag ? 2 * (tail + 6 * R + tagW + r) : 0;
 
-  const w = Math.ceil(Math.max(titleW, bodyW, chipW + 2 * pad, tagRoom - 2 * pad) + 2 * pad);
+  // A stripe takes room on the left, so the text is pushed across by as much on both sides to stay centred.
+  const inset = o.stripe ? STRIPE * R : 0;
+  const w = Math.ceil(Math.max(titleW, bodyW, chipW + 2 * pad, tagRoom - 2 * pad) + 2 * pad + 2 * inset);
   const top = o.chip ? chipH / 2 : lw;
   const titleY = top + (o.chip ? chipH / 2 + 6 * R : pad);
   const bodyY = titleY + title.length * titleLH + 4 * R;
@@ -194,6 +200,14 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   ctx.closePath();
   ctx.fillStyle = o.bg;
   ctx.fill();
+  if (o.stripe) {
+    // Clipped to the card, so it follows the rounded corners; the outline goes over its edge.
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = o.stripe;
+    ctx.fillRect(0, 0, STRIPE * R + lw, bottom);
+    ctx.restore();
+  }
   ctx.lineWidth = lw;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = INK;

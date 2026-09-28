@@ -1,5 +1,6 @@
 import { previewPush, pushReviewed, pushTargets } from './push.js';
 import type { GitDiffMode } from '../shared/git-board.js';
+import { authorUpdates } from './author-updates.js';
 import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeFloorPull, officeStatus, type OfficeFloor } from './git-board.js';
 
 /** A result that's a string is a failure, said for a person. */
@@ -24,6 +25,8 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
   const repo = (q.get('repo') ?? '').slice(0, 2048);
   const branch = (q.get('branch') ?? '').slice(0, 255) || undefined;
   try {
+    if (p === '/api/git/author-updates' && method === 'GET') return [200, await authorUpdates.read(floorDir)];
+    if (p === '/api/git/author-updates/check' && method === 'POST') return [200, await authorUpdates.read(floorDir, true)];
     if (p === '/api/git/push-targets' && method === 'GET') return [200, await pushTargets(floorDir)];
     if (p === '/api/git/push-preview' && method === 'GET') return [200, await previewPush(floorDir, text(q.get('target'), 2048))];
     if (p === '/api/git/push-reviewed' && method === 'POST') return reply(await pushReviewed(floorDir, text(body.target, 2048), text(body.token, 100)));

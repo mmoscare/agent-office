@@ -8,6 +8,7 @@ import { HIPS } from '../player';
 import { HeldCard } from './card';
 import { UNDEAD_SKIN, elfBoot, elfHat, elfWorker, santaHat, warlockHat, zombieWorker } from './costumes';
 import { cardSprite, disposeSprite, mesh, textSprite, toon, toonUnique } from './toon';
+import { WORK_KINDS } from '../../shared/work-kind';
 
 export type Pose = 'stand' | 'walk' | 'sit' | 'type';
 
@@ -1357,7 +1358,7 @@ export class Worker {
     const bubble =
       status === 'paused' ? '⏸ paused' : status === 'interrupted' ? '⏹ interrupted' :
       status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '';
-    const key = task ? `${status}|${bounce}|${task.name}|${task.summary}|${this.modelTag ?? ''}` : bubble;
+    const key = task ? `${status}|${bounce}|${task.name}|${task.summary}|${task.kind ?? ''}|${this.modelTag ?? ''}` : bubble;
     if (key === this.bubbleKey) return;
     this.bubbleKey = key;
     if (this.bubble) {
@@ -1368,7 +1369,15 @@ export class Worker {
     this.bubbleIsCard = !!task;
     if (task) {
       const [text, chipBg, color] = TASK_CHIP[status] ?? TASK_CHIP.idle;
-      this.bubble = cardSprite({ chip: { text, bg: chipBg, color }, title: task.name, body: task.summary, tag: this.modelTag, bg: isAsleep(status) ? '#e9ecef' : bg });
+      const kind = task.kind && WORK_KINDS[task.kind];
+      this.bubble = cardSprite({
+        chip: { text, bg: chipBg, color },
+        title: kind ? `${kind.emoji} ${task.name}` : task.name,
+        body: task.summary,
+        tag: this.modelTag,
+        bg: isAsleep(status) ? '#e9ecef' : bg,
+        stripe: kind ? kind.color : undefined,
+      });
     } else if (bubble) this.bubble = textSprite(bubble, { bg, size: 38 });
     if (this.bubble) this.root.add(this.bubble);
   }
