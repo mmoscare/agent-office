@@ -841,22 +841,26 @@ export class Person {
 
 // -----------------------------------------------------------------------------------------------
 
-const STATUS_BULB: Record<string, string> = {
+const STATUS_BULB: Record<WorkerStatus, string> = {
   starting: '#adb5bd',
   idle: '#8ecae6',
   working: '#ffd166',
   needs_input: '#ef476f',
+  paused: '#ffad66',
+  interrupted: '#ffad66',
   done: '#06d6a0',
   exited: '#6c757d',
   offline: '#6c757d',
 };
 
 /** Status pill on a worker's task card: [text, background, text color]. */
-const TASK_CHIP: Record<string, [string, string, string]> = {
+const TASK_CHIP: Record<WorkerStatus, [string, string, string]> = {
   starting: ['⏳ STARTING', STATUS_BULB.starting, '#2b2d42'],
   idle: ['💬 READY', STATUS_BULB.idle, '#2b2d42'],
   working: ['⌨️ WORKING', STATUS_BULB.working, '#2b2d42'],
   needs_input: ['❗ NEEDS YOU', STATUS_BULB.needs_input, '#ffffff'],
+  paused: ['⏸ PAUSED', STATUS_BULB.paused, '#2b2d42'],
+  interrupted: ['⏹ INTERRUPTED', STATUS_BULB.interrupted, '#2b2d42'],
   done: ['✅ DONE', STATUS_BULB.done, '#2b2d42'],
   exited: ['💤 ASLEEP', STATUS_BULB.exited, '#ffffff'],
   offline: ['💤 ASLEEP', STATUS_BULB.offline, '#ffffff'],
@@ -1351,6 +1355,7 @@ export class Worker {
     const hot = status === 'needs_input' || (status === 'done' && bounce);
     const bg = hot ? (status === 'done' ? '#caffbf' : '#ffd6e0') : status === 'working' ? '#ffec99' : '#fffaf3';
     const bubble =
+      status === 'paused' ? '⏸ paused' : status === 'interrupted' ? '⏹ interrupted' :
       status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '';
     const key = task ? `${status}|${bounce}|${task.name}|${task.summary}|${this.modelTag ?? ''}` : bubble;
     if (key === this.bubbleKey) return;

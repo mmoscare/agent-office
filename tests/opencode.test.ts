@@ -116,6 +116,24 @@ test('writes a loadable plugin module that forwards root events and excludes sub
     assert.equal((sent.at(-1) as any).status, 'working');
     await event('session.error', { error: { name: 'APIError', data: { message: 'Unavailable' } } });
     assert.deepEqual(sent.at(-1), { type: 'error', sessionId: 'saved', status: 'needs_input', detail: 'Unavailable' });
+    await event('permission.asked', { id: 'cancelled-permission', permission: 'edit' });
+    await event('session.error', { error: { name: 'MessageAbortedError', data: { message: 'aborted' } } });
+    assert.deepEqual(sent.at(-1), { type: 'error', sessionId: 'saved', status: 'interrupted', detail: 'Turn interrupted' });
+    await event('message.updated', { info: {
+      id: 'aborted-reply', sessionID: 'saved', role: 'assistant', error: { name: 'MessageAbortedError' },
+      tokens: { input: 3, output: 2 }, cost: 0.1,
+    } });
+    assert.deepEqual(sent.at(-2), { type: 'error', sessionId: 'saved', status: 'interrupted', detail: 'Turn interrupted' });
+    assert.equal((sent.at(-1) as any).type, 'usage', 'aborted reply usage is still counted');
+    const beforeLateReply = sent.length;
+    await event('permission.replied', { requestID: 'cancelled-permission', reply: 'reject' });
+    assert.equal(sent.length, beforeLateReply, 'a late permission reply cannot restart an aborted turn');
+    const beforeChild = sent.length;
+    await event('session.error', { sessionID: 'child', error: { name: 'MessageAbortedError' } });
+    await event('message.updated', { sessionID: 'child', info: {
+      id: 'child-abort', sessionID: 'child', role: 'assistant', error: { name: 'MessageAbortedError' },
+    } });
+    assert.ok(sent.slice(beforeChild).every((value: any) => value.type === 'usage'), 'child abort cannot interrupt root');
   } finally {
     globalThis.fetch = oldFetch;
     if (oldUrl === undefined) delete process.env.AGENT_OFFICE_HOOK_URL; else process.env.AGENT_OFFICE_HOOK_URL = oldUrl;
