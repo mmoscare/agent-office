@@ -779,7 +779,7 @@ export async function startServer(cfg: Config) {
             return send(res, 400, { error: 'Bad request' });
           }
         }
-        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input);
+        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input, [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })));
         return send(res, status, body);
       }
       if (p === '/api/floors/local' && req.method === 'POST') {
