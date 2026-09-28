@@ -1313,3 +1313,15 @@ a.when:hover { text-decoration: underline; }
 .inbox-actions { display: flex; gap: 4px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .inbox-actions .btn { padding: 3px 9px; font-size: 13px; text-decoration: none; color: inherit; }
 @media (max-width: 700px) { .inbox-list li { flex-direction: column; align-items: stretch; } .inbox-actions { justify-content: flex-start; } }
+.pr-work-banner { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 12px; }
+.pr-work { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border: 2px solid var(--ink); border-radius: 9px; background: #e6eaf0; color: #243044; font: 800 12px/1.4 Nunito, sans-serif; text-align: left; cursor: pointer; }
+.pr-work.active { background: #d9f3e5; color: #145634; }
+.pr-work.waiting { background: #fff0bd; color: #664600; }
+.pr-work.finished { background: #e5e3fb; color: #454070; }
+.pr-work.stopped { background: #ececef; color: #535663; }
+.pr-work:hover { filter: brightness(0.96); }
+.pr-work:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.pr-work-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pr-work-dot.running { animation: pr-work-pulse 1.5s ease-in-out infinite; }
+@keyframes pr-work-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .pr-work-dot.running { animation: none; } }
