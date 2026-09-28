@@ -1,5 +1,5 @@
 import { attentionFloors } from '../../shared/attention';
-import { floorPalette } from '../../shared/floors';
+import { floorNumber, floorPalette } from '../../shared/floors';
 import type { WorkerAttention } from '../../shared/protocol';
 import { store } from '../state';
 import { $, h } from './dom';
@@ -27,10 +27,12 @@ export function mountAttention(openWorker: (floorId: string, workerId: string) =
     const focused = active?.closest('#attention-floors') ? active.dataset.attentionKey : undefined;
     const list = $('attention-floors');
     const scrollTop = list.scrollTop;
-    list.replaceChildren(...floors.map((floor, index) => {
+    list.replaceChildren(...floors.map((floor) => {
       const here = floor.id === store.floor;
       const workers = floor.attention ?? [];
-      const floorLabel = `Floor ${index + 1}: ${floor.name}${here ? ' (you are here)' : ''}`;
+      // Numbered the way the elevator numbers them: 1… on the main floors, B1… in the Back Office.
+      const number = floorNumber(floors, floor.id);
+      const floorLabel = `Floor ${number}: ${floor.name}${here ? ' (you are here)' : ''}`;
       const stats = floor.cloning ? 'Cloning…' : `${floor.workers} worker${floor.workers === 1 ? '' : 's'} · ${floor.busy} working`;
       return h('div.attention-floor', {},
         h('button.attention-floor-button', {
@@ -38,7 +40,7 @@ export function mountAttention(openWorker: (floorId: string, workerId: string) =
           title: `${floorLabel} — ${stats}`, 'aria-label': `${floorLabel}, ${stats}, ${floor.waiting} need attention`,
           onclick: () => ride(floor.id),
         },
-        h('span.attention-floor-number', { style: `background:${floorPalette(floor.palette).trim}` }, String(index + 1)),
+        h('span.attention-floor-number', { style: `background:${floorPalette(floor.palette).trim}` }, number),
         h('span.attention-text', {}, h('span.attention-name', {}, floor.name), h('span.attention-detail', {}, here ? `Here · ${stats}` : stats)),
         floor.waiting ? h('span.attention-badge.small', {}, floor.waiting) : null),
         workers.length ? h('ul', {}, ...workers.map((w) => h('li', {},
