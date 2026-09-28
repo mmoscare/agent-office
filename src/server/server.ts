@@ -39,6 +39,7 @@ import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
+import { taskStatus, unshippedText } from '../shared/task-status.js';
 import { normalizeRepo } from '../shared/floors.js';
 import { PLAN_COLUMNS, PLAN_TEXT_MAX, planTitle, type PlanStatus } from '../shared/plans.js';
 import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../shared/inbox.js';
@@ -320,7 +321,8 @@ export async function startServer(cfg: Config) {
       const q = floor.queue.state();
       return {
         maxWorkers: q.maxWorkers,
-        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, outcome: t.outcome, issue: t.issue, repo: t.repo, plan: t.plan, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error })),
+        // `state` and `unshipped` say honestly what a finished task left behind (see shared/task-status.ts).
+        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, state: taskStatus(t).text, outcome: t.outcome, issue: t.issue, repo: t.repo, plan: t.plan, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error, unshipped: unshippedText(t.unshipped) || undefined })),
       };
     };
     if (req.method === 'GET') return send(res, 200, view());
@@ -673,6 +675,7 @@ export async function startServer(cfg: Config) {
     jukebox: floor?.jukebox.state() ?? { on: false, track: JUKEBOX_TUNES[0].id, startedAt: Date.now(), elapsed: 0 },
     whiteboard: { elements: floor?.whiteboard.scene() ?? [], people: floor ? drawing(floor) : [] },
     meeting: floor?.meetings.state() ?? { current: null, past: [] },
+    unshipped: floor?.unshipped.state,
     cabinet: { ...cabinetState(floor), frame: (floor && cabinetPlayer(floor)?.frame) ?? null },
     plans: floor?.plans.state() ?? { revision: 0, items: [] },
     inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
@@ -1820,6 +1823,21 @@ export async function startServer(cfg: Config) {
       case 'queue.limit':
         floorOf(c)?.queue.setLimit(num(msg.maxWorkers));
         break;
+      case 'unshipped.scan':
+        void floorOf(c)?.unshipped.scan(true);
+        break;
+      case 'unshipped.recover': {
+        const floor = here();
+        if (!floor) break;
+        void floor.unshipped.recover(str(msg.key, 1000), !!floor.project.branch).then((r) => {
+          if (typeof r === 'string') return warn(c, r);
+          if (floor.queue.state().tasks.some((t) => t.title === r.title && t.status !== 'done')) return warn(c, 'Its recovery is already on the queue');
+          const err = floor.queue.add(r.prompt, who, r.title, undefined, undefined, undefined, undefined, undefined, undefined, r.workspace);
+          if (err) warn(c, err);
+          else toastFloor(floor, `📋 ${who} queued a PR for the unshipped work on ${r.title.replace(/^Recover unshipped work from /, '')}`);
+        });
+        break;
+      }
       case 'meeting.start': {
         const floor = here();
         if (!floor) break;
