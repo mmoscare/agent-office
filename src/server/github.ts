@@ -480,6 +480,7 @@ export class GitHub {
           labels: labels(p.labels),
           reviewDecision: p.reviewDecision ?? '',
           headRefName: p.headRefName,
+          headRefOid: p.headRefOid,
           baseRefName: p.baseRefName,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,

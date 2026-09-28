@@ -43,7 +43,7 @@ export class BoardRequests {
 
 const common = `number title state url author { login } labels(first:100) { nodes { name color } } createdAt updatedAt body`;
 const issueFields = `${common} assignees(first:100) { nodes { login } } comments { totalCount }`;
-const pullFields = `${common} isDraft reviewDecision headRefName baseRefName additions deletions
+const pullFields = `${common} isDraft reviewDecision headRefName headRefOid baseRefName additions deletions
   closingIssuesReferences(first:100) { nodes { number } }
   commits(last:1) { nodes { commit { statusCheckRollup { state } } } }`;
 

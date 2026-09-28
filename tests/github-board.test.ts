@@ -86,6 +86,8 @@ test('PRs retain merge/closed states, check summary and closing links; open pagi
   const items = await boardList('pulls', '', async (args) => {
     const gql = args.find((s) => s.startsWith('query='))!;
     assert.match(gql, /statusCheckRollup \{ state \}/);
+    // Unshipped work matches a merged PR to its branch by the head commit.
+    assert.match(gql, /\bheadRefOid\b/);
     assert.doesNotMatch(gql, /contexts|checkRuns/);
     assert.match(gql, calls ? /first:50/ : /first:100/);
     const nodes = Array.from({ length: calls ? 50 : 100 }, (_, i) => item(calls * 100 + i));
