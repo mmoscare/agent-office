@@ -20,6 +20,8 @@ import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
 import { ModelUsageLedger } from './model-usage.js';
+import { ApiBalances } from './api-balances.js';
+import type { BalanceUpdate } from '../shared/api-balances.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
 import { MAX_WORKER_LIMIT, Machine, parseWorkerLimit } from './machine.js';
@@ -368,6 +370,8 @@ export async function startServer(cfg: Config) {
     toastAll,
   );
   const modelUsage = new ModelUsageLedger(cfg.dataDir);
+  // Pay-as-you-go balances for the sidebar's API balances panel; keys stay on this side.
+  const apiBalances = new ApiBalances(cfg.dataDir);
 
   // The Claude plan's 5-hour and weekly limits, for the meter under the workers: one account for
   // every floor.
@@ -726,6 +730,25 @@ export async function startServer(cfg: Config) {
           }
         }
         return send(res, 200, { records: modelUsage.list(), waiting, saveError: modelUsage.saveError });
+      }
+      if (p === '/api/balances') {
+        const admin = meOf(session.account?.id).admin;
+        if (req.method === 'GET') return send(res, 200, await apiBalances.read(url.searchParams.get('refresh') === '1', admin));
+        if (req.method === 'POST') {
+          if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+          if (!admin) return send(res, 403, { error: 'Only an admin can change API balance settings' });
+          let input: BalanceUpdate;
+          try {
+            const parsed: unknown = JSON.parse((await readBody(req, 16 * 1024)) || '{}');
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+            input = parsed as BalanceUpdate;
+          } catch {
+            return send(res, 400, { error: 'Bad request' });
+          }
+          try { return send(res, 200, await apiBalances.update(input, true)); }
+          catch (err) { return send(res, 400, { error: (err as Error).message }); }
+        }
+        return send(res, 405, { error: 'Method not allowed' });
       }
       if (p === '/api/folders' && req.method === 'GET') {
         try {
