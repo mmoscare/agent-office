@@ -64,6 +64,40 @@ test('queued provider survives restart even when the configured default differs'
   assert.equal(f.workers[0].provider, 'opencode');
 });
 
+test('a running task whose worker never reported a session stays running across a restart', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open();
+  q.add('Stop the arms moving', 'Tester', undefined, undefined, 'codex'); q.shutdown();
+  // The office went down before the agent reported a session; its worker comes back asleep.
+  f.workers[0].status = 'offline';
+  const restored = f.open();
+  assert.equal(restored.state().tasks[0].status, 'running');
+  // Not yet woken is not stopped, so there's nothing to requeue.
+  restored.onWorker(f.workers[0]);
+  assert.equal(restored.state().tasks[0].status, 'running');
+  assert.match(restored.retry(restored.state().tasks[0].id) ?? '', /still on the queue/);
+  // Woken with its task again, it finishes it the usual way.
+  f.workers[0].status = 'starting'; restored.onWorker(f.workers[0]);
+  f.workers[0].status = 'done'; restored.onWorker(f.workers[0]);
+  assert.equal(restored.state().tasks[0].outcome, 'done');
+  assert.equal(f.workers.length, 1);
+});
+
+test('a running task whose worker had a session, or is gone, still stops at a restart', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open();
+  q.add('With a session', 'Tester'); q.add('Sent home', 'Tester'); q.shutdown();
+  f.workers[0].sessionId = 'session-1';
+  f.workers[0].status = 'offline';
+  f.workers.splice(1, 1);
+  const restored = f.open();
+  for (const task of restored.state().tasks) {
+    assert.equal(task.status, 'done');
+    assert.equal(task.outcome, 'exited');
+    assert.equal(task.error, 'The office restarted while it was running');
+  }
+});
+
 test('new and legacy tasks without a provider use the configured agent', (t) => {
   const f = fixture('custom'); t.after(() => f.close());
   writeFileSync(path.join(f.dir, 'queue.json'), JSON.stringify({ maxWorkers: 0, tasks: [
