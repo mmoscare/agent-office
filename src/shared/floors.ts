@@ -4,6 +4,13 @@
 /** The most floors a building has. */
 export const MAX_FLOORS = 16;
 
+/** Backoffice is a directory of ordinary project floors, not an extra workspace. */
+export type FloorSection = 'main' | 'backoffice';
+
+export function validFloorSection(value: unknown): value is FloorSection {
+  return value === 'main' || value === 'backoffice';
+}
+
 /** How a floor looks: its walls, their trim, and its planks. */
 export interface FloorPalette {
   name: string;

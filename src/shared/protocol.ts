@@ -648,6 +648,8 @@ export interface WorkerAttention {
  */
 export interface FloorInfo {
   id: string;
+  /** Missing on older floors: show in the main elevator directory. */
+  section?: import('./floors.js').FloorSection;
   /** The repository's name, or the folder's when it isn't on GitHub. */
   name: string;
   /** owner/name on GitHub. */
@@ -1099,7 +1101,7 @@ export type ClientMsg =
   /** The repositories that could become a floor; answered with `floor.repos`. */
   | { t: 'floor.repos'; refresh?: boolean }
   /** Clone a repository and make it a new floor; answered with `floor.added` once it's there. */
-  | { t: 'floor.add'; repo: string }
+  | { t: 'floor.add'; repo: string; section?: import('./floors.js').FloorSection }
   /** Dress the building up for a holiday, take the decorations down ('off'), or follow the calendar ('auto'). */
   | { t: 'theme.set'; pick: ThemePick }
   /** Where new floors are cloned from now on (admins only); '' goes back to the default. */

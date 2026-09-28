@@ -36,7 +36,7 @@ import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
-import { normalizeRepo } from '../shared/floors.js';
+import { normalizeRepo, validFloorSection } from '../shared/floors.js';
 import { DESK_BY_ID, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
@@ -244,7 +244,7 @@ export async function startServer(cfg: Config) {
   };
   const floorInfos = (): FloorInfo[] => [
     ...[...floors.values()].map((f) => f.info()),
-    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
+    ...building.pending().map((d) => ({ id: d.id, section: d.section, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
   ];
   // The elevator's counts change with every worker update; tell everyone at most a few times a second.
   let floorsSent = '';
@@ -782,13 +782,24 @@ export async function startServer(cfg: Config) {
         const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input);
         return send(res, status, body);
       }
+      if (p === '/api/floors/section' && req.method === 'POST') {
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: { floor?: unknown; section?: unknown } | null;
+        try { body = JSON.parse(await readBody(req, 16 * 1024)); }
+        catch { return send(res, 400, { error: 'Bad request' }); }
+        const error = building.setSection(body?.floor, body?.section);
+        if (error) return send(res, 400, { error });
+        floorsChanged();
+        return send(res, 200, { ok: true });
+      }
       if (p === '/api/floors/local' && req.method === 'POST') {
         if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
-        let body: { dir?: unknown } | null;
+        let body: { dir?: unknown; section?: unknown } | null;
         try { body = JSON.parse(await readBody(req, 16 * 1024)); }
         catch { return send(res, 400, { error: 'Enter a full folder path' }); }
+        if (body?.section !== undefined && !validFloorSection(body.section)) return send(res, 400, { error: 'Choose Main floors or Backoffice' });
         const who = session.account?.name ?? 'the office';
-        const def = building.addLocal(body?.dir, who);
+        const def = building.addLocal(body?.dir, who, body?.section);
         if (typeof def === 'string') return send(res, 400, { error: def });
         const existing = floors.get(def.id);
         const floor = existing ?? openFloor(def);
@@ -1260,11 +1271,15 @@ export async function startServer(cfg: Config) {
         break;
       case 'floor.add': {
         const repo = str(msg.repo, 200);
+        if (msg.section !== undefined && !validFloorSection(msg.section)) {
+          sendTo(c, { t: 'floor.added', repo, error: 'Choose Main floors or Backoffice' });
+          break;
+        }
         void building
           .add(repo, who, (def) => {
             floorsChanged();
             toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
-          })
+          }, msg.section)
           .then((r) => {
             floorsChanged();
             if (typeof r === 'string') return sendTo(c, { t: 'floor.added', repo, error: r });

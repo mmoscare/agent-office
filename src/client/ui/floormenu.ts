@@ -1,4 +1,4 @@
-import { floorPalette } from '../../shared/floors';
+import { floorPalette, type FloorSection } from '../../shared/floors';
 import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { FloorInfo } from '../../shared/protocol';
 import { store } from '../state';
@@ -12,7 +12,7 @@ export interface FloorMenuOptions {
   /** Go to that floor, staying where you are in the office. */
   go(floorId: string): void;
   /** Open the elevator's panel, to add a project. */
-  elevator(): void;
+  elevator(section?: FloorSection): void;
   /** Up to the rooftop bar, by elevator. */
   roof(): void;
 }
@@ -31,12 +31,13 @@ export function closeFloorMenu() {
 export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): void {
   if (current) return current.close();
   const el = h('div.floor-menu.panel', { role: 'menu', 'aria-label': 'Floors' });
+  let section: FloorSection = 'main';
 
   const item = (f: FloorInfo, i: number, here: number) => {
     const isHere = f.id === store.floor;
     const p = floorPalette(f.palette);
     const n = Math.abs(i - here);
-    const where = isHere ? 'you are here' : here < 0 ? '' : `${i > here ? '⬆' : '⬇'} ${n} floor${n === 1 ? '' : 's'} ${i > here ? 'up' : 'down'}`;
+    const where = isHere ? 'you are here' : f.section === 'backoffice' ? 'Backoffice' : here < 0 || floorsInBackoffice() ? '' : `${i > here ? '⬆' : '⬇'} ${n} floor${n === 1 ? '' : 's'} ${i > here ? 'up' : 'down'}`;
     const stats: HTMLElement[] = [];
     if (f.cloning) stats.push(h('span', {}, '⏳ Cloning…'));
     else {
@@ -60,16 +61,24 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
     return btn;
   };
 
+  const floorsInBackoffice = () => store.floors.some(f => f.id === store.floor && f.section === 'backoffice');
+
   const render = () => {
     const floors = store.floors;
     const here = floors.findIndex((f) => f.id === store.floor);
     const add = h('button.floor-item.add', { type: 'button', role: 'menuitem', title: 'The elevator: add another project as a floor' }, h('span.floor-no', {}, '🛗'), h('span.floor-text', {}, h('span.floor-name', {}, 'Elevator'), h('span.floor-sub', {}, 'Add a project…')));
     add.addEventListener('click', () => {
       close();
-      opts.elevator();
+      opts.elevator(section);
     });
     // Top floor first, the way a building's directory reads, and the roof over them.
-    const items = floors.map((f, i) => item(f, i, here)).reverse();
+    const items = floors.flatMap((f, i) => (f.section ?? 'main') === section ? [item(f, i, here)] : []).reverse();
+    const basement = floors.filter(f => f.section === 'backoffice');
+    const group = h('button.floor-item', { type: 'button', role: 'menuitem' },
+      h('span.floor-no', {}, section === 'main' ? 'B' : '↑'),
+      h('span.floor-text', {}, h('span.floor-name', {}, section === 'main' ? 'Backoffice' : 'Main floors'), h('span.floor-sub', {}, section === 'main' ? `Basement · ${basement.length} projects${floorsInBackoffice() ? ' · you are here' : ''}` : 'Back to the elevator directory')),
+    );
+    group.addEventListener('click', () => { section = section === 'main' ? 'backoffice' : 'main'; render(); el.querySelector<HTMLButtonElement>('button')?.focus(); });
     const onRoof = store.floor === ROOF;
     const people = [...store.peers.values()].filter((p) => p.floor === ROOF).length;
     const roof = h(
@@ -84,7 +93,7 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
       close();
       opts.roof();
     });
-    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add);
+    el.replaceChildren(h('div.floor-menu-head', {}, section === 'backoffice' ? 'B · Backoffice' : `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(section === 'main' && floors.length ? [roof] : []), ...(section === 'backoffice' ? [group] : []), ...items, ...(section === 'main' ? [group] : []), add);
   };
 
   const place = () => {

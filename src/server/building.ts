@@ -2,7 +2,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo } from '../shared/floors.js';
+import { FLOOR_PALETTES, MAX_FLOORS, normalizeRepo, sameRepo, validFloorSection, type FloorSection } from '../shared/floors.js';
 import type { ProjectsDirState, RepoChoice } from '../shared/protocol.js';
 import { gh } from './github.js';
 import { localFolder, localFolderKey } from './local-folders.js';
@@ -10,6 +10,7 @@ import { localFolder, localFolderKey } from './local-folders.js';
 /** A floor as floors.json keeps it. */
 export interface FloorDef {
   id: string;
+  section?: FloorSection;
   name: string;
   /** owner/name on GitHub. */
   repo?: string;
@@ -117,7 +118,8 @@ export class Building {
   }
 
   /** Register an existing workspace in place. It may contain one, several, or no Git repositories. */
-  addLocal(input: unknown, by: string): FloorDef | string {
+  addLocal(input: unknown, by: string, section: FloorSection = 'main'): FloorDef | string {
+    if (!validFloorSection(section)) return 'Choose Main floors or Backoffice';
     let dir: string;
     try { dir = localFolder(input); }
     catch (err) { return (err as Error).message; }
@@ -127,6 +129,7 @@ export class Building {
     if ([...this.cloning.values()].some((d) => localFolderKey(d.dir) === key)) return 'That folder is still being cloned';
     if (this.defs.length + this.cloning.size >= MAX_FLOORS) return `The building is full (${MAX_FLOORS} floors)`;
     const def = this.newDef(path.basename(dir) || dir, originRepo(dir), dir, by);
+    def.section = section;
     this.defs.push(def);
     const error = this.save();
     if (error) {
@@ -141,7 +144,8 @@ export class Building {
    * floor as soon as the clone begins; resolves to the finished floor, or to why there's none. A
    * checkout that's already where the clone would go is used as it is.
    */
-  async add(input: string, by: string, started: (def: FloorDef) => void): Promise<FloorDef | string> {
+  async add(input: string, by: string, started: (def: FloorDef) => void, section: FloorSection = 'main'): Promise<FloorDef | string> {
+    if (!validFloorSection(section)) return 'Choose Main floors or Backoffice';
     const wanted = normalizeRepo(input);
     if (!wanted) return 'Pick a repository, or type it as owner/name';
     if (this.defs.some((d) => sameRepo(d.repo, wanted))) return `${wanted} already has a floor`;
@@ -162,6 +166,7 @@ export class Building {
     const dest = path.join(this.projectsDir, owner, name);
     if (this.defs.some((d) => path.resolve(d.dir) === dest)) return `${dest} is already a floor`;
     const def = this.newDef(name, repo, dest, by);
+    def.section = section;
     this.cloning.set(key, def);
     started(def);
     try {
@@ -173,6 +178,18 @@ export class Building {
     this.defs.push(def);
     this.save();
     return def;
+  }
+
+  /** Reorganize the directory without moving checkouts or interrupting their workers. */
+  setSection(id: unknown, section: unknown): string | undefined {
+    if (!validFloorSection(section)) return 'Choose Main floors or Backoffice';
+    const def = this.defs.find(d => d.id === id);
+    if (!def) return 'No such floor';
+    const previous = def.section;
+    def.section = section;
+    const error = this.save();
+    if (error) def.section = previous;
+    return error;
   }
 
   /** Repositories the office's `gh` login can clone, most recently pushed first. */
@@ -210,6 +227,7 @@ export class Building {
         ids.add(s.id);
         this.defs.push({
           id: s.id,
+          section: s.section === 'backoffice' ? 'backoffice' : 'main',
           name: typeof s.name === 'string' && s.name ? s.name.slice(0, 100) : path.basename(s.dir),
           repo: normalizeRepo(s.repo),
           dir: s.dir,

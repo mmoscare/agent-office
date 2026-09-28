@@ -258,6 +258,7 @@ export class Floor {
     const ws = this.workers.list();
     return {
       id: this.id,
+      section: this.def.section,
       name: this.def.name,
       repo: this.def.repo,
       dir: this.dir,

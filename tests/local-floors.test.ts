@@ -95,3 +95,38 @@ test('a failed save does not report a floor as added', () => {
     assert.ok(statSync(f.project).isDirectory());
   } finally { f.close(); }
 });
+
+test('Backoffice placement survives reloads, and reopening an existing folder does not move it', () => {
+  const f = fixture();
+  try {
+    const building = new Building(f.data, f.root);
+    const def = building.addLocal(f.project, 'Owner', 'backoffice');
+    assert.ok(typeof def !== 'string');
+    assert.equal(def.section, 'backoffice');
+    assert.equal(building.addLocal(f.project, 'Owner'), def);
+    assert.equal(def.section, 'backoffice');
+    const reloaded = new Building(f.data, f.root);
+    assert.equal(reloaded.list()[0].section, 'backoffice');
+    assert.equal(reloaded.setSection(def.id, 'main'), undefined);
+    assert.equal(new Building(f.data, f.root).list()[0].section, 'main');
+    assert.equal(reloaded.list()[0].dir, def.dir);
+    assert.equal(reloaded.list()[0].id, def.id);
+    assert.equal(reloaded.setSection('missing', 'backoffice'), 'No such floor');
+    assert.match(reloaded.setSection(def.id, 'invalid')!, /Choose/);
+  } finally { f.close(); }
+});
+
+test('legacy floor placement defaults to main and failed moves roll back', () => {
+  const f = fixture();
+  try {
+    const file = path.join(f.data, 'floors.json');
+    writeFileSync(file, JSON.stringify([{ id: 'legacy', dir: f.project }, { id: 'invalid', dir: f.project, section: 'unknown' }]));
+    const building = new Building(f.data, f.root);
+    assert.deepEqual(building.list().map(d => d.section), ['main', 'main']);
+    // Make the persistence target unwritable without depending on OS permission semantics.
+    unlinkSync(file);
+    mkdirSync(file);
+    assert.match(building.setSection('legacy', 'backoffice')!, /could not be saved/);
+    assert.equal(building.list()[0].section, 'main');
+  } finally { f.close(); }
+});

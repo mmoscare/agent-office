@@ -1,9 +1,9 @@
 import type { FloorInfo, RepoChoice, ServerMsg } from '../../shared/protocol';
-import { floorPalette, normalizeRepo, sameRepo } from '../../shared/floors';
+import { floorPalette, normalizeRepo, sameRepo, type FloorSection } from '../../shared/floors';
 import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { Net } from '../net';
 import { store } from '../state';
-import { h, openModal, timeAgo, type Modal } from './dom';
+import { h, openModal, timeAgo, toast, type Modal } from './dom';
 import { localFloorPicker } from './local-floor';
 
 // The elevator's panel: a button for every floor, plus opening a local folder or cloning a GitHub
@@ -12,6 +12,7 @@ import { localFloorPicker } from './local-floor';
 
 export interface ElevatorOptions {
   net: Net;
+  section?: FloorSection;
   ride(floorId: string): void;
 }
 
@@ -44,10 +45,16 @@ export function openElevator(opts: ElevatorOptions): void {
   let error = '';
   let showAdd = setup || !store.floors.length;
   let source: 'local' | 'github' = 'local';
+  let section: FloorSection = opts.section ?? 'main';
+  let localBusy = false;
+  const moving = new Set<string>();
   /** The search box and list are in place (rebuilding them would lose the focus mid-typing). */
   let built = false;
 
   const floorsEl = h('div.floors');
+  const title = h('h2');
+  const back = h('button.btn', { type: 'button' }, '← Main floors');
+  back.addEventListener('click', () => setSection('main'));
   const addEl = h('div.add');
   const input = h('input', { type: 'text', placeholder: 'Search your repositories, or type owner/name', 'aria-label': 'Repository', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
   const listEl = h('div.repo-list', { role: 'listbox', 'aria-label': 'Repositories' });
@@ -59,8 +66,10 @@ export function openElevator(opts: ElevatorOptions): void {
   const githubTab = h('button.btn', { type: 'button', 'aria-pressed': 'false' }, 'Clone from GitHub');
   const sourceChoice = h('div.floor-source', { role: 'group', 'aria-label': 'Project source' }, localTab, githubTab);
   const local = localFloorPicker((floor) => { modal.close(); opts.ride(floor); }, (busy) => {
+    localBusy = busy;
     localTab.disabled = githubTab.disabled = busy;
-  });
+    renderFloors();
+  }, () => section);
   const focusSource = () => source === 'local' ? local.focus() : input.focus();
 
   const needRepos = () => {
@@ -96,7 +105,25 @@ export function openElevator(opts: ElevatorOptions): void {
       modal.close();
       opts.ride(f.id);
     });
-    return btn;
+    const destination = f.section === 'backoffice' ? 'main' : 'backoffice';
+    const label = destination === 'main' ? 'Move to main floors' : 'Move to Backoffice';
+    const move = h('button.btn.floor-move', { type: 'button', disabled: f.cloning || moving.has(f.id), 'aria-label': `${label}: ${f.name}`, title: label }, destination === 'main' ? '↑ Main' : '↓ Backoffice');
+    move.addEventListener('click', async () => {
+      if (moving.has(f.id)) return;
+      moving.add(f.id);
+      move.disabled = true;
+      try {
+        const response = await fetch('/api/floors/section', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ floor: f.id, section: destination }) });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error ?? 'Could not move the project');
+      } catch (err) {
+        toast((err as Error).message, 'error');
+      } finally {
+        moving.delete(f.id);
+        if (current === modal) renderFloors();
+      }
+    });
+    return h('div.floor-entry', {}, btn, move);
   };
 
   /** The roof, over every floor: the rooftop bar. */
@@ -120,10 +147,32 @@ export function openElevator(opts: ElevatorOptions): void {
 
   const renderFloors = () => {
     const floors = store.floors;
-    floorsEl.replaceChildren(
-      ...(floors.some((f) => !f.cloning) ? [roofButton()] : []),
-      ...(floors.length ? floors.map(floorButton) : [h('p.empty', {}, 'No floors yet.')]),
+    title.textContent = section === 'backoffice' ? 'B · Backoffice' : setup ? '🏢 Welcome to Agent Office' : '🛗 Elevator';
+    back.disabled = !!adding || localBusy;
+    const visible = floors.filter(f => (f.section ?? 'main') === section);
+    const basement = floors.filter(f => f.section === 'backoffice');
+    const basementButton = h('button.floor-btn', { type: 'button', disabled: !!adding || localBusy, 'aria-label': 'Basement: Backoffice' },
+      h('span.floor-no', { style: 'background:#3d5a80' }, 'B'),
+      h('span.floor-text', {}, h('span.floor-name', {}, 'Backoffice', basement.some(f => f.id === store.floor) ? h('span.here-tag', {}, 'you are here') : null), h('span.floor-sub', {}, `Basement · ${basement.length} project${basement.length === 1 ? '' : 's'} · Open repository menu`)),
+      h('span.floor-stats', {}, '→'),
     );
+    basementButton.addEventListener('click', () => setSection('backoffice'));
+    floorsEl.replaceChildren(
+      ...(section === 'backoffice' ? [back, h('p.note', {}, 'Basement projects. Open a repository below, or add a local folder or GitHub repository.')] : floors.some(f => !f.cloning) ? [roofButton()] : []),
+      ...(visible.length ? visible.map(f => floorButton(f, floors.indexOf(f))) : [h('p.empty', {}, section === 'backoffice' ? 'No Backoffice projects yet. Add a project below or move one here from the main floors.' : 'No main floors yet.')]),
+      ...(section === 'main' ? [basementButton] : []),
+    );
+  };
+
+  const setSection = (next: FloorSection) => {
+    if (adding || localBusy) return;
+    section = next;
+    showAdd = false;
+    built = false;
+    error = '';
+    renderFloors();
+    renderAdd();
+    (next === 'backoffice' ? back : floorsEl.querySelector<HTMLButtonElement>('[aria-label="Basement: Backoffice"]'))?.focus();
   };
 
   const repoRow = (r: RepoChoice) => {
@@ -134,7 +183,7 @@ export function openElevator(opts: ElevatorOptions): void {
       h('span.nm', {}, r.name),
       r.private ? h('span', { title: 'Private' }, '🔒') : null,
       h('span.desc', {}, r.description ?? ''),
-      floor ? h('span.pill', {}, floor.id === store.floor ? 'you are here' : `floor ${store.floors.indexOf(floor) + 1}`) : r.pushedAt ? h('span.when', {}, timeAgo(r.pushedAt)) : null,
+      floor ? h('span.pill', {}, floor.id === store.floor ? 'you are here' : `${floor.section === 'backoffice' ? 'Backoffice · ' : ''}floor ${store.floors.indexOf(floor) + 1}`) : r.pushedAt ? h('span.when', {}, timeAgo(r.pushedAt)) : null,
     );
     row.addEventListener('click', () => {
       if (adding) return;
@@ -219,14 +268,16 @@ export function openElevator(opts: ElevatorOptions): void {
     adding = repo;
     localTab.disabled = githubTab.disabled = true;
     error = '';
+    renderFloors();
     renderAdd();
-    net.send({ t: 'floor.add', repo });
+    net.send({ t: 'floor.add', repo, section });
   };
 
   const onAdded = (msg: Extract<ServerMsg, { t: 'floor.added' }>) => {
     if (!adding || msg.repo !== adding) return;
     adding = null;
     localTab.disabled = githubTab.disabled = false;
+    renderFloors();
     if (msg.error || !msg.floor) {
       error = msg.error ?? 'The floor could not be added';
       renderAdd();
@@ -283,7 +334,7 @@ export function openElevator(opts: ElevatorOptions): void {
   const el = h(
     'div.modal.elevator',
     { role: 'dialog', 'aria-label': 'Elevator' },
-    h('header', {}, h('h2', {}, setup ? '🏢 Welcome to Agent Office' : '🛗 Elevator'), close),
+    h('header', {}, title, close),
     h('div.body', {}, intro, floorsEl, addEl),
     h('footer', {}, h('span.grow', {}, setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'), local.button, addBtn),
   );
