@@ -4,3 +4,7 @@ dist
 *.log
 .DS_Store
 pw.txt
+# Local secrets for the Plan balances widget (see .env.example). Never commit them.
+.env
+.env.*
+!.env.example

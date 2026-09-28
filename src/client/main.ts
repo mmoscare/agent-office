@@ -69,6 +69,7 @@ import { toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
+import { initBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { mountHud } from './ui/menu';
@@ -1180,6 +1181,7 @@ store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
 setInterval(renderLimits, 30_000);
 $('limits').addEventListener('click', () => net.send({ t: 'limits.refresh' }));
+initBalances();
 
 // ---- Actions ------------------------------------------------------------------------------------
 function freeDesk(): string | null {

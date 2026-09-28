@@ -20,6 +20,8 @@ import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
 import { ModelUsageLedger } from './model-usage.js';
+import { Balances } from './balances.js';
+import { isBalanceProvider } from '../shared/balances.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
 import { MAX_WORKER_LIMIT, Machine, parseWorkerLimit } from './machine.js';
@@ -368,6 +370,8 @@ export async function startServer(cfg: Config) {
     toastAll,
   );
   const modelUsage = new ModelUsageLedger(cfg.dataDir);
+  // Money on the AI provider accounts, for the Plan balances panel (admins only).
+  const balances = new Balances(cfg.dataDir);
 
   // The Claude plan's 5-hour and weekly limits, for the meter under the workers: one account for
   // every floor.
@@ -726,6 +730,22 @@ export async function startServer(cfg: Config) {
           }
         }
         return send(res, 200, { records: modelUsage.list(), waiting, saveError: modelUsage.saveError });
+      }
+      if (p === '/api/balances' || p === '/api/balances/login' || p === '/api/balances/logout') {
+        if (!meOf(session.account?.id).admin) return send(res, 403, { error: 'Only admins can see the balances' });
+        if (req.method === 'GET' && p === '/api/balances') return send(res, 200, await balances.state(url.searchParams.has('refresh')));
+        if (req.method !== 'POST' || p === '/api/balances') return send(res, 405, { error: 'Method not allowed' });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: Record<string, unknown>;
+        try { body = JSON.parse(await readBody(req, 4096)); }
+        catch { return send(res, 400, { error: 'Bad request' }); }
+        if (!isBalanceProvider(body?.provider)) return send(res, 400, { error: 'Unknown provider' });
+        if (p === '/api/balances/logout') balances.logout(body.provider);
+        else {
+          const error = await balances.login(body.provider, str(body.key, 1024), str(body.team, 256));
+          if (error) return send(res, 200, { error });
+        }
+        return send(res, 200, await balances.state());
       }
       if (p === '/api/folders' && req.method === 'GET') {
         try {
