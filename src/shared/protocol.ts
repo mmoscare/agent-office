@@ -664,6 +664,8 @@ export interface FloorInfo {
   cloning?: boolean;
   addedBy: string;
   addedAt: number;
+  /** Filed in the basement's Back Office: grouped apart in the elevator and floor menu, an ordinary floor otherwise. */
+  backOffice?: boolean;
   /**
    * For the elevator panel: who's there and what they're up to. `workers` counts the ones hired onto
    * desks, bean bags and the meeting room's table, not the board agents at their kiosks.
@@ -1119,7 +1121,9 @@ export type ClientMsg =
   /** The repositories that could become a floor; answered with `floor.repos`. */
   | { t: 'floor.repos'; refresh?: boolean }
   /** Clone a repository and make it a new floor; answered with `floor.added` once it's there. */
-  | { t: 'floor.add'; repo: string }
+  | { t: 'floor.add'; repo: string; backOffice?: boolean }
+  /** File a floor in the basement's Back Office (`on`), or bring it back up to the main floors. */
+  | { t: 'floor.backOffice'; floor: string; on: boolean }
   /** Dress the building up for a holiday, take the decorations down ('off'), or follow the calendar ('auto'). */
   | { t: 'theme.set'; pick: ThemePick }
   /** Where new floors are cloned from now on (admins only); '' goes back to the default. */

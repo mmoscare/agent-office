@@ -250,7 +250,7 @@ export async function startServer(cfg: Config) {
   };
   const floorInfos = (): FloorInfo[] => [
     ...[...floors.values()].map((f) => f.info()),
-    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
+    ...building.pending().map((d) => ({ id: d.id, name: d.name, repo: d.repo, dir: d.dir, palette: d.palette, addedBy: d.addedBy, addedAt: d.addedAt, ...(d.backOffice ? { backOffice: true } : {}), cloning: true, workers: 0, busy: 0, waiting: 0, attention: [], people: 0 })),
   ];
   // The elevator's counts change with every worker update; tell everyone at most a few times a second.
   let floorsSent = '';
@@ -978,11 +978,11 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/floors/local' && req.method === 'POST') {
         if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
-        let body: { dir?: unknown } | null;
+        let body: { dir?: unknown; backOffice?: unknown } | null;
         try { body = JSON.parse(await readBody(req, 16 * 1024)); }
         catch { return send(res, 400, { error: 'Enter a full folder path' }); }
         const who = session.account?.name ?? 'the office';
-        const def = building.addLocal(body?.dir, who);
+        const def = building.addLocal(body?.dir, who, body?.backOffice === true);
         if (typeof def === 'string') return send(res, 400, { error: def });
         const existing = floors.get(def.id);
         const floor = existing ?? openFloor(def);
@@ -1462,7 +1462,7 @@ export async function startServer(cfg: Config) {
           .add(repo, who, (def) => {
             floorsChanged();
             toastAll(`🛗 ${who} is adding a floor for ${def.repo ?? def.name}…`);
-          })
+          }, msg.backOffice === true)
           .then((r) => {
             floorsChanged();
             if (typeof r === 'string') return sendTo(c, { t: 'floor.added', repo, error: r });
@@ -1472,6 +1472,17 @@ export async function startServer(cfg: Config) {
             toastAll(`🛗 New floor: ${r.name}, added by ${who}`);
             sendTo(c, { t: 'floor.added', repo, floor: floor.id });
           });
+        break;
+      }
+      case 'floor.backOffice': {
+        const on = msg.on === true;
+        const r = building.setBackOffice(str(msg.floor, 64), on);
+        if (typeof r === 'string') {
+          warn(c, r);
+          break;
+        }
+        floorsChanged();
+        toastAll(on ? `🗄️ ${who} filed ${r.name} in the Back Office` : `🛗 ${who} brought ${r.name} back up to the floors`);
         break;
       }
       case 'floor.projectsDir': {

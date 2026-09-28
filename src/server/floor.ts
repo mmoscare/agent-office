@@ -282,6 +282,7 @@ export class Floor {
       palette: this.def.palette,
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
+      ...(this.def.backOffice ? { backOffice: true } : {}),
       ...summarizeWorkers(ws),
       people: this.ctx.people(this),
     };
