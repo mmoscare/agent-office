@@ -2,6 +2,7 @@
 
 import type { Look } from './avatar.js';
 import type { WorkerWorkspace, WorkspaceRequest } from './workspaces.js';
+import type { RosterEntry } from './roster.js';
 import type { CabinetFrame, CabinetState, CabinetView } from './cabinet.js';
 import type { DecorPlacement, Decoration } from './decor.js';
 import type { DogState } from './dog.js';
@@ -720,6 +721,8 @@ export interface FloorInfo {
   /** Workers waiting on someone: input, an unread completion, or an unread failure. */
   waiting: number;
   attention: WorkerAttention[];
+  /** Everyone working there and what they're on, for the queue agent's clipboard (see shared/roster.ts). */
+  roster?: RosterEntry[];
   people: number;
 }
 
