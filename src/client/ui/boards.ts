@@ -1,5 +1,6 @@
 import { DESK_BY_ID } from '../../shared/layout';
 import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo } from '../../shared/protocol';
+import { agentForBranch } from '../../shared/pulls';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
@@ -85,6 +86,12 @@ function workerChip(w: WorkerInfo, title: string) {
 /** A chip naming the worker and desk a pull request came from. */
 function deskChip(w: WorkerInfo) {
   return workerChip(w, `Opened from ${w.name}'s desk (${w.worktree?.branch ?? 'its branch'})`);
+}
+
+/** The agent whose branch a pull request came from, once its worker has left the desk: small, beside the author. */
+function agentChip(pr: GhPull): Node | '' {
+  const name = agentForBranch(pr.headRefName);
+  return name ? h('span.pr-agent', { title: `Submitted by ${name} (${pr.headRefName})` }, `🤖 ${name}`) : '';
 }
 
 /** Where an issue stands on the 📋 queue, for its card. */
@@ -218,7 +225,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
               it,
               [
                 repoChip(it),
-                w ? deskChip(w) : '',
+                w ? deskChip(w) : agentChip(it),
                 ...labelChips(it.labels),
                 `by ${it.author}`,
                 it.reviewDecision === 'CHANGES_REQUESTED' ? '🛠 changes requested' : '',
