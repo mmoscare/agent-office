@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { guessWorkKind, isWorkKind, WORK_KINDS } from '../src/shared/work-kind.js';
-import { fallbackTask } from '../src/server/tasks.js';
+import { fallbackTask, withKind } from '../src/server/tasks.js';
 
 test('prompts read as the kind of work they ask for', () => {
   const cases: [string, string | undefined][] = [
@@ -39,4 +39,15 @@ test('the fallback label carries a guessed kind when there is one', () => {
   assert.equal(fallbackTask('Fix the broken login redirect').kind, 'bug');
   assert.equal(fallbackTask('hello there').kind, undefined);
   assert.ok(!('kind' in fallbackTask('hello there')));
+});
+
+test('a label saved without a kind gets one from the prompts or branch, and a known kind is kept', () => {
+  const legacy = { name: 'Login Redirect', summary: 'Working on the login redirect' };
+  assert.deepEqual(withKind(legacy, ['Fix the broken login redirect']), { ...legacy, kind: 'bug' });
+  assert.deepEqual(withKind(legacy, ['hello'], 'office/docs/setup'), { ...legacy, kind: 'docs' });
+  assert.equal(withKind(legacy, ['hello there']), legacy);
+  assert.ok(!('kind' in withKind(legacy, ['hello there'])!));
+  const known = { ...legacy, kind: 'review' as const };
+  assert.equal(withKind(known, ['Fix the broken login redirect']), known);
+  assert.equal(withKind(undefined, ['Fix the broken login redirect']), undefined);
 });

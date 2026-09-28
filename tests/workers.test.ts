@@ -909,3 +909,27 @@ test('a worker is stamped with when it started waiting on someone, afresh each t
   assert.equal(worker.status, 'done');
   assert.ok(worker.waitingSince! > asked, 'finishing is a new wait');
 });
+
+test('task labels saved before work kinds existed get a kind guessed from the saved prompt or branch', (t) => {
+  const f = fixture();
+  t.after(() => f.close());
+  const legacy = (id: string, deskId: string, provider: AgentProvider, prompt: string, branch?: string) => ({
+    id, deskId, kind: 'agent', provider, name: id, prompt,
+    worktree: branch ? { path: path.join(f.root, id), branch, base: 'main' } : undefined,
+    task: { name: 'Old Label', summary: 'Saved by an earlier version' },
+  });
+  writeFileSync(path.join(f.data, 'workers.json'), JSON.stringify([
+    legacy('codex-one', 'desk-1', 'codex', 'Fix the broken login redirect'),
+    legacy('opencode-one', 'desk-2', 'opencode', 'hello', 'office/docs/setup'),
+    legacy('codex-two', 'desk-3', 'codex', 'hello there'),
+  ]));
+  const restored = manager(f, f.codex, []);
+  t.after(() => restored.shutdown());
+  assert.equal(restored.get('codex-one')?.task?.kind, 'bug');
+  assert.equal(restored.get('opencode-one')?.task?.kind, 'docs');
+  assert.equal(restored.get('codex-two')?.task?.kind, undefined);
+  assert.equal(restored.get('codex-two')?.task?.name, 'Old Label');
+  restored.shutdown();
+  const saved = JSON.parse(readFileSync(path.join(f.data, 'workers.json'), 'utf8')) as WorkerInfo[];
+  assert.deepEqual(saved.map((s) => s.task?.kind), ['bug', 'docs', undefined]);
+});

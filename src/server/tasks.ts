@@ -126,6 +126,17 @@ export function fallbackTask(prompt: string, branch?: string): WorkerTask {
   return { name: cap(clip(name, NAME_MAX)), summary: cap(clip(one, SUMMARY_MAX)), ...(kind && { kind }) };
 }
 
+/**
+ * A label without a kind (saved before kinds existed, or from a prompt like "hello") gets one guessed
+ * from the prompts and branch, so workers whose labels are never renamed (Codex, OpenCode) still get
+ * coloured. A label that has a kind, or that nothing reads as one kind, is returned as it is.
+ */
+export function withKind(task: WorkerTask | undefined, prompts: readonly string[], branch?: string): WorkerTask | undefined {
+  if (!task || task.kind) return task;
+  const kind = guessWorkKind(prompts, branch);
+  return kind ? { ...task, kind } : task;
+}
+
 function describe(ctx: TaskContext): string {
   const parts: string[] = [];
   if (ctx.previous) parts.push(`Current label:\nName: ${ctx.previous.name}\nSummary: ${ctx.previous.summary}`);

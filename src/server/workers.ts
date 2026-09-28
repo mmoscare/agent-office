@@ -21,7 +21,7 @@ import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
-import { TaskNamer, fallbackTask } from './tasks.js';
+import { TaskNamer, fallbackTask, withKind } from './tasks.js';
 import { addUsage, newTracker, restoreTracker, scanTracker, trackerUsage, zeroUsage, type Ledger, type UsageTracker } from './usage.js';
 import { PtyHost, SCROLLBACK, type Adopted, type Pty } from './ptys.js';
 import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
@@ -917,6 +917,7 @@ export class WorkerManager {
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
     if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
+    else w.info.task = withKind(w.info.task, w.prompts, w.info.worktree?.branch);
     if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
@@ -1597,6 +1598,8 @@ process.stdin.on('end', () => {
           w.saved = { ptyId: s.pty.id, status, acked: s.pty.acked !== false, waitingSince: typeof s.pty.waitingSince === 'number' ? s.pty.waitingSince : undefined };
         }
         if (info.prompt) w.prompts = [info.prompt.replace(/\s+/g, ' ').trim()];
+        // A label saved before work kinds existed: guess one now, and it's written back on the next save.
+        info.task = withKind(info.task, w.prompts, info.worktree?.branch);
         this.workers.set(info.id, w);
       }
     } catch {
