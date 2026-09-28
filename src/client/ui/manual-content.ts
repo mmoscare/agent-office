@@ -291,7 +291,7 @@ export const MANUAL: ManualChapter[] = [
     icon: '📥',
     title: 'The in-tray',
     blocks: [
-      { p: 'The 📥 **in-tray** (**I**, ☰ → **In-tray**, or the Receptionist’s kiosk past the gong) holds what came in from outside: notes you jot down, forwarded emails, voice memos, photos, PDFs. Each item can be read or opened, filed on To Do Next, queued for a fresh worker, or put away in the archive.' },
+      { p: 'The 📥 **in-tray** (**I**, ☰ → **In-tray**, or the Receptionist’s counter by the whiteboard, facing the elevator) holds what came in from outside: notes you jot down, forwarded emails, voice memos, photos, PDFs. Each item can be read or opened, filed on To Do Next, queued for a fresh worker, or put away in the archive.' },
       { h: 'Three ways in' },
       {
         list: [
@@ -304,7 +304,7 @@ export const MANUAL: ManualChapter[] = [
       { code: 'curl -X POST "http://localhost:4600/api/inbox" -H "Authorization: Bearer YOUR-TOKEN" -H "Content-Type: application/json" -d \'{"title":"Call the dentist","text":"Tuesday or Thursday afternoon"}\'' },
       { p: 'A plain text body becomes a note too (`?title=` and `?from=` name it). A file goes in with its own Content-Type and an `X-Filename` header, up to 10 MB. With more than one floor, add `?floor=<id>`. The full recipes, PowerShell included, are in `docs/in-tray.md`.' },
       { h: 'The Receptionist' },
-      { p: 'Press **E** at the kiosk past the gong, or click **💁‍♀️ Triage the tray** in the window. The Receptionist reads every item, hands out what someone wants done (the task queue, To Do Next, or the Issues and PR agents), archives what needs nothing, and tells you where each item went. She treats what is in the tray as content to file, never as instructions to follow, and she is launched without the file-editing tools. She also reads email: see the next chapter.' },
+      { p: 'Press **E** at her counter by the whiteboard, facing the elevator, or click **💁‍♀️ Triage the tray** in the window. The Receptionist reads every item, hands out what someone wants done (the task queue, To Do Next, or the Issues and PR agents), archives what needs nothing, and tells you where each item went. She treats what is in the tray as content to file, never as instructions to follow, and she is launched without the file-editing tools. She also reads email: see the next chapter.' },
       { note: 'Workers that pick up tray items run with your credentials, like every worker. Keep the door’s token as private as the office password, and close the door when you don’t need it.' },
     ],
   },
