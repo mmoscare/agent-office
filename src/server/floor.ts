@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
+import { floorRoster } from '../shared/roster.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
@@ -265,6 +266,7 @@ export class Floor {
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
       ...summarizeWorkers(ws),
+      roster: floorRoster(ws, this.def.repo || this.def.name),
       people: this.ctx.people(this),
     };
   }

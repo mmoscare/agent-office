@@ -80,6 +80,9 @@ import { whereabouts } from './ui/whereabouts';
 import { wayTo } from './walkto';
 import { MeetingBoardTexture, MeetingSignTexture, meetingStage } from './world/meeting';
 import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
+import { ClipboardSheet, clipboardProp } from './world/clipboard';
+import { currentRoster, openClipboard } from './ui/clipboard';
+import { rosterByRepo } from '../shared/roster';
 
 // ---- Renderer & scene ---------------------------------------------------------------------------
 const canvas = $('scene') as HTMLCanvasElement;
@@ -139,6 +142,8 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   pulls: { icon: '🔀', offer: 'Ask me about PRs', does: 'I sum up, review, comment on and merge them', example: 'Review the newest PR and tell me if it’s ready to merge' },
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
 };
+/** What everyone in the building is on, on the clipboard the queue agent carries (see Clipboard). */
+const clipboardSheet = new ClipboardSheet();
 /** The board agents waiting by their boards before anyone has asked them anything (see buildKiosk). */
 const idleAgents = STATIONS.map((def) => {
   const kind = def.station!;
@@ -146,6 +151,7 @@ const idleAgents = STATIONS.map((def) => {
   const model = new Worker(agent.name, agent.color);
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
+  if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
@@ -1020,6 +1026,8 @@ function syncWorkers() {
       departures.vacate(w.deskId);
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
+      // The queue agent never goes anywhere without its clipboard.
+      if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
       desk.seatAnchor.add(model.root);
       // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over
       // its head and the back of its chair, so it shows from across the room.
@@ -1122,6 +1130,19 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+// ---- Clipboard ------------------------------------------------------------------------------------
+// The queue agent's clipboard lists every worker in the building by repository; walk up to it and
+// press C to read it all (see ui/clipboard.ts).
+const renderClipboard = () => clipboardSheet.render(rosterByRepo(currentRoster()));
+for (const topic of ['workers', 'floors', 'floor', 'project'] as const) store.on(topic, renderClipboard);
+renderClipboard();
+function showClipboard() {
+  openClipboard((floorId, workerId) => {
+    if (trip) return;
+    if (!floorId || floorId === store.floor) openWorkerTerminal(workerId);
+    else ride(floorId, workerId);
+  });
+}
 mountAttention((floorId, workerId) => {
   if (trip) return;
   if (floorId === store.floor) openWorkerTerminal(workerId);
@@ -1536,6 +1557,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (target.kind === 'station' && target.deskId) {
     const w = store.workerAtDesk(target.deskId);
     if (key === 'E' || key === 'P') return askStation(target.deskId);
+    if (key === 'C' && DESK_BY_ID.get(target.deskId)?.station === 'queue') return showClipboard();
     if (key === 'O' && w) return openWorkerTerminal(w.id);
     if (key === 'X' && w) return killWorker(w.id);
     return;
@@ -2198,6 +2220,7 @@ function stationHint(deskId: string): Hint {
         h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
         aside(info.offer.replace(/^Ask me /, '')),
         full ? h('span.cost', {}, `🚫 Office full · ${m.workers} of ${m.limit} workers`) : key('E', 'Prompt'),
+        kind === 'queue' ? key('C', 'Clipboard') : '',
       ],
     };
   }
@@ -2212,6 +2235,7 @@ function stationHint(deskId: string): Hint {
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       key('O', 'Terminal'),
+      kind === 'queue' ? key('C', 'Clipboard') : '',
       key('X', 'Send home'),
     ],
   };
