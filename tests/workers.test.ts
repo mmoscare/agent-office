@@ -929,6 +929,10 @@ test('a Claude worker acts out its latest tool call, and puts its head in its ha
   hook('PostToolUseFailure', { ...npmTest, error: 'Interrupted', is_interrupt: true });
   assert.equal(action(), undefined);
   assert.equal(workers.get(worker.id)?.status, 'interrupted');
+  hook('Stop', {});
+  assert.equal(workers.get(worker.id)?.status, 'interrupted', 'a late Stop cannot complete the cancelled turn');
+  // Claude needs a new prompt after Esc before it can continue editing.
+  hook('UserPromptSubmit', { prompt: 'continue fixing the tests' });
   hook('PreToolUse', { tool_name: 'Edit', tool_input: { file_path: 'src/a.ts' } });
   assert.equal(action(), 'edit');
   // Failed again, by the summary it printed through the pipe: head in hands, until its next tool call.
