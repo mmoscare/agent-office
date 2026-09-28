@@ -3,9 +3,12 @@ import { DESK_BY_ID } from '../../shared/layout';
 import { ghRef, type GhIssue, type GhPull, type GhState, type QueueState, type QueueTask, type ServiceInfo, type WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
 import { stoppedByRestart, taskStatus } from '../../shared/task-status';
+import { comparePulls, pullStatus, type PullStatusKey } from '../ui/pr-board-model';
 
 export const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
 export const PINS = ['#ef476f', '#118ab2', '#06d6a0', '#ffd166'];
+/** The --st-* colours of style.css, for the canvas. */
+const PULL_PINS: Record<PullStatusKey, string> = { conflict: '#ff7b00', failing: '#ef476f', ready: '#06d6a0', review: '#5bc0eb', changes: '#ff99c8', running: '#ffd166', draft: '#b8bcc6', merged: '#9b5de5', closed: '#a39a92' };
 
 export function wrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines: number): string[] {
   const words = text.split(/\s+/);
@@ -98,7 +101,8 @@ export class BoardTexture {
       g.fillStyle = rnd() > 0.5 ? 'rgba(120,70,30,.18)' : 'rgba(255,240,210,.18)';
       g.fillRect(rnd() * W, rnd() * H, 3, 3);
     }
-    const open = (state.items as (GhIssue | GhPull)[]).filter((i) => i.state === 'OPEN');
+    // Pull requests go up most urgent first, as on the board (ui/pr-board-model.ts), pinned in their status colour.
+    const open = this.kind === 'pulls' ? (state.items as GhPull[]).filter((i) => i.state === 'OPEN').sort(comparePulls) : (state.items as GhIssue[]).filter((i) => i.state === 'OPEN');
     if (!open.length) {
       const note = state.error ? `⚠️ ${state.error}` : state.loading && !state.fetchedAt ? 'Loading…' : this.kind === 'issues' ? 'No open issues 🎉' : 'No open PRs';
       g.font = '800 40px Nunito, ui-rounded, system-ui, sans-serif';
@@ -172,7 +176,7 @@ export class BoardTexture {
       }
       g.beginPath();
       g.arc(0, -nh / 2 + 10, 11, 0, Math.PI * 2);
-      g.fillStyle = PINS[i % PINS.length];
+      g.fillStyle = this.kind === 'pulls' ? PULL_PINS[pullStatus(it as GhPull).key] : PINS[i % PINS.length];
       g.fill();
       g.lineWidth = 3;
       g.strokeStyle = '#2b2d42';

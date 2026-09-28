@@ -1,5 +1,5 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo } from '../../shared/protocol';
+import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo } from '../../shared/protocol';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
@@ -7,6 +7,9 @@ import { h, openModal, timeAgo } from './dom';
 import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
 import type { MeetingPreset } from './meeting';
+import { ghTrouble, groupByRepo, manyRepos, pullSections, pullStatus } from './pr-board-model';
+import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
+import { unshippedSection } from './unshipped-list';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
@@ -60,17 +63,6 @@ function issueColumns(items: GhIssue[]): Column<GhIssue>[] {
   ];
 }
 
-function pullColumns(items: GhPull[]): Column<GhPull>[] {
-  const open = items.filter((p) => p.state === 'OPEN');
-  return [
-    { title: '✏️ Draft', items: open.filter((p) => p.isDraft) },
-    { title: '👀 In review', items: open.filter((p) => !p.isDraft && p.reviewDecision !== 'APPROVED') },
-    { title: '👍 Approved', items: open.filter((p) => !p.isDraft && p.reviewDecision === 'APPROVED') },
-    { title: '🎉 Merged', items: items.filter((p) => p.state === 'MERGED').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 30) },
-    { title: '🗑️ Closed', items: items.filter((p) => p.state === 'CLOSED').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 20) },
-  ];
-}
-
 function labelChips(labels: { name: string; color: string }[]) {
   return labels.slice(0, 4).map(labelChip);
 }
@@ -106,61 +98,119 @@ function repoChip(it: GhWhere): Node | '' {
   return it.repo ? h('span.qchip', { title: it.repo }, `📁 ${it.repoDir ?? it.repo}`) : '';
 }
 
-/**
- * The PR board's first column: office branches holding work that no open or merged PR carries (see
- * server/unshipped.ts), each with a button that queues a fresh worker to recover it into a PR.
- */
-function unshippedColumn(net: Net, actions: BoardActions): HTMLElement {
+/** The Unshipped work section, fed from the store (see ui/unshipped-list.ts). */
+function unshipped(net: Net, actions: BoardActions): HTMLElement {
   const u = store.unshipped;
-  const ul = h('ul');
-  if (u.error) ul.append(h('li.unshipped-note', {}, `Couldn't look through the branches: ${u.error}`));
-  if (u.prNote) ul.append(h('li.unshipped-note', {}, `❔ GitHub couldn't be asked about some branches (${u.prNote}), so they may have a PR after all. Showing what's on disk.`));
-  u.items.forEach((it) => ul.append(unshippedCard(it, net, actions)));
-  if (!u.items.length && !u.error) ul.append(h('li.empty', {}, u.scannedAt ? 'Nothing unshipped 🎉' : 'Looking through the branches…'));
-  const rescan = h('button.btn.unshipped-rescan', { type: 'button', title: 'Look through the branches again', disabled: u.scanning, onclick: () => net.send({ t: 'unshipped.scan' }) }, u.scanning ? '…' : '🔄');
-  return h(
-    'section.column.unshipped',
-    { title: 'Office branches with uncommitted changes or commits that no open or merged pull request carries' },
-    h('h4', {}, '🧳 Unshipped work', h('span', {}, rescan, ` ${u.items.length}`)),
-    ul,
-  );
+  const recoveryOf = (it: UnshippedItem) => store.queue.tasks.find((t) => t.title === recoveryTitle(it.branch, it.repository) && t.status !== 'done');
+  const workerOf = (it: UnshippedItem) => (it.workerId ? store.workers.get(it.workerId) : undefined);
+  return unshippedSection({
+    ...u,
+    recovery: (it) => {
+      const t = recoveryOf(it);
+      return t && { running: t.status === 'running', workerName: t.workerName };
+    },
+    workerColor: (it) => workerOf(it)?.color,
+    rescan: () => net.send({ t: 'unshipped.scan' }),
+    recover: (it) => net.send({ t: 'unshipped.recover', key: it.key }),
+    goToWorker: (it) => {
+      const w = workerOf(it);
+      if (w) actions.goToDesk(w.deskId);
+    },
+  });
 }
 
-function unshippedCard(it: UnshippedItem, net: Net, actions: BoardActions): HTMLElement {
-  const w = it.workerId ? store.workers.get(it.workerId) : undefined;
-  const recovery = store.queue.tasks.find((t) => t.title === recoveryTitle(it.branch, it.repository) && t.status !== 'done');
-  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-  const meta: (Node | string)[] = [
-    it.repository ? h('span.qchip', { title: it.repository }, `📁 ${it.repository}`) : '',
-    `🤖 ${it.workerName ?? 'unknown worker'} · ${it.worker === 'active' ? 'working' : it.worker === 'idle' ? 'at its desk' : 'gone'}`,
-    it.dirty ? h('span.unshipped-count', {}, `📝 ${plural(it.dirty, 'uncommitted file')}`) : '',
-    it.commits ? h('span.unshipped-count', {}, `📦 ${plural(it.commits, 'commit')} not on ${it.base ?? 'base'}`) : '',
-    it.unpushed ? `⬆ ${it.unpushed} unpushed` : '',
-    it.added || it.deleted ? h('span', {}, h('span', { style: 'color:#2a9d4b' }, `+${it.added ?? 0}`), ' ', h('span', { style: 'color:#c3423f' }, `-${it.deleted ?? 0}`)) : '',
-    it.pr === 'unknown' ? h('span.qchip', { title: 'GitHub could not be asked; it may have a PR' }, '❔ PR unknown') : '',
-    it.modifiedAt ? timeAgo(it.modifiedAt) : '',
-  ];
-  const action = it.worker === 'active'
-    ? h('span.qchip.running', { title: 'Its worker is still running; wait for it to finish' }, '🤖 in progress')
-    : recovery
-      ? h('span.qchip', {}, recovery.status === 'running' ? `🤖 recovery running · ${recovery.workerName ?? ''}` : '📋 recovery queued')
-      : h('button.btn', {
-          type: 'button',
-          title: `Queue a task: a fresh worker copies this work onto the latest ${it.base ?? 'base branch'} and opens a pull request, leaving this worktree as it is`,
-          onclick: (e: Event) => {
-            e.stopPropagation();
-            net.send({ t: 'unshipped.recover', key: it.key });
-          },
-        }, '📋 Queue a PR');
-  const open = () => w && actions.goToDesk(w.deskId);
-  return h(
-    'li.card.unshipped-card',
-    { tabindex: 0, title: it.path ? `Worktree: ${it.path}` : 'Its worktree folder is gone; only the branch is left', onclick: open, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && open()) as EventListener },
-    h('div.num', {}, `🌿 ${it.branch}`),
-    h('div.ttl', {}, it.taskTitle ?? it.path ?? it.branch),
-    h('div.meta', {}, ...meta.filter((m) => m !== '').map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
-    h('div.unshipped-action', {}, action),
+/** What to say when GitHub didn't answer, by why. */
+function troubleText(error: string, haveItems: boolean): { icon: string; text: string; sub: string } {
+  const kept = haveItems ? ' Showing the last list it gave.' : '';
+  switch (ghTrouble(error)) {
+    case 'rate-limit':
+      return { icon: '⏳', text: `GitHub's rate limit is reached.${kept}`, sub: 'The board tries again by itself; unshipped work is read from disk and still shows.' };
+    case 'setup':
+      return { icon: '🔑', text: `gh isn't set up on the server.${kept}`, sub: 'Install the GitHub CLI and run `gh auth login` where the office runs.' };
+    case 'offline':
+      return { icon: '📡', text: `Couldn't reach GitHub.${kept}`, sub: error };
+    default:
+      return { icon: '⚠️', text: `Couldn't load from GitHub.${kept}`, sub: error };
+  }
+}
+
+/** One pull request's row. */
+function pullRow(p: GhPull, showRepo: boolean, net: Net, actions: BoardActions): HTMLElement {
+  const st = pullStatus(p);
+  const w = st.tier === 'done' ? undefined : workerForPull(store.workers.values(), p);
+  const checks = st.key !== 'failing' && st.key !== 'running' && p.checks !== 'none' && st.tier !== 'done' ? h('span', { title: `Checks ${p.checks === 'pass' ? 'pass' : p.checks}` }, CHECK_ICON[p.checks]) : '';
+  return row({
+    key: `p:${ghKey(p)}`,
+    st: st.key,
+    pill: pill(st.key, st.icon, st.label, st.hint),
+    ref: showRepo ? ghRef(p) : `#${p.number}`,
+    title: p.title,
+    label: `${st.label}: ${ghRef(p)} ${p.title}`,
+    when: timeAgo(p.updatedAt),
+    compact: st.tier === 'done',
+    meta: [
+      h('span.prb-branch', { title: `${p.headRefName} into ${p.baseRefName}` }, `🌿 ${p.headRefName}`, h('span.prb-base', {}, ` → ${p.baseRefName}`)),
+      w ? deskChip(w) : '',
+      ...labelChips(p.labels),
+      `by ${p.author}`,
+      checks,
+      diffStat(p.additions, p.deletions),
+    ],
+    onOpen: () => openPull(p, net, actions),
+  });
+}
+
+/** Rows for a section, under a heading per repository on a floor of several. */
+function pullRows(items: GhPull[], showRepo: boolean, net: Net, actions: BoardActions): Node[] {
+  if (!showRepo) return items.map((p) => pullRow(p, false, net, actions));
+  return groupByRepo(items, (p) => p.repoDir ?? p.repo).flatMap((g) => [repoHeading(g.repo || 'this folder', g.items.length), ...g.items.map((p) => pullRow(p, true, net, actions))]);
+}
+
+/** Kept between redraws while the board is open. */
+interface PullsView {
+  doneOpen: boolean;
+  doneAll: boolean;
+}
+
+/**
+ * The Pull Requests board, top to bottom: a tally of what's where, then what needs you (PRs to
+ * merge, review or fix, and work not yet in a PR), what's under way, and what's finished. On a wide
+ * window the urgent sections sit on the left and the rest on the right; on a narrow one they stack.
+ */
+function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net: Net, actions: BoardActions, rerender: () => void) {
+  const st = store.pulls;
+  const loading = !st.fetchedAt && !st.error;
+  const unavailable = !!st.error && !st.items.length;
+  const showRepo = manyRepos(st.items.map((p) => p.repo));
+  const s = pullSections(st.items, view.doneAll ? Infinity : 10);
+  const trouble = st.error ? troubleText(st.error, st.items.length > 0) : undefined;
+
+  const jump = (id: string, icon: string, n: number | string, what: string, tone: string) =>
+    h('button.prb-chip', { type: 'button', class: `tone-${tone}`, title: `Go to ${what}`, onclick: () => body.querySelector(`#${id}`)?.scrollIntoView({ block: 'start' }) }, h('span', { 'aria-hidden': 'true' }, icon), h('b', {}, String(n)), what);
+  const pending = loading ? '…' : unavailable ? '?' : undefined;
+  tally.replaceChildren(
+    jump('prb-needs', '🙋', pending ?? s.needsYou.length, s.needsYou.length === 1 ? 'needs you' : 'need you', 'needs'),
+    jump('prb-unshipped', '🧳', store.unshipped.scannedAt ? store.unshipped.items.length : '…', 'unshipped', 'unshipped'),
+    jump('prb-progress', '🚧', pending ?? s.inProgress.length, 'in progress', 'progress'),
+    jump('prb-done', '🎉', pending ?? s.doneTotal, 'done', 'done'),
+    trouble ? h('div.prb-banner', { role: 'status', title: st.error }, h('span.big', { 'aria-hidden': 'true' }, trouble.icon), h('div', {}, h('b', {}, trouble.text), h('small', {}, trouble.sub))) : '',
   );
+
+  const blank = (icon: string, text: string, sub?: string): Node[] => (loading ? skeletonRows(2) : unavailable ? [emptyRow(trouble!.icon, 'GitHub unavailable', 'Pull requests show up here once it answers.')] : [emptyRow(icon, text, sub)]);
+  const needs = section({ id: 'prb-needs', tone: 'needs', icon: '🙋', title: 'Needs you', count: s.needsYou.length, hint: 'merge, review or fix', rows: s.needsYou.length ? pullRows(s.needsYou, showRepo, net, actions) : blank('☕', 'Nothing waiting on you', 'Pull requests to review or merge land here.') });
+  const progress = section({ id: 'prb-progress', tone: 'progress', icon: '🚧', title: 'In progress', count: s.inProgress.length, hint: 'drafts, running checks, changes asked', rows: s.inProgress.length ? pullRows(s.inProgress, showRepo, net, actions) : blank('🌱', 'Nothing in flight') });
+
+  const doneRows = s.done.length ? pullRows(s.done, showRepo, net, actions) : blank('📭', 'Nothing merged yet');
+  if (s.doneTotal > s.done.length || view.doneAll) {
+    doneRows.push(h('li.prb-more', {}, h('button.btn.prb-tool', { type: 'button', onclick: () => ((view.doneAll = !view.doneAll), rerender()) }, view.doneAll ? 'Show fewer' : `Show all ${s.doneTotal}`)));
+  }
+  const done = section({ id: 'prb-done', tone: 'done', icon: '🎉', title: 'Recently done', count: s.doneTotal, hint: 'merged and closed', rows: doneRows });
+  // Folds away, and stays as you left it across refreshes.
+  const fold = h('button.btn.prb-tool', { type: 'button', 'aria-expanded': String(view.doneOpen), title: view.doneOpen ? 'Fold away' : 'Unfold', onclick: () => ((view.doneOpen = !view.doneOpen), rerender()) }, view.doneOpen ? '▾' : '▸');
+  done.querySelector('h3')!.append(fold);
+  done.classList.toggle('folded', !view.doneOpen);
+
+  body.replaceChildren(h('div.prb-main', {}, needs, progress), h('div.prb-side', {}, unshipped(net, actions), done));
 }
 
 function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick: () => void) {
@@ -181,60 +231,53 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   const refresh = h('button.btn', { title: 'Refresh from GitHub', onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const git = kind === 'pulls' && actions.gitBoard ? h('button.btn', { title: 'Turn the board over to the Git repositories on this floor', onclick: () => { modal.close(); actions.gitBoard?.(); } }, '🌿 Git') : null;
-  const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close), body);
+  const tally = h('div.prb-tally');
+  const el = h(
+    kind === 'pulls' ? 'div.modal.board.pr-board' : 'div.modal.board',
+    { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' },
+    h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close),
+    kind === 'pulls' ? tally : null,
+    body,
+  );
+  if (kind === 'pulls') body.classList.add('prb-body');
+  const view: PullsView = { doneOpen: true, doneAll: false };
 
   const render = () => {
     const st = kind === 'issues' ? store.issues : store.pulls;
     status.textContent = st.loading ? 'Refreshing…' : st.fetchedAt ? `Updated ${timeAgo(st.fetchedAt)}` : '';
+    if (kind === 'pulls') {
+      // Every refresh rebuilds the board: keep its scroll, and keyboard focus on the same row or button.
+      const focused = document.activeElement instanceof HTMLElement && body.contains(document.activeElement) ? document.activeElement : null;
+      const focusKey = focused?.closest<HTMLElement>('[data-key]')?.dataset.key;
+      const focusIsRow = !!focused?.matches('[data-key]');
+      const focusSection = focused?.closest('section')?.id;
+      const { scrollTop } = body;
+      renderPulls(body, tally, view, net, actions, render);
+      body.scrollTop = scrollTop;
+      if (focused) {
+        const row = focusKey ? body.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`) : null;
+        const target = row && !focusIsRow ? row.querySelector<HTMLElement>('button') : row ?? (focusSection ? body.querySelector<HTMLElement>(`#${focusSection} h3 button:last-child`) : null);
+        target?.focus({ preventScroll: true });
+      }
+      return;
+    }
     // Every refresh rebuilds the columns, so note how far each was scrolled and put it back afterwards.
     const scrolled = [...body.querySelectorAll('.column > ul')].map((ul) => ul.scrollTop);
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
     if (st.error && !st.items.length) {
-      // What's on disk doesn't need GitHub: unshipped work still shows when it can't be reached.
-      if (kind === 'pulls') body.append(unshippedColumn(net, actions));
       body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, "The server runs `gh` in the floor's folder, or in each GitHub checkout inside it when the folder isn't one itself — make sure it is installed and authenticated (gh auth login).")));
       return;
     }
-    if (kind === 'issues') {
-      for (const col of issueColumns(store.issues.items)) {
-        const ul = h('ul');
-        col.items.forEach((it, i) =>
-          ul.append(
-            card(it, [repoChip(it), ...labelChips(it.labels), queueChip(it), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
-          ),
-        );
-        if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
-        body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
-      }
-    } else {
-      body.append(unshippedColumn(net, actions));
-      for (const col of pullColumns(store.pulls.items)) {
-        const ul = h('ul');
-        col.items.forEach((it, i) => {
-          const w = workerForPull(store.workers.values(), it);
-          ul.append(
-            card(
-              it,
-              [
-                repoChip(it),
-                w ? deskChip(w) : '',
-                ...labelChips(it.labels),
-                `by ${it.author}`,
-                it.reviewDecision === 'CHANGES_REQUESTED' ? '🛠 changes requested' : '',
-                CHECK_ICON[it.checks],
-                h('span', { style: 'color:#2a9d4b' }, `+${it.additions}`),
-                h('span', { style: 'color:#c3423f' }, `-${it.deletions}`),
-                timeAgo(it.updatedAt),
-              ],
-              i,
-              () => openPull(it, net, actions),
-            ),
-          );
-        });
-        if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
-        body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
-      }
+    for (const col of issueColumns(store.issues.items)) {
+      const ul = h('ul');
+      col.items.forEach((it, i) =>
+        ul.append(
+          card(it, [repoChip(it), ...labelChips(it.labels), queueChip(it), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
+        ),
+      );
+      if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
+      body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
     }
     body.querySelectorAll('.column > ul').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
     body.scrollLeft = scrollLeft;

@@ -464,7 +464,7 @@ export class GitHub {
     this.pulls = { ...this.pulls, loading: true };
     this.onPulls(this.pulls);
     try {
-      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
+      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,mergeable,body,closingIssuesReferences';
       const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
         const [open, merged, closed] = await Promise.all([
           gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], dir),
@@ -490,6 +490,7 @@ export class GitHub {
           additions: p.additions ?? 0,
           deletions: p.deletions ?? 0,
           checks: checksOf(p.statusCheckRollup),
+          mergeable: p.mergeable ?? 'UNKNOWN',
           body: String(p.body ?? '').slice(0, 4000),
           closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
         }));
