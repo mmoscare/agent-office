@@ -63,6 +63,12 @@ const SCREEN_INTERVAL_MS = 250;
 /** What a worker with a live terminal can be doing. */
 const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input', 'paused', 'interrupted'] satisfies WorkerStatus[]);
 const LATE_PROMPT_GRACE_MS = 5000;
+/**
+ * Claude's idle notification stands in for a Stop hook that never came, but it can beat the screen
+ * showing that Esc stopped the turn instead. It waits this long, a few screen flushes, before the
+ * turn counts as done.
+ */
+export const IDLE_DONE_GRACE_MS = 1500;
 const KEYFRAME_MS = 8000;
 /** How often a steady typist's "last typed" time is refreshed for everyone. */
 const TYPED_REFRESH_MS = 15_000;
@@ -126,6 +132,10 @@ interface Worker {
   turnId?: string;
   turnSeq: number;
   cancelledTurns: Set<string>;
+  /** Where Claude's current turn starts on its screen: an interrupt notice at or above it is an older turn's. */
+  turnStart?: { readonly line: number; dispose(): void };
+  /** Claude's idle notification, waiting out IDLE_DONE_GRACE_MS before it marks the turn done. */
+  idleDone?: NodeJS.Timeout;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -435,6 +445,7 @@ export class WorkerManager {
     this.workers.delete(id);
     this.namer.forget(id);
     clearTimeout(w.scanTimer);
+    dropIdleDone(w);
     const proc = w.pty;
     w.pty = undefined; // so the exit handler knows this worker is gone and stays quiet
     try {
@@ -720,6 +731,8 @@ export class WorkerManager {
       this.persist();
     }
     this.scheduleScan(w);
+    // A tool call says the turn goes on, whatever the idle notification said.
+    if (event === 'PreToolUse' || event === 'PostToolUse' || event === 'PostToolUseFailure') dropIdleDone(w);
     switch (event) {
       case 'SessionStart':
         if (payload?.source === 'clear') {
@@ -773,7 +786,9 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
+          // Stands in for a Stop hook that never came. Esc leaves the prompt idle too, and this can
+          // beat the screen showing it, so it waits for that first (see holdIdleDone).
+          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.holdIdleDone(w);
         }
         break;
       case 'Stop':
@@ -963,6 +978,9 @@ export class WorkerManager {
     w.taskEpoch++;
     w.turnId = undefined;
     w.cancelledTurns.clear();
+    w.turnStart?.dispose();
+    w.turnStart = undefined;
+    dropIdleDone(w);
     w.prompts = [];
     w.tools = [];
     w.toolsSinceNamed = 0;
@@ -986,6 +1004,7 @@ export class WorkerManager {
     this.sides.killAll();
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
+      dropIdleDone(w);
       this.scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) this.saveScrollback(w);
@@ -1158,6 +1177,7 @@ export class WorkerManager {
     w.lastLines = [];
     w.screenDirty = true;
     w.fresh = undefined;
+    w.turnStart = undefined;
     return term;
   }
 
@@ -1321,12 +1341,48 @@ export class WorkerManager {
     const s = w.info.status;
     if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
-    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'paused');
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event, and
+    // the idle notification standing in for it may have arrived before (see holdIdleDone).
+    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) {
+      this.setStatus(w, 'paused');
+      // Look for Claude's interrupt notice on the next screen check (see checkBlocked).
+      w.screenDirty = true;
+    }
+  }
+
+  /**
+   * Claude's idle notification says the turn ended, with no Stop hook to say how. Nothing is reported
+   * yet: the queue and plans would take a done as final. After IDLE_DONE_GRACE_MS, a turn still
+   * working, or paused by its idle marker since, is interrupted if its notice shows and otherwise
+   * done. A Stop, a tool call, any other status or a new turn in the meantime calls it off.
+   */
+  private holdIdleDone(w: Worker) {
+    if (w.idleDone) return;
+    const turn = w.turnId;
+    w.idleDone = setTimeout(() => {
+      w.idleDone = undefined;
+      const s = w.info.status;
+      if (this.workers.get(w.info.id) !== w || !w.pty || w.turnId !== turn || isCancelledTurn(w) || (s !== 'working' && s !== 'paused')) return;
+      if (this.interruptedOnScreen(w)) {
+        cancelTurn(w);
+        this.setStatus(w, 'interrupted');
+      } else this.setStatus(w, 'done');
+    }, IDLE_DONE_GRACE_MS);
+  }
+
+  /**
+   * Whether Claude's interrupt notice shows below where its current turn started. A start that's gone
+   * (its row erased by a whole-screen redraw, or out of the scrollback) can't tell it from an older one.
+   */
+  private interruptedOnScreen(w: Worker): boolean {
+    const start = w.turnStart?.line ?? -1;
+    return !!w.term && start >= 0 && lastInterruptNotice(w.term, start + 1) >= 0;
   }
 
   private setStatus(w: Worker, status: WorkerStatus) {
     if (w.info.status === status) return;
+    // Only the idle marker leaves a held idle notification to finish the turn.
+    if (status !== 'paused') dropIdleDone(w);
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
     // Done, idle or asleep: it's not acting anything out any more.
@@ -1414,6 +1470,15 @@ export class WorkerManager {
     }
     if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
     const s = w.info.status;
+    // Esc with no tool running fires no hook, so the turn only reads as paused. The notice Claude
+    // prints for it says it was interrupted.
+    if (s === 'paused') {
+      if (this.interruptedOnScreen(w)) {
+        cancelTurn(w);
+        this.setStatus(w, 'interrupted');
+      }
+      return;
+    }
     if (s !== 'starting' && s !== 'idle' && !(w.bootBlocked && s === 'needs_input')) return;
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
     const text = screenText(w.term, w.term.buffer.active.type === 'normal' ? Math.max(0, w.fresh?.line ?? 0) : 0);
@@ -1678,6 +1743,30 @@ function beginTurn(w: Worker, turnId?: string) {
   w.turnSeq = (w.turnSeq || 0) + 1;
   w.cancelledTurns ??= new Set();
   w.turnId = turnId || `t${w.turnSeq}`;
+  dropIdleDone(w);
+  markTurnStart(w);
+}
+
+/** Calls off an idle notification still waiting to mark the turn done (see holdIdleDone). */
+function dropIdleDone(w: Worker) {
+  clearTimeout(w.idleDone);
+  w.idleDone = undefined;
+}
+
+/**
+ * Marks where a Claude turn starts on the screen: at the last interrupt notice showing, or at the top
+ * of the screen when none is. Not at the cursor: Claude redraws its input box in place, so a turn
+ * Esc'd straight away prints its notice above where the cursor was.
+ */
+function markTurnStart(w: Worker) {
+  w.turnStart?.dispose();
+  w.turnStart = undefined;
+  const term = w.term;
+  if (!term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
+  const buf = term.buffer.active;
+  if (buf.type !== 'normal') return;
+  const notice = lastInterruptNotice(term);
+  w.turnStart = term.registerMarker((notice >= 0 ? notice : buf.viewportY) - buf.baseY - buf.cursorY);
 }
 
 function cancelTurn(w: Worker, turnId?: string) {
@@ -1763,6 +1852,8 @@ function snapshotScreen(term: HeadlessTerminal, last: string[]) {
 /** First-run screens Claude shows before it can take a prompt. */
 const SETUP_PROMPT = /trust this folder|Do you trust the files|Select login method|Choose the text style|Press Enter to continue|Bypass Permissions mode/i;
 const NOT_LOGGED_IN = /Not logged in\s*·\s*Run \/login|Invalid API key|Please run \/login/i;
+/** Claude's notice, on a line of its own, when Esc stops a turn. A line quoting it in other text doesn't count. */
+const CLAUDE_INTERRUPTED = /^[\s⎿]*Interrupted(?: by user|\s*·\s*What should Claude do instead\??)\s*$/;
 
 /** The text on screen, leaving out rows above buffer row `from`. */
 function screenText(term: HeadlessTerminal, from = 0): string {
@@ -1770,6 +1861,15 @@ function screenText(term: HeadlessTerminal, from = 0): string {
   const out: string[] = [];
   for (let y = Math.max(0, from - buf.viewportY); y < term.rows; y++) out.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '');
   return out.join('\n');
+}
+
+/** Buffer row of the last interrupt notice on screen, at or below buffer row `from`; -1 when there's none. */
+function lastInterruptNotice(term: HeadlessTerminal, from = 0): number {
+  const buf = term.buffer.active;
+  for (let y = buf.viewportY + term.rows - 1; y >= Math.max(from, buf.viewportY); y--) {
+    if (CLAUDE_INTERRUPTED.test(buf.getLine(y)?.translateToString(true) ?? '')) return y;
+  }
+  return -1;
 }
 
 /** A bin/*.js script in the install this office runs from (src/server under tsx, dist/server/server built). */
