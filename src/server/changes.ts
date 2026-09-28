@@ -20,6 +20,10 @@ const MAX_COUNT_BYTES = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export interface ChangesTarget {
+  /** A managed workspace was moved, removed or switched to an unexpected branch. */
+  error?: string;
+  /** Reading is allowed while the agent works; Git mutations wait for it to finish. */
+  busy?: string;
   /** The worker's name, for toasts. */
   name: string;
   /** Absolute directory it works in. */
@@ -207,6 +211,7 @@ export class Changes {
   async diff(workerId: string, filePath: string): Promise<{ diff: string; truncated: boolean } | string> {
     let t = this.target(workerId);
     if (!t) return 'No such worker';
+    if (t.error) return t.error;
     const w = this.watches.get(workerId);
     let state = w?.last;
     if (!state?.files.some((f) => f.path === filePath)) state = await this.compute(workerId, t);
@@ -358,6 +363,8 @@ export class Changes {
   private async action(workerId: string, label: string, fn: (t: ChangesTarget, w: Watch) => Promise<string | undefined>): Promise<string | undefined> {
     const t = this.target(workerId);
     if (!t) return 'No such worker';
+    if (t.error) return t.error;
+    if (t.busy) return t.busy;
     try {
       if (await this.childRepositories(t)) return 'This view spans repositories. Use a single repository to commit, discard changes or open a pull request.';
     } catch (err) {
@@ -438,6 +445,7 @@ export class Changes {
 
   private async compute(workerId: string, t: ChangesTarget): Promise<ChangesState> {
     try {
+      if (t.error) throw new GitError(t.error);
       const children = await this.childRepositories(t);
       if (!children) return this.computeRepository(workerId, t);
       const repositories: NonNullable<ChangesState['repositories']> = [];
@@ -451,7 +459,7 @@ export class Changes {
         more += state.more;
       }
       const list = files.slice(0, MAX_FILES);
-      return { workerId, dir: t.rel, base: 'HEAD', ahead: 0, files: list, more: more + files.length - list.length, repositories, at: Date.now() };
+      return { workerId, dir: t.rel, base: 'HEAD', ahead: 0, files: list, more: more + files.length - list.length, repositories, busy: t.busy, at: Date.now() };
     } catch (err) {
       return errorState(workerId, t.rel, (err as Error).message);
     }
@@ -479,6 +487,7 @@ export class Changes {
 
   private async computeRepository(workerId: string, t: ChangesTarget): Promise<ChangesState> {
     try {
+      if (t.error) throw new GitError(t.error);
       const base = await this.baseCommit(t);
       const [numstat, names, status] = await Promise.all([
         git(['diff', '--numstat', '-M', '-z', base.commit], t.cwd),
@@ -546,7 +555,7 @@ export class Changes {
       const ahead = Number(await gitMaybe(['rev-list', '--count', `${base.commit}..HEAD`], t.cwd)) || 0;
       const subject = ahead ? await gitMaybe(['log', '-1', '--format=%s'], t.cwd) : undefined;
       const pr = base.branch ? this.branchPull(base.branch) ?? this.opened.get(base.branch) : undefined;
-      return { workerId, dir: t.rel, branch: base.branch ?? 'HEAD', base: base.label, ahead, subject, files: list, more: all.length - list.length, prBase: base.prBase, pr, at: Date.now() };
+      return { workerId, dir: t.rel, branch: base.branch ?? 'HEAD', base: base.label, ahead, subject, files: list, more: all.length - list.length, prBase: base.prBase, pr, busy: t.busy, at: Date.now() };
     } catch (err) {
       return errorState(workerId, t.rel, err instanceof GitError ? err.message : String((err as Error).message ?? err));
     }

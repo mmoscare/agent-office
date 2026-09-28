@@ -21,6 +21,7 @@ This is mmoscare's personal fork of AgentSystemLabs/agent-office. The author wil
 - Keep credentials out of this repository and logs. Provider authentication belongs in the provider's own local login flow.
 - Verify the affected launch path and relevant tests after changing agent startup. Distinguish a successful launch check from a completed authenticated model request.
 - Local folders are the preferred way to add floors. Keep both local-folder and GitHub-clone options.
+- Multi-repository desks use the separate `workspaces.ts` and `workspace-changes.ts` helpers. Preserve repository selection, separate worktrees/PRs, restart metadata, and checks across every repo before cleanup; keep the author's ordinary single-repo flow working too.
 - Esc belongs to the worker terminal; leave that view through its clickable close control.
 - Keep usage estimates labelled and unknown costs unavailable. The separate model-usage history must not silently change the upstream Claude budget behavior.
 - The Windows launcher lives in personal/windows and must run this personal checkout with the existing Personal-Portfolio building settings.

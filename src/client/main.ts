@@ -7,6 +7,8 @@ import { floorPalette } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { modelTag } from '../shared/model';
+import type { WorkspaceRequest } from '../shared/workspaces';
+import { openWorkspace } from './ui/workspace';
 import { isAsleep, isBusy } from '../shared/status';
 import { pullRequestLabel } from '../shared/pulls';
 import { Net } from './net';
@@ -42,7 +44,8 @@ import { $, h, clip, closeAllModals, doingNow, modalOpen, onModalChange, openMod
 import { openTerminal, openTerminalFor, routeTerminalMessage, type TerminalFind } from './ui/terminal';
 import { openSearch } from './ui/search';
 import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
-import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage, worktreePref } from './ui/prompt';
+import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
+import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
@@ -521,7 +524,7 @@ net.onMessage((msg) => {
       const openId = openTerminalFor();
       if (openId && store.workers.has(openId)) net.send({ t: 'worker.attach', workerId: openId });
       const watching = openChangesFor();
-      if (watching && store.workers.has(watching)) net.send({ t: 'changes.watch', workerId: watching });
+      if (watching && store.workers.has(watching.workerId)) net.send({ t: 'changes.watch', ...watching });
       renderProject();
       hud.refresh();
       // Back from a restart on another version: this page's code is stale, so load the new one.
@@ -1163,8 +1166,8 @@ function officeIsFull(): boolean {
   return true;
 }
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -1188,9 +1191,9 @@ function promptAtDesk(deskId: string) {
       warning: pressureNote(store.machine),
       submitLabel: 'Hire & start',
       providerOption: true,
-      worktreeOption: !!store.project?.branch,
+      worktreeOption: true,
       deskId,
-      onSubmit: (text, o) => hire(deskId, text, o.worktree, o.provider, o.model, o.effort),
+      onSubmit: (text, o) => hire(deskId, text, o.worktree, o.provider, o.model, o.effort, undefined, o.workspace),
     });
   } else if (isAsleep(w.status)) {
     toast(`${w.name} is asleep — press R to resume first`, 'warn');
@@ -1222,9 +1225,9 @@ function hireAtDesk(deskId: string) {
     submitLabel: 'Hire & start',
     allowEmpty: true,
     providerOption: true,
-    worktreeOption: !!store.project?.branch,
+    worktreeOption: true,
     deskId,
-    onSubmit: (text, o) => hire(deskId, text || undefined, o.worktree, o.provider, o.model, o.effort),
+    onSubmit: (text, o) => hire(deskId, text || undefined, o.worktree, o.provider, o.model, o.effort, undefined, o.workspace),
   });
 }
 
@@ -1240,13 +1243,14 @@ function killWorker(id: string) {
     confirmDialog(`Send ${w.name} home?`, on ? `${w.name} is in the meeting on “${m.title}”, which stops without it.` : `${w.name} leaves the meeting room.`, 'Send home', () => net.send({ t: 'worker.kill', workerId: id }));
     return;
   }
-  if (w.worktree) {
+  if (w.worktree || w.workspace) {
     // A worker with its own worktree: choose what becomes of the worktree and its branch.
     sendHomeDialog({
       workerId: id,
       name: w.name,
       where,
       worktree: w.worktree,
+      workspace: w.workspace,
       ask: () => net.send({ t: 'worker.worktree', workerId: id }),
       onConfirm: (cleanup) => net.send({ t: 'worker.kill', workerId: id, cleanup }),
     });
@@ -1296,11 +1300,12 @@ function resumeWorker(w: WorkerInfo) {
 
 /** Whether a worker's branch can become a PR: it has its own worktree and isn't mid-turn. */
 function prReady(w: WorkerInfo) {
-  return !!w.worktree && !isBusy(w.status);
+  return !!(w.worktree || w.workspace) && !isBusy(w.status);
 }
 
 /** O at a desk: see the worker's pull request, or push its branch and open one. */
 function pullRequestFor(w: WorkerInfo) {
+  if (w.workspace) return openWorkspace(net, w.id, () => openWorkerTerminal(w.id));
   if (w.pr) {
     const it = store.pulls.items.find((p) => p.number === w.pr!.number);
     if (it) openPull(it, net, boardActions());
@@ -1419,7 +1424,9 @@ function showSearch() {
 
 /** What the worker changed: changed files, diff, commit / discard / open a PR. */
 function openWorkerChanges(id: string) {
-  if (!store.workers.has(id)) return;
+  const worker = store.workers.get(id);
+  if (!worker) return;
+  if (worker.workspace) return openWorkspace(net, id, () => openWorkerTerminal(id));
   openChanges(net, id, () => openWorkerTerminal(id));
 }
 
@@ -1459,11 +1466,11 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     ...text,
     newDesk: desk ? DESK_BY_ID.get(desk)!.label : undefined,
     workers: awake.map((w) => ({ id: w.id, name: w.name, color: w.color, status: w.status })),
-    worktreeOption: !!store.project?.branch,
+    worktreeOption: true,
     providerOption: true,
-    onSubmit: (prompt, to, worktree, provider, model, effort) => {
+    onSubmit: (prompt, to, worktree, provider, model, effort, workspace) => {
       if (to) net.send({ t: 'worker.prompt', workerId: to, prompt });
-      else if (desk) hire(desk, prompt, worktree, provider, model, effort);
+      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace);
     },
   });
 }
@@ -2158,7 +2165,7 @@ function deskHint(deskId: string): Hint {
       key('E', 'Open terminal'),
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
-      w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
+      w.workspace ? key('O', 'Repositories & PRs') : w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
       key('X', 'Send home'),
     ],
   };

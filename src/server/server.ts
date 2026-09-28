@@ -3,6 +3,7 @@ import https from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { workspaceRepositories } from './workspaces.js';
 import type { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -733,6 +734,12 @@ export async function startServer(cfg: Config) {
           return send(res, 400, { error: (err as Error).message });
         }
       }
+      if (p === '/api/workspace/repositories' && req.method === 'GET') {
+        const floor = floors.get(url.searchParams.get('floor') ?? '');
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        try { return send(res, 200, await workspaceRepositories(floor.dir)); }
+        catch (err) { return send(res, 400, { error: (err as Error).message }); }
+      }
       if (p === '/api/floors/local' && req.method === 'POST') {
         if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
         let body: { dir?: unknown } | null;
@@ -1007,6 +1014,7 @@ export async function startServer(cfg: Config) {
       for (const f of floors.values()) {
         f.workers.detachAll(id);
         f.changes.unwatchAll(id);
+        f.workspaceChanges.unwatchAll(id);
       }
       broadcast({ t: 'peer.leave', id });
       if (account) accountsChanged();
@@ -1062,6 +1070,7 @@ export async function startServer(cfg: Config) {
     if (was) {
       was.workers.detachAll(c.id);
       was.changes.unwatchAll(c.id);
+      was.workspaceChanges.unwatchAll(c.id);
     }
     c.attached.clear();
     c.typingAt.clear();
@@ -1255,11 +1264,19 @@ export async function startServer(cfg: Config) {
         }
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort);
+        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace);
         const issue = kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (typeof r === 'string') warn(c, r);
         else toastFloor(floor, kind === 'shell' ? `${who} opened a shell at a desk` : `${who} hired ${r.name}${issue ? ` for issue #${issue}` : r.prompt ? ' with a task' : ''}`);
         if (typeof r !== 'string' && issue) takeIssue(c, floor, issue);
+        break;
+      }
+      case 'worker.workspace.add': {
+        const w = worker(msg.workerId);
+        if (!w) break;
+        const err = w.floor.workers.addRepositories(w.wid, msg.workspace, who);
+        if (err) warn(c, err);
+        else toastFloor(w.floor, `Added repositories to ${w.info.name}'s workspace`);
         break;
       }
       case 'worker.resume': {
@@ -1271,6 +1288,7 @@ export async function startServer(cfg: Config) {
         const w = worker(msg.workerId);
         if (!w) break;
         const { floor, info } = w;
+        if (info.prOpening) { warn(c, 'Wait for the pull request operation to finish before sending this worker home'); break; }
         // The worker leaves right away; its worktree is dealt with after that, and the outcome follows.
         const done = floor.workers.kill(info.id, CLEANUPS.has(String(msg.cleanup)) ? msg.cleanup : undefined);
         toastFloor(floor, `${who} sent ${info.name} home`);
@@ -1327,11 +1345,12 @@ export async function startServer(cfg: Config) {
         const w = worker(msg.workerId);
         if (!w) break;
         const { floor, wid } = w;
-        void floor.workers.openPr(wid, who).then((r) => {
+        void floor.workers.openPr(wid, who, typeof msg.repository === 'string' ? msg.repository : undefined).then((r) => {
           if (typeof r === 'string') return warn(c, r);
           const name = floor.workers.get(wid)?.name ?? 'the worker';
           toastFloor(floor, r.existed ? `${name}'s branch already has PR #${r.number}` : `${who} opened PR #${r.number} for ${name}`);
           if (r.dirty) warn(c, `${name} still has uncommitted changes in its worktree — they are not in the PR`);
+          if (floor.workers.get(wid)?.workspace) return;
           // Put it on the board now rather than at the next poll. A refresh already in flight
           // returns at once and can miss it, so look again shortly after.
           void floor.github.refresh().then(() => {
@@ -1547,42 +1566,56 @@ export async function startServer(cfg: Config) {
       }
       case 'changes.watch': {
         const w = worker(msg.workerId);
-        if (w) w.floor.changes.watch(w.wid, c.id);
+        if (w) {
+          const changes = w.floor.changesFor(w.wid, msg.repository);
+          if (changes) changes.watch(w.wid, c.id);
+          else warn(c, 'Choose a repository from this worker’s workspace');
+        }
         break;
       }
       case 'changes.unwatch': {
         const wid = str(msg.workerId, 32);
         // Its worker may have gone home already; stop watching wherever it was.
-        for (const f of floors.values()) f.changes.unwatch(wid, c.id);
+        for (const f of floors.values()) {
+          f.changes.unwatch(wid, c.id);
+          f.workspaceChanges.unwatch(wid, c.id, msg.repository);
+        }
         break;
       }
       case 'changes.diff': {
         const workerId = str(msg.workerId, 32);
         const file = str(msg.path, 4096);
         const floor = workerFloor(workerId);
-        if (!floor) {
-          sendTo(c, { t: 'changes.diff', workerId, path: file, diff: '', truncated: false, error: 'No such worker' });
+        const repository = typeof msg.repository === 'string' ? msg.repository : undefined;
+        const changes = floor?.changesFor(workerId, repository);
+        if (!changes) {
+          sendTo(c, { t: 'changes.diff', workerId, repository, path: file, diff: '', truncated: false, error: 'No such worker or repository' });
           break;
         }
-        void floor.changes.diff(workerId, file).then((r) => {
-          if (typeof r === 'string') sendTo(c, { t: 'changes.diff', workerId, path: file, diff: '', truncated: false, error: r });
-          else sendTo(c, { t: 'changes.diff', workerId, path: file, ...r });
+        void changes.diff(workerId, file).then((r) => {
+          if (typeof r === 'string') sendTo(c, { t: 'changes.diff', workerId, repository, path: file, diff: '', truncated: false, error: r });
+          else sendTo(c, { t: 'changes.diff', workerId, repository, path: file, ...r });
         });
         break;
       }
       case 'changes.commit': {
         const w = worker(msg.workerId);
-        if (w) void w.floor.changes.commit(w.wid, str(msg.message, 5000), who).then((err) => warn(c, err));
+        if (w) void w.floor.changesFor(w.wid, msg.repository)?.commit(w.wid, str(msg.message, 5000), who).then((err) => warn(c, err));
         break;
       }
       case 'changes.discard': {
         const w = worker(msg.workerId);
-        if (w) void w.floor.changes.discard(w.wid, typeof msg.path === 'string' ? str(msg.path, 4096) : undefined, who).then((err) => warn(c, err));
+        if (w) void w.floor.changesFor(w.wid, msg.repository)?.discard(w.wid, typeof msg.path === 'string' ? str(msg.path, 4096) : undefined, who).then((err) => warn(c, err));
         break;
       }
       case 'changes.pr': {
         const w = worker(msg.workerId);
-        if (w) void w.floor.changes.pullRequest(w.wid, str(msg.title, 300), str(msg.body, 20000), who).then((err) => warn(c, err));
+        if (w?.info.workspace) {
+          void w.floor.workers.openPr(w.wid, who, msg.repository, { title: str(msg.title, 300), body: str(msg.body, 20000) }).then(r => {
+            if (typeof r === 'string') warn(c, r);
+            else toastFloor(w.floor, `Pull request for ${msg.repository}: ${r.url}`);
+          });
+        } else if (w) void w.floor.changesFor(w.wid, msg.repository)?.pullRequest(w.wid, str(msg.title, 300), str(msg.body, 20000), who).then((err) => warn(c, err));
         break;
       }
       case 'upgrade.check':
