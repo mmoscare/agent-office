@@ -222,3 +222,49 @@ test('on a floor of several repositories, the same issue number in two of them a
   assert.equal(q.dropIssue(3, 'me/b'), true);
   assert.deepEqual(q.state().tasks.map((x) => x.repo), ['me/a']);
 });
+
+test('a task for a To Do Next item tells the plans board when it starts and how it ends, and goes on the queue once', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'office-queue-plan-'));
+  const workers: WorkerInfo[] = [];
+  let hired = 0;
+  const manager: QueueWorkers = {
+    defaultProvider: 'claude',
+    list: () => workers,
+    deskOccupied: (desk) => workers.some((w) => w.deskId === desk),
+    spawn(deskId, by, prompt, _worktree, kind, provider) {
+      const w = { id: `w${hired++}`, deskId, kind, provider, prompt, name: `Worker ${hired}`, color: '#fff', status: 'working', acked: false, createdBy: by, createdAt: Date.now(), cols: 80, rows: 24, viewers: [], viewerIds: [] } as WorkerInfo;
+      workers.push(w);
+      return w;
+    },
+    kill(id) {
+      const i = workers.findIndex((w) => w.id === id);
+      if (i >= 0) workers.splice(i, 1);
+      return Promise.resolve({});
+    },
+  };
+  const started: [string, string, string][] = [];
+  const ended: [string, string][] = [];
+  const events = { update() {}, toast() {}, claimIssue: async () => undefined, refreshGitHub() {}, hiringPaused: () => undefined, emptied() {} };
+  const q = new TaskQueue(dir, manager, false, { ...events, startPlan: (plan, w, task) => started.push([plan, w.name, task]), endPlan: (plan, outcome) => ended.push([plan, outcome]) });
+  t.after(() => {
+    q.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(q.add('Renew the insurance', 'Ada', 'Renew the insurance', undefined, 'claude', undefined, undefined, undefined, 'plan-1'), undefined);
+  assert.equal(q.add('Again', 'Ada', undefined, undefined, 'claude', undefined, undefined, undefined, 'plan-1'), 'That To Do Next item is already on the queue');
+  const task = q.state().tasks[0];
+  assert.equal(task.plan, 'plan-1');
+  assert.equal(task.status, 'running');
+  assert.deepEqual(started, [['plan-1', 'Worker 1', task.id]]);
+  workers[0].status = 'done';
+  q.onWorker(workers[0]);
+  assert.deepEqual(ended, [['plan-1', 'done']]);
+  // Once it's done the item can go on the queue again, and the link survives a restart.
+  assert.equal(q.retry(task.id), undefined);
+  assert.equal(q.state().tasks[0].plan, 'plan-1');
+  assert.equal(started.length, 2);
+  q.shutdown();
+  const again = new TaskQueue(dir, manager, false, events);
+  t.after(() => again.shutdown());
+  assert.equal(again.state().tasks[0].plan, 'plan-1');
+});

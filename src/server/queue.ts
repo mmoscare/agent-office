@@ -29,6 +29,10 @@ export interface QueueEvents {
   room?(): number;
   /** The last task on the queue just finished, done: nothing is left queued or running. */
   emptied(): void;
+  /** The 📒 To Do Next item a task is for got its worker: it's in progress, by that worker (see plans.ts). */
+  startPlan?(plan: string, worker: { id: string; name: string }, task: string): void;
+  /** That task ended, one way or another. */
+  endPlan?(plan: string, outcome: NonNullable<QueueTask['outcome']>): void;
 }
 
 export const DEFAULT_MAX_WORKERS = 3;
@@ -78,7 +82,7 @@ export class TaskQueue {
     return this.maxWorkers;
   }
 
-  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, effort?: AgentEffort, repo?: string): string | undefined {
+  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, effort?: AgentEffort, repo?: string, plan?: string): string | undefined {
     if (!isAgentProvider(provider) || (provider === 'custom' && this.workers.defaultProvider !== 'custom')) return 'Unknown agent provider';
     const modelError = validateWorkerModel('agent', provider, model);
     if (modelError) return modelError;
@@ -88,6 +92,7 @@ export class TaskQueue {
     if (!clean) return 'Empty task';
     if (issue === undefined) repo = undefined;
     if (issue !== undefined && this.tasks.some((t) => sameIssue(t, issue, repo) && t.status !== 'done')) return `Issue ${ghRef({ number: issue, repo })} is already on the queue`;
+    if (plan && this.tasks.some((t) => t.plan === plan && t.status !== 'done')) return 'That To Do Next item is already on the queue';
     if (this.tasks.filter((t) => t.status !== 'done').length >= MAX_TASKS) return `The queue is full (${MAX_TASKS} tasks)`;
     const task: QueueTask = {
       id: randomBytes(6).toString('hex'),
@@ -96,6 +101,7 @@ export class TaskQueue {
       effort: provider === 'claude' ? effort : undefined,
       issue,
       repo,
+      plan: plan || undefined,
       title: (title?.trim() || firstLine(clean)).slice(0, 120),
       prompt: clean,
       addedBy: by,
@@ -146,8 +152,9 @@ export class TaskQueue {
     if (!t) return 'No such task';
     if (t.status !== 'done') return 'That task is still on the queue';
     if (t.issue !== undefined && this.tasks.some((x) => x !== t && sameIssue(x, t.issue!, t.repo) && x.status !== 'done')) return `Issue ${ghRef({ number: t.issue, repo: t.repo })} is already on the queue`;
+    if (t.plan && this.tasks.some((x) => x !== t && x.plan === t.plan && x.status !== 'done')) return 'That To Do Next item is already on the queue';
     this.tasks.splice(this.tasks.indexOf(t), 1);
-    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
+    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, plan: t.plan, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
     this.changed();
     this.pump();
@@ -250,6 +257,7 @@ export class TaskQueue {
     t.status = 'done';
     t.outcome = outcome;
     t.finishedAt = Date.now();
+    if (t.plan) this.events.endPlan?.(t.plan, outcome);
     const who = t.workerName ?? 'Its worker';
     if (outcome === 'done') {
       this.events.toast(`📋 ${who} finished ${label(t)}`, 'info');
@@ -312,6 +320,7 @@ export class TaskQueue {
         t.outcome = 'failed';
         t.error = r;
         t.finishedAt = Date.now();
+        if (t.plan) this.events.endPlan?.(t.plan, 'failed');
         this.events.toast(`📋 Couldn't start ${label(t)}: ${r}`, 'error');
         continue;
       }
@@ -322,6 +331,7 @@ export class TaskQueue {
       t.startedAt = Date.now();
       t.error = undefined;
       this.lastStatus.set(r.id, r.status);
+      if (t.plan) this.events.startPlan?.(t.plan, { id: r.id, name: r.name }, t.id);
       this.events.toast(`📋 ${r.name} sat down at ${DESK_BY_ID.get(desk)?.label ?? 'a desk'} to work on ${label(t)}`, 'info');
       if (t.issue !== undefined) {
         const issue = t.issue;
@@ -362,6 +372,7 @@ export class TaskQueue {
           effort: provider === 'claude' && isAgentEffort(s.effort) ? s.effort : undefined,
           issue: typeof s.issue === 'number' ? s.issue : undefined,
           repo: typeof s.issue === 'number' ? normalizeRepo(s.repo) : undefined,
+          plan: typeof s.plan === 'string' && s.plan ? s.plan : undefined,
           title: s.title,
           prompt: s.prompt,
           addedBy: s.addedBy ?? '?',

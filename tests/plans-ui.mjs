@@ -131,16 +131,23 @@ try {
   await page.unroute('**/api/plans?*');
   await dialog.getByRole('button', { name: 'Add plan', exact: true }).click();
   await saved();
-  // A second writer cannot silently overwrite this window's revision.
+  // A second writer's plan shows up here by itself (the office pushes the board), so adding another needs no refresh.
   const api = url + '/api/plans?floor=' + floorId;
   const state = await (await context.request.get(api)).json();
   assert.equal((await context.request.post(api, { headers: { Origin: url }, data: { revision: state.revision, action: 'add', text: 'Other window plan' } })).status(), 200);
+  await dialog.locator('[data-status=todo] .plan-text').filter({ hasText: 'Other window plan' }).waitFor();
   await dialog.getByRole('textbox', { name: 'New plan', exact: true }).fill('Next idea');
+  await dialog.getByRole('button', { name: 'Add plan', exact: true }).click();
+  await saved();
+  await dialog.locator('[data-status=todo] .plan-text').filter({ hasText: 'Next idea' }).waitFor();
+  // A window whose copy fell behind the board still cannot silently overwrite it; Refresh catches up and keeps the draft.
+  await page.evaluate(() => { const s = window.__office.store; s.plans = { ...s.plans, revision: s.plans.revision - 1 }; });
+  await dialog.getByRole('textbox', { name: 'New plan', exact: true }).fill('Stale idea');
   await dialog.getByRole('button', { name: 'Add plan', exact: true }).click();
   await dialog.getByText(/changed in another window/).waitFor();
   await dialog.getByRole('button', { name: 'Refresh', exact: true }).click();
   await dialog.getByText('All plans saved', { exact: true }).waitFor();
-  assert.equal(await dialog.getByRole('textbox', { name: 'New plan', exact: true }).inputValue(), 'Next idea');
+  assert.equal(await dialog.getByRole('textbox', { name: 'New plan', exact: true }).inputValue(), 'Stale idea');
   await dialog.getByRole('button', { name: 'Add plan', exact: true }).click();
   await saved();
   const card = dialog.locator('.plan-card').filter({ hasText: 'Keep this draft' });
@@ -165,7 +172,7 @@ try {
   await page.reload();
   await page.waitForFunction(() => window.__office?.store.floor);
   await open();
-  assert.equal(await dialog.locator('.plan-card').count(), 3);
+  assert.equal(await dialog.locator('.plan-card').count(), 4);
   await page.evaluate(id => window.__office.net.send({ t: 'floor.go', floor: id }), secondId);
   await dialog.waitFor({ state: 'hidden' });
   await open();
@@ -176,7 +183,7 @@ try {
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Host did not stop')), 15000); host.once('exit', () => { clearTimeout(timer); resolve(); }); });
   assert.equal(host.exitCode, 0, hostErrors);
   const disk = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(floor, '.agent-office/plans.json'), 'utf8'));
-  assert.equal(disk.items.length, 3);
+  assert.equal(disk.items.length, 4);
   console.log('PASS: desk binder click, add/edit/move/remove, reload persistence, failed-save draft recovery, stale-write protection, floor isolation, mobile layout, auth/origin checks, clean browser and graceful host stop.');
 } finally {
   if (browser) await browser.close();

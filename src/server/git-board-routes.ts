@@ -1,3 +1,4 @@
+import { previewPush, pushReviewed, pushTargets } from './push.js';
 import type { GitDiffMode } from '../shared/git-board.js';
 import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeFloorPull, officeStatus, type OfficeFloor } from './git-board.js';
 
@@ -23,6 +24,9 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
   const repo = (q.get('repo') ?? '').slice(0, 2048);
   const branch = (q.get('branch') ?? '').slice(0, 255) || undefined;
   try {
+    if (p === '/api/git/push-targets' && method === 'GET') return [200, await pushTargets(floorDir)];
+    if (p === '/api/git/push-preview' && method === 'GET') return [200, await previewPush(floorDir, text(q.get('target'), 2048))];
+    if (p === '/api/git/push-reviewed' && method === 'POST') return reply(await pushReviewed(floorDir, text(body.target, 2048), text(body.token, 100)));
     if (p === '/api/git/repos' && method === 'GET') return [200, await gitRepositories(floorDir)];
     // The office's own code folder, whichever floor asks (see OfficeStatus).
     if (p === '/api/git/office' && method === 'GET') return [200, { office: (await officeStatus(floors, q.get('fresh') === '1')) ?? null }];

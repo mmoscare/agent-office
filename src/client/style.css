@@ -1236,3 +1236,32 @@ a.when:hover { text-decoration: underline; }
 .update-warn { color: #b5651d; }
 .update-note { color: var(--muted); font-size: 12px; }
 .update-note code { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 4px; border-radius: 4px; }
+
+/* To Do Next: who's on a plan, and the buttons that hand it over */
+.plan-links { margin: -8px 0 10px; font-size: 12px; font-weight: 800; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-links .btn.plan-link { font-size: 12px; padding: 3px 8px; }
+
+/* The 📥 in-tray */
+.inbox-add { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-bottom: 12px; }
+.inbox-add input[type=text] { grid-column: 1 / -1; padding: 7px 10px; border: 2px solid var(--ink); border-radius: 9px; font: inherit; }
+.inbox-add textarea { min-height: 56px; resize: vertical; }
+.inbox-folder, .inbox-door-note { margin: 6px 0; font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.5; }
+.inbox-folder code, .inbox-door-note code, .inbox-token { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.inbox-copy { padding: 1px 8px; font-size: 12px; margin-left: 6px; vertical-align: middle; }
+.inbox-door { margin: 10px 0 14px; padding: 10px 12px; border: 2px dashed var(--muted); border-radius: 12px; }
+.inbox-door-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.inbox-door-row .btn { padding: 3px 10px; font-size: 13px; }
+.inbox-code { margin: 4px 0 8px; padding: 8px 10px; background: rgba(43,45,66,.08); border-radius: 8px; font: 12px ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 8px; }
+.inbox-tools h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
+.inbox-tools h4 .count { color: var(--muted); }
+.inbox-tools .provider-choice { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.inbox-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 3px solid var(--ink); border-radius: 14px; background: #fff; box-shadow: 0 3px 0 var(--ink); }
+.inbox-main { flex: 1; min-width: 0; }
+.inbox-title { font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-preview { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-meta { font-size: 12px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-actions { display: flex; gap: 4px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.inbox-actions .btn { padding: 3px 9px; font-size: 13px; text-decoration: none; color: inherit; }
+@media (max-width: 700px) { .inbox-list li { flex-direction: column; align-items: stretch; } .inbox-actions { justify-content: flex-start; } }

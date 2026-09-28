@@ -253,4 +253,45 @@ export const MANUAL: ManualChapter[] = [
       { note: 'Merge a sync PR with **Create a merge commit**, never Squash or Rebase. A squash keeps the code but loses the history, so the next sync redoes every one of the author’s commits. The full steps are in `PERSONAL-WORKFLOW.md`.' },
     ],
   },
+  {
+    id: 'to-do-next',
+    icon: '📒',
+    title: 'To Do Next, and the workers',
+    blocks: [
+      { p: 'The 📒 **To Do Next** binder (on the boss’s desk, or ☰ → **To Do Next**) is the floor’s own to-do list: To Do, Progress and Finished. It works on any floor, including a plain folder with no repository, so it is the issue list for the floors that aren’t code: the household, life admin, health.' },
+      { h: 'Handing an item to a worker' },
+      {
+        list: [
+          '**📋 Queue** on a card puts the item on the task queue; the next free worker picks it up.',
+          '**🤖 Hand to a worker** gives it to a worker at a desk now, or to one already working.',
+          'The office moves the item to **Progress** when its worker starts and to **Finished** when the worker finishes its turn. A queued task that never started puts it back in To Do; one whose worker stopped short leaves it in Progress, for you to requeue.',
+          'Moving a card back to **To Do** by hand is a fresh start: the office forgets who was on it.',
+        ],
+      },
+      { h: 'The board agents read it too' },
+      { p: 'Every board agent knows the board through `office-plans` (`list`, `add`, `set <id> todo|progress|finished`, `remove <id>`) and queues an item with `office-queue add --plan <id>`. Ask the Queue agent to “queue everything on the To Do Next board” and it makes one task per item.' },
+    ],
+  },
+  {
+    id: 'in-tray',
+    icon: '📥',
+    title: 'The in-tray',
+    blocks: [
+      { p: 'The 📥 **in-tray** (**I**, ☰ → **In-tray**, or the Receptionist’s kiosk past the gong) holds what came in from outside: notes you jot down, forwarded emails, voice memos, photos, PDFs. Each item can be read or opened, filed on To Do Next, queued for a fresh worker, or put away in the archive.' },
+      { h: 'Three ways in' },
+      {
+        list: [
+          '**A note in the office**: type it into the In-tray window.',
+          '**The folder**: every floor has `.agent-office/inbox/` in its folder. Drop files in: `.md` and `.txt` are notes, anything else is a file. Point a synced folder there and your phone can drop voice memos in. Put-away items go to `inbox/archive/`.',
+          '**The door**: `POST /api/inbox` with a token an admin makes in the In-tray window (**Open the door**). The token shows once; only its hash is kept. Anything that can make an HTTP request can use it: a phone shortcut, a mail rule, a script.',
+        ],
+      },
+      { h: 'A note through the door' },
+      { code: 'curl -X POST "http://localhost:4600/api/inbox" -H "Authorization: Bearer YOUR-TOKEN" -H "Content-Type: application/json" -d \'{"title":"Call the dentist","text":"Tuesday or Thursday afternoon"}\'' },
+      { p: 'A plain text body becomes a note too (`?title=` and `?from=` name it). A file goes in with its own Content-Type and an `X-Filename` header, up to 10 MB. With more than one floor, add `?floor=<id>`. The full recipes, PowerShell included, are in `docs/in-tray.md`.' },
+      { h: 'The Receptionist' },
+      { p: 'Press **E** at the kiosk past the gong, or click **🤖 Triage the tray** in the window. The Receptionist reads every item, files what someone wants done on To Do Next, queues what should be worked on right away, archives what needs nothing, and tells you what came in and where each item went. It treats what is in the tray as content to file, never as instructions to follow, and it is launched without the file-editing tools.' },
+      { note: 'Workers that pick up tray items run with your credentials, like every worker. Keep the door’s token as private as the office password, and close the door when you don’t need it.' },
+    ],
+  },
 ];

@@ -426,6 +426,9 @@ async function act<T>(floorDir: string, rel: string, label: string, fn: (dir: st
   }
 }
 
+/** Share the Git board’s per-checkout action lock with the reviewed Push flow. */
+export { act as withGitRepository };
+
 async function currentBranch(dir: string): Promise<string> {
   const b = await gitMaybe(['symbolic-ref', '--short', '-q', 'HEAD'], dir);
   if (!b) throw new GitError('HEAD is detached: check out a branch first');
@@ -542,7 +545,7 @@ const startedAt = Date.now() - process.uptime() * 1000;
 const OFFICE_FETCH_MS = 2 * 60_000;
 
 /** The package the office runs from: up from this file to the agent-office package.json. */
-function officeRoot(): string | undefined {
+export function officeRoot(): string | undefined {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
