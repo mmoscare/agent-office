@@ -70,6 +70,7 @@ import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from '.
 import { openPlans } from './ui/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
+import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { mountHud } from './ui/menu';
@@ -1181,6 +1182,8 @@ store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
 setInterval(renderLimits, 30_000);
 $('limits').addEventListener('click', () => net.send({ t: 'limits.refresh' }));
+// Pay-as-you-go API balances, read over HTTP rather than the socket: they're slow, cached and optional.
+mountBalances();
 
 // ---- Actions ------------------------------------------------------------------------------------
 function freeDesk(): string | null {

@@ -160,6 +160,33 @@ button { font-family: inherit; }
 .limits .reset { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .limits .meter + .row { margin-top: 3px; }
 .limits .muted { color: var(--muted); font-weight: 600; }
+/* API balances: pay-as-you-go accounts, read from each provider's billing API (ui/balances.ts). */
+.side .balances { flex: none; cursor: pointer; font-size: 12px; font-weight: 700; display: flex; flex-direction: column; gap: 4px; }
+.balances h3 { margin-bottom: 2px; }
+.balances .row { display: flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.balances .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.balances .row b { margin-left: auto; font-weight: 900; font-variant-numeric: tabular-nums; }
+.balances .row.err b { color: var(--bad); }
+.balances .row.sub { white-space: normal; overflow-wrap: anywhere; font-size: 11px; font-weight: 600; }
+.balances .row.sub.err { color: var(--bad); }
+.balances .muted { color: var(--muted); font-weight: 600; }
+.balances .row.unset .muted { margin-left: auto; }
+.panel-gear { flex: none; margin-left: auto; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); font: 900 13px/1 var(--font); cursor: pointer; align-self: center; }
+.panel-gear:hover { background: var(--paper-2); color: var(--ink); }
+.panel-gear + .panel-x { margin-left: 0; }
+.modal.balances-setup { width: min(620px, calc(100vw - 24px)); }
+.balances-setup .body { overflow-y: auto; max-height: 72vh; }
+.balances-setup-provider { margin-top: 14px; padding-top: 12px; border-top: 2px solid #d9cbb9; }
+.balances-setup-provider h3 { margin: 0 0 6px; font-size: 15px; font-weight: 900; display: flex; align-items: baseline; gap: 8px; }
+.balances-setup-provider h3 .state { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--muted); }
+.balances-setup-provider label { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: 12px; font-weight: 800; }
+.balances-setup-provider input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; border: 3px solid var(--ink); border-radius: 12px; padding: 8px 12px; background: #fff; outline: none; }
+.balances-setup-provider input:focus { border-color: var(--accent); }
+.balances-setup-provider input:disabled { background: var(--paper-2); color: var(--muted); }
+.balances-setup-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.balances-setup .note { margin: 6px 0; font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.45; }
+.balances-setup .err { margin: 6px 0; font-size: 13px; font-weight: 800; color: var(--bad); }
+.balances-setup .err:empty { display: none; }
 .pill { font-size: 11px; font-weight: 900; padding: 2px 7px; border-radius: 999px; border: 2px solid var(--ink); white-space: nowrap; }
 .pill.starting, .pill.idle { background: #e0f2fe; }
 .pill.working { background: var(--warn); }
