@@ -1215,6 +1215,11 @@ a.when:hover { text-decoration: underline; }
 .office-status[open] .office-toggle::after { content: 'Hide ▴'; }
 .office-body { max-height: 32vh; }
 
+/* Terminal window tabs: the worker's own session, and a shell beside it in its checkout */
+.modal.term .term-tabs { padding: 0 10px; }
+.modal.term .term-tabs .gh-tab { padding: 6px 12px 5px; font-size: 13px; }
+.modal.term .term-tabs .gh-tab.live::after { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #2a9d4b; }
+
 /* The update bar across the top after Agent Office's own code changes (ui/update-bar.ts) */
 .update-bar { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 40; width: min(860px, calc(100vw - 24px)); background: var(--paper); border: 3px solid var(--ink); border-radius: 16px; box-shadow: 0 5px 0 var(--ink); font-size: 13px; overflow: hidden; }
 .update-bar[hidden] { display: none; }
