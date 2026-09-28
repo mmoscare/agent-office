@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { workspaceRepositories } from './workspaces.js';
+import { routeGitBoard } from './git-board-routes.js';
 import type { Duplex } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -739,6 +740,24 @@ export async function startServer(cfg: Config) {
         if (!floor) return send(res, 404, { error: 'No such floor' });
         try { return send(res, 200, await workspaceRepositories(floor.dir)); }
         catch (err) { return send(res, 400, { error: (err as Error).message }); }
+      }
+      if (p.startsWith('/api/git/')) {
+        // The Git board, the PR board's other side (git-board.ts).
+        const floor = floors.get(url.searchParams.get('floor') ?? '');
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        let input: Record<string, unknown> = {};
+        if (req.method === 'POST') {
+          if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+          try {
+            const raw = await readBody(req, 128 * 1024);
+            const parsed: unknown = raw ? JSON.parse(raw) : {};
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed as Record<string, unknown>;
+          } catch {
+            return send(res, 400, { error: 'Bad request' });
+          }
+        }
+        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input);
+        return send(res, status, body);
       }
       if (p === '/api/floors/local' && req.method === 'POST') {
         if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
