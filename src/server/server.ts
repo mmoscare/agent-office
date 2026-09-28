@@ -144,6 +144,8 @@ function send(res: http.ServerResponse, status: number, body: unknown, headers: 
 
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : '');
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+/** A worker's side shell, in a client's `attached` and `stale` sets (its own terminal goes by its id). */
+const sideKey = (workerId: string) => `side:${workerId}`;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const TOO_MANY_ATTEMPTS = 'Too many attempts. Try again in a few minutes.';
 /** WebSocket close code for a session that stopped counting: the account was revoked, or the shared password switched off. */
@@ -346,14 +348,15 @@ export async function startServer(cfg: Config) {
     ledger,
     emit: toFloor,
     toast: toastFloor,
-    termData: (workerId, data, viewers) => {
-      const json = JSON.stringify({ t: 'term.data', workerId, data } satisfies ServerMsg);
+    termData: (workerId, data, viewers, side) => {
+      const json = JSON.stringify({ t: side ? 'side.data' : 'term.data', workerId, data } satisfies ServerMsg);
+      const key = side ? sideKey(workerId) : workerId;
       for (const id of viewers) {
         const c = clients.get(id);
         if (!c || c.ws.readyState !== WebSocket.OPEN) continue;
         // A viewer on a slow link skips output and gets a fresh snapshot once it catches up,
         // instead of queueing unbounded data in server memory.
-        if (c.stale.has(workerId) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(workerId);
+        if (c.stale.has(key) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(key);
         else c.ws.send(json);
       }
     },
@@ -1070,6 +1073,30 @@ export async function startServer(cfg: Config) {
       case 'term.resize':
         if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.resize(msg.workerId, num(msg.cols), num(msg.rows));
         break;
+      case 'side.attach': {
+        const w = worker(msg.workerId);
+        if (!w) break;
+        const snap = w.floor.workers.attachSide(w.wid, c.id, num(msg.cols), num(msg.rows));
+        if (typeof snap === 'string') {
+          sendTo(c, { t: 'side.error', workerId: w.wid, error: snap });
+          break;
+        }
+        c.attached.add(sideKey(w.wid));
+        sendTo(c, { t: 'side.snapshot', workerId: w.wid, ...snap });
+        break;
+      }
+      case 'side.detach': {
+        const wid = str(msg.workerId, 32);
+        c.attached.delete(sideKey(wid));
+        workerFloor(wid)?.workers.detachSide(wid, c.id);
+        break;
+      }
+      case 'side.input':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.writeSide(msg.workerId, str(msg.data, 64 * 1024));
+        break;
+      case 'side.resize':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.resizeSide(msg.workerId, num(msg.cols), num(msg.rows));
+        break;
       case 'gh.refresh':
         void floorOf(c)?.github.refresh();
         break;
@@ -1394,9 +1421,17 @@ export async function startServer(cfg: Config) {
   const resync = setInterval(() => {
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
-      for (const wid of c.stale) {
-        const snap = c.attached.has(wid) ? workerFloor(wid)?.workers.attach(wid, c.id, c.peer.name) : undefined;
-        if (snap) sendTo(c, { t: 'term.snapshot', workerId: wid, ...snap });
+      for (const key of c.stale) {
+        if (!c.attached.has(key)) continue;
+        if (key.startsWith('side:')) {
+          const wid = key.slice(5);
+          const w = workerFloor(wid)?.workers.get(wid);
+          const snap = w?.side && workerFloor(wid)!.workers.attachSide(wid, c.id, w.side.cols, w.side.rows);
+          if (snap && typeof snap !== 'string') sendTo(c, { t: 'side.snapshot', workerId: wid, ...snap });
+          continue;
+        }
+        const snap = workerFloor(key)?.workers.attach(key, c.id, c.peer.name);
+        if (snap) sendTo(c, { t: 'term.snapshot', workerId: key, ...snap });
       }
       c.stale.clear();
     }

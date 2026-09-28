@@ -69,6 +69,8 @@ export interface WorkerInfo {
   usage?: Usage;
   /** Who last typed into its terminal (or sent it a prompt), and when. */
   lastInput?: { by: string; at: number };
+  /** Its side shell's size, while one runs (the Shell tab of its terminal window). */
+  side?: { cols: number; rows: number };
 }
 
 /** Session usage. The persistent office ledger continues to cover Claude Code only. */
@@ -652,6 +654,14 @@ export type ClientMsg =
   | { t: 'worker.pr'; workerId: string }
   | { t: 'term.input'; workerId: string; data: string }
   | { t: 'term.resize'; workerId: string; cols: number; rows: number }
+  /**
+   * Open a worker's side shell (the Shell tab of its terminal window): a plain shell in its
+   * checkout, started if none runs, shared by everyone with the tab open. Answered with side.snapshot.
+   */
+  | { t: 'side.attach'; workerId: string; cols: number; rows: number }
+  | { t: 'side.detach'; workerId: string }
+  | { t: 'side.input'; workerId: string; data: string }
+  | { t: 'side.resize'; workerId: string; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
   | { t: 'gh.merge'; number: number; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
@@ -770,6 +780,10 @@ export type ServerMsg =
   | { t: 'screen'; workerId: string; cols: number; rows: number; lines: Record<number, Run[]>; full: boolean; cursor: [number, number] }
   | { t: 'term.snapshot'; workerId: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; workerId: string; data: string }
+  | { t: 'side.snapshot'; workerId: string; data: string; cols: number; rows: number }
+  | { t: 'side.data'; workerId: string; data: string }
+  /** The side shell couldn't start. */
+  | { t: 'side.error'; workerId: string; error: string }
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */
