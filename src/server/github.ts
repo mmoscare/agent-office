@@ -5,6 +5,7 @@ import { normalizeRepo } from '../shared/floors.js';
 import { ghKey } from '../shared/protocol.js';
 import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
 import { pullForBranch } from '../shared/pulls.js';
+import { BoardRequests, boardList } from './github-board.js';
 
 const REFRESH_MS = 90_000;
 
@@ -27,6 +28,8 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
     });
   });
 }
+
+const boardRequests = new BoardRequests(gh);
 
 /** Check all states before offering to create another PR for an existing worker branch. */
 export async function findBranchPr(branch: string, cwd: string, query = gh) {
@@ -184,26 +187,30 @@ export class GitHub {
   private sources?: Promise<GhSource[]>;
   private repos = new Map<string, Promise<GhRepoInfo>>();
   private login?: Promise<string>;
+  private nextFolderRefresh = 0;
 
   constructor(
     private dir: string,
     private onIssues: (s: GhState<GhIssue>) => void,
     private onPulls: (s: GhState<GhPull>) => void,
+    private boardQuery = boardRequests.run.bind(boardRequests),
   ) {}
 
   start() {
     void this.refresh();
-    this.timer = setInterval(() => void this.refresh(), REFRESH_MS);
+    this.timer = setInterval(() => void this.refresh(false), REFRESH_MS);
   }
 
   stop() {
     clearInterval(this.timer);
   }
 
-  async refresh() {
+  async refresh(force = true) {
+    if (!force && this.checkouts.length > 1 && Date.now() < this.nextFolderRefresh) return;
     // Looked for again each time, so a repository cloned into the folder shows up on the boards.
     this.sources = undefined;
     await Promise.all([this.refreshIssues(), this.refreshPulls()]);
+    this.nextFolderRefresh = Date.now() + 5 * 60_000;
   }
 
   /**
@@ -409,15 +416,17 @@ export class GitHub {
    * Runs `list` in every checkout the boards cover and puts the results together, each item marked
    * with its repository on a floor of several. Fails only when every checkout does.
    */
-  private async fromAll<T extends GhWhere>(list: (dir: string) => Promise<T[]>): Promise<{ items: T[]; error?: string }> {
+  private async fromAll<T extends GhWhere>(list: (dir: string) => Promise<T[]>, previous: T[]): Promise<{ items: T[]; error?: string }> {
     const sources = await this.where();
     const results = await Promise.allSettled(sources.map((s) => list(s.dir)));
     const items: T[] = [];
     const errors: string[] = [];
     results.forEach((r, i) => {
       const s = sources[i];
-      if (r.status === 'rejected') errors.push(s.repo ? `${s.repo}: ${(r.reason as Error).message}` : (r.reason as Error).message);
-      else for (const it of r.value) items.push(s.repo ? { ...it, repo: s.repo, repoDir: s.rel } : it);
+      if (r.status === 'rejected') {
+        errors.push(s.repo ? `${s.repo}: ${(r.reason as Error).message}` : (r.reason as Error).message);
+        items.push(...previous.filter((it) => it.repo === s.repo));
+      } else for (const it of r.value) items.push(s.repo ? { ...it, repo: s.repo, repoDir: s.rel } : it);
     });
     if (errors.length === sources.length) throw new Error(errors.join('; '));
     return { items, error: errors.length ? errors.join('; ') : undefined };
@@ -429,13 +438,8 @@ export class GitHub {
     this.onIssues(this.issues);
     try {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
-      const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
       const { items, error } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
-        const [open, closed] = await Promise.all([
-          gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], dir),
-          gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], dir),
-        ]);
-        return [...JSON.parse(open), ...JSON.parse(closed)].map((i: any) => ({
+        return (await boardList('issues', dir, this.boardQuery)).map((i: any) => ({
           number: i.number,
           title: i.title,
           state: i.state,
@@ -448,13 +452,13 @@ export class GitHub {
           body: String(i.body ?? '').slice(0, 4000),
           comments: Array.isArray(i.comments) ? i.comments.length : Number(i.comments ?? 0),
         }));
-      });
+      }, this.issues.items);
       // Highest priority first, so the board (and the notes that fit on the wall) lead with it. Within
       // a priority, open before closed and newest first, as gh lists them, across every repository.
       items.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels) || Number(a.state !== 'OPEN') - Number(b.state !== 'OPEN') || b.createdAt.localeCompare(a.createdAt));
       this.issues = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
-      this.issues = { ...this.issues, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
+      this.issues = { ...this.issues, loading: false, error: (err as Error).message };
     }
     this.onIssues(this.issues);
   }
@@ -464,16 +468,8 @@ export class GitHub {
     this.pulls = { ...this.pulls, loading: true };
     this.onPulls(this.pulls);
     try {
-      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
       const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
-        const [open, merged, closed] = await Promise.all([
-          gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], dir),
-          gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], dir),
-          gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], dir),
-        ]);
-        // `--state closed` includes merged PRs; keep only the ones closed without merging.
-        const seen = new Set<number>();
-        const all = [...JSON.parse(open), ...JSON.parse(merged), ...JSON.parse(closed)].filter((p: any) => !seen.has(p.number) && seen.add(p.number));
+        const all = await boardList('pulls', dir, this.boardQuery);
         return all.map((p: any) => ({
           number: p.number,
           title: p.title,
@@ -491,13 +487,14 @@ export class GitHub {
           additions: p.additions ?? 0,
           deletions: p.deletions ?? 0,
           checks: checksOf(p.statusCheckRollup),
+          mergeable: p.mergeable ?? 'UNKNOWN',
           body: String(p.body ?? '').slice(0, 4000),
           closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
         }));
-      });
+      }, this.pulls.items);
       this.pulls = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
-      this.pulls = { ...this.pulls, loading: false, error: (err as Error).message, fetchedAt: Date.now() };
+      this.pulls = { ...this.pulls, loading: false, error: (err as Error).message };
     }
     this.onPulls(this.pulls);
   }

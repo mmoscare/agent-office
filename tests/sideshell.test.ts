@@ -53,6 +53,36 @@ test('a side shell starts in the worker checkout, is shared, and goes with the w
   assert.equal(sizes.length, 2);
 });
 
+test('replacing a side shell drops late output from the process it killed', async (t) => {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'agent-office-side-replace-')));
+  const out: Record<string, string> = {};
+  const sides = new SideShells({
+    data: (_id, data, viewers) => {
+      for (const v of viewers) out[v] = (out[v] ?? '') + data;
+    },
+    size: () => {},
+  });
+  t.after(() => {
+    sides.killAll();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  });
+
+  const first = sides.attach('w1', 'alice', dir, childEnv(), 80, 24);
+  assert.equal(typeof first, 'object');
+  sides.write('w1', process.platform === 'win32'
+    ? '1..30 | ForEach-Object { Write-Output OLD_SHELL; Start-Sleep -Milliseconds 40 }\r'
+    : 'for i in $(seq 1 30); do printf OLD_SHELL; sleep 0.04; done\r');
+  await until(() => (out.alice ?? '').includes('OLD_SHELL'), 'the old shell to print');
+  out.alice = '';
+  sides.kill('w1');
+  const next = sides.attach('w1', 'alice', dir, childEnv(), 80, 24);
+  assert.equal(typeof next, 'object');
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal((out.alice ?? '').includes('OLD_SHELL'), false);
+  sides.kill('w1');
+  await new Promise((r) => setTimeout(r, 300));
+});
+
 test('the side shell runs a login $SHELL off Windows and the console shell on Windows', () => {
   const none = () => false;
   assert.deepEqual(sideShellLaunch('linux', { SHELL: '/bin/zsh' }, none), { file: '/bin/zsh', args: ['-l'] });

@@ -42,6 +42,9 @@ export interface Interactable {
   deskId?: string;
   decorId?: string;
   seatId?: string;
+  /** A back-wall elevator shortcut; absent on the ordinary floor picker. */
+  floorId?: string;
+  elevatorPage?: -1 | 1;
   /** Which of POLES, for a fire pole. */
   pole?: number;
   /** Put away for now (a bean bag nobody needs yet): can't be used. */
@@ -104,7 +107,7 @@ export interface Office {
   /** The ceiling, the floor, and the ladder and fire poles between the floors of the building. */
   stack: Stack;
   /** The repo/directory plaques behind the whiteboard and above every doorway. */
-  setProjectName(name: string, logo?: string, floor?: number): void;
+  setProjectName(name: string, logo?: string, floor?: string): void;
   /** Paints the walls, their trim and the floor in a floor's colors, so each project looks like itself. */
   setLook(p: FloorPalette): void;
   /**

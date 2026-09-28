@@ -2,10 +2,14 @@ import * as THREE from 'three';
 import { DESK_BY_ID } from '../../shared/layout';
 import { ghRef, type GhIssue, type GhPull, type GhState, type QueueState, type QueueTask, type ServiceInfo, type WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
+import { pullWorkers, pullWorkStatus } from '../../shared/pull-work';
 import { stoppedByRestart, taskStatus } from '../../shared/task-status';
+import { comparePulls, pullStatus, type PullStatusKey } from '../ui/pr-board-model';
 
 export const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
 export const PINS = ['#ef476f', '#118ab2', '#06d6a0', '#ffd166'];
+/** The --st-* colours of style.css, for the canvas. */
+const PULL_PINS: Record<PullStatusKey, string> = { conflict: '#ff7b00', failing: '#ef476f', ready: '#06d6a0', review: '#5bc0eb', changes: '#ff99c8', running: '#ffd166', draft: '#b8bcc6', merged: '#9b5de5', closed: '#a39a92' };
 
 export function wrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines: number): string[] {
   const words = text.split(/\s+/);
@@ -98,7 +102,8 @@ export class BoardTexture {
       g.fillStyle = rnd() > 0.5 ? 'rgba(120,70,30,.18)' : 'rgba(255,240,210,.18)';
       g.fillRect(rnd() * W, rnd() * H, 3, 3);
     }
-    const open = (state.items as (GhIssue | GhPull)[]).filter((i) => i.state === 'OPEN');
+    // Pull requests go up most urgent first, as on the board (ui/pr-board-model.ts), pinned in their status colour.
+    const open = this.kind === 'pulls' ? (state.items as GhPull[]).filter((i) => i.state === 'OPEN').sort(comparePulls) : (state.items as GhIssue[]).filter((i) => i.state === 'OPEN');
     if (!open.length) {
       const note = state.error ? `⚠️ ${state.error}` : state.loading && !state.fetchedAt ? 'Loading…' : this.kind === 'issues' ? 'No open issues 🎉' : 'No open PRs';
       g.font = '800 40px Nunito, ui-rounded, system-ui, sans-serif';
@@ -168,11 +173,11 @@ export class BoardTexture {
         g.stroke();
         g.fillStyle = '#5c5f73';
         g.font = `800 ${Math.round(fs * 0.78)}px Nunito, ui-rounded, system-ui, sans-serif`;
-        g.fillText(clip(g, `${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
+        g.fillText(clip(g, `${w.name} · ${pullWorkers([w], it as GhPull).length ? pullWorkStatus(w).text : DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
       }
       g.beginPath();
       g.arc(0, -nh / 2 + 10, 11, 0, Math.PI * 2);
-      g.fillStyle = PINS[i % PINS.length];
+      g.fillStyle = this.kind === 'pulls' ? PULL_PINS[pullStatus(it as GhPull).key] : PINS[i % PINS.length];
       g.fill();
       g.lineWidth = 3;
       g.strokeStyle = '#2b2d42';
@@ -301,7 +306,7 @@ export class QueueBoardTexture {
     const rows = [
       ...running.map((t) => {
         const w = t.workerId ? workers.get(t.workerId) : undefined;
-        const st = { starting: 'starting', idle: 'ready', working: 'working', needs_input: 'needs input ✋', done: 'done', exited: 'stopped', offline: 'asleep' }[w?.status ?? 'working'];
+        const st = { starting: 'starting', idle: 'ready', working: 'working', needs_input: 'needs input ✋', paused: 'paused ⏸', interrupted: 'interrupted ⏹', done: 'done', exited: 'stopped', offline: 'asleep' }[w?.status ?? 'working'];
         return { icon: '🤖', text: name(t), side: `${t.workerName ?? 'a worker'} · ${st}`, color: '#1e8f4e' };
       }),
       ...queued.map((t, i) => ({ icon: '⏳', text: name(t), side: i === 0 ? 'up next' : `${i + 1}${['th', 'st', 'nd', 'rd'][i + 1 <= 3 ? i + 1 : 0]} in line`, color: '#2b2d42' })),
