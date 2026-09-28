@@ -79,8 +79,8 @@ export const BEANBAGS: DeskDef[] = (
 /** Everywhere a worker can sit: the desks, then the bean bags. */
 export const SEATS: DeskDef[] = [...DESKS, ...BEANBAGS];
 
-/** The boards with an agent standing by: the Issues board, the PR board and the task queue. */
-export type StationKind = 'issues' | 'pulls' | 'queue';
+/** The boards with an agent standing by: the Issues board, the PR board, the task queue and the 📥 in-tray. */
+export type StationKind = 'issues' | 'pulls' | 'queue' | 'inbox';
 
 /**
  * The board agents: a worker standing behind a little kiosk just west of each of those boards (see
@@ -94,6 +94,8 @@ export const STATIONS: DeskDef[] = [
   { id: 'station-pulls', station: 'pulls', x: 0, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'PR board' },
   // Between the Issues board and the task queue.
   { id: 'station-queue', station: 'queue', x: -7.8, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'Task queue' },
+  // Reception: past the gong from the elevator, in the north-east corner, with the in-tray on the counter.
+  { id: 'station-inbox', station: 'inbox', x: 14.6, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'In-tray' },
 ];
 /** A board agent's kiosk: its top, and how far behind its middle (toward the wall) the agent stands. */
 export const KIOSK = { width: 0.8, depth: 0.5, height: 0.55, stand: 0.55 } as const;
@@ -102,6 +104,7 @@ export const STATION_AGENT: Record<StationKind, { name: string; color: string }>
   issues: { name: 'Issues agent', color: '#ef476f' },
   pulls: { name: 'PR agent', color: '#118ab2' },
   queue: { name: 'Queue agent', color: '#06d6a0' },
+  inbox: { name: 'Receptionist', color: '#ffd166' },
 };
 
 /** The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks. */
@@ -212,7 +215,8 @@ export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[]
   [17.2, -12.2, 1.5],
   [17.2, 12.2, 1.3],
   [-17.2, 8.5, 1.2],
-  [14.2, -12.2, 1.1],
+  // Beside the corner plant, out of the way of the receptionist's kiosk (it stood where that is now).
+  [16.4, -12.2, 1.1],
   [-6, 0, 1],
   [3.5, 0, 0.9],
   [8.5, 5, 1.1],

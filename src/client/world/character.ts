@@ -842,22 +842,26 @@ export class Person {
 
 // -----------------------------------------------------------------------------------------------
 
-const STATUS_BULB: Record<string, string> = {
+const STATUS_BULB: Record<WorkerStatus, string> = {
   starting: '#adb5bd',
   idle: '#8ecae6',
   working: '#ffd166',
   needs_input: '#ef476f',
+  paused: '#ffad66',
+  interrupted: '#ffad66',
   done: '#06d6a0',
   exited: '#6c757d',
   offline: '#6c757d',
 };
 
 /** Status pill on a worker's task card: [text, background, text color]. */
-const TASK_CHIP: Record<string, [string, string, string]> = {
+const TASK_CHIP: Record<WorkerStatus, [string, string, string]> = {
   starting: ['⏳ STARTING', STATUS_BULB.starting, '#2b2d42'],
   idle: ['💬 READY', STATUS_BULB.idle, '#2b2d42'],
   working: ['⌨️ WORKING', STATUS_BULB.working, '#2b2d42'],
   needs_input: ['❗ NEEDS YOU', STATUS_BULB.needs_input, '#ffffff'],
+  paused: ['⏸ PAUSED', STATUS_BULB.paused, '#2b2d42'],
+  interrupted: ['⏹ INTERRUPTED', STATUS_BULB.interrupted, '#2b2d42'],
   done: ['✅ DONE', STATUS_BULB.done, '#2b2d42'],
   exited: ['💤 ASLEEP', STATUS_BULB.exited, '#ffffff'],
   offline: ['💤 ASLEEP', STATUS_BULB.offline, '#ffffff'],
@@ -1089,6 +1093,9 @@ export class Worker {
   private dancing: { stage: Stage; t: number } | null = null;
   private pupils: THREE.Mesh[] = [];
   private feet: THREE.Mesh[] = [];
+  /** Something tucked under its right arm, face out (see hold): the queue agent's clipboard. */
+  private holder = new THREE.Group();
+  private holding: THREE.Object3D | null = null;
   /** Sent home: the box of its things in its arms, and how far into its waddle it is. */
   private leaving: { box: THREE.Group; boxT: number; stride: number } | null = null;
   /** On its way out (sent home) or in (called to a meeting): it waddles along instead of standing. */
@@ -1177,8 +1184,21 @@ export class Worker {
     this.globe = globe();
     for (const prop of [this.papers.group, this.globe.group]) prop.visible = false;
     this.root.add(this.globe.group);
+    // Up at its right side, clear of its eyes and above a kiosk's counter, tipped back a little.
+    this.holder.position.set(0.36, 0.74, 0.2);
+    this.holder.rotation.set(-0.15, 0, -0.1);
+    this.holder.scale.setScalar(0.7);
+    this.body.add(this.holder);
 
     this.setName(name);
+  }
+
+  /** Carries `prop` at its side, face out, or puts it down (null). */
+  hold(prop: THREE.Object3D | null) {
+    if (prop === this.holding) return;
+    this.holding?.removeFromParent();
+    this.holding = prop;
+    if (prop) this.holder.add(prop);
   }
 
   /** Where the globe floats, in its own space: beside its laptop, where the card over its head doesn't hide it. */
@@ -1336,6 +1356,7 @@ export class Worker {
     const hot = status === 'needs_input' || (status === 'done' && bounce);
     const bg = hot ? (status === 'done' ? '#caffbf' : '#ffd6e0') : status === 'working' ? '#ffec99' : '#fffaf3';
     const bubble =
+      status === 'paused' ? '⏸ paused' : status === 'interrupted' ? '⏹ interrupted' :
       status === 'needs_input' ? '❗ needs you' : status === 'done' && bounce ? '✅ done!' : status === 'working' ? '⌨️ working' : isAsleep(status) ? '💤' : '';
     const key = task ? `${status}|${bounce}|${task.name}|${task.summary}|${task.kind ?? ''}|${this.modelTag ?? ''}` : bubble;
     if (key === this.bubbleKey) return;
@@ -1399,7 +1420,9 @@ export class Worker {
     }
 
     this.armL.rotation.set(s.armLx, 0, s.armLz);
-    this.armR.rotation.set(s.armRx, 0, s.armRz);
+    // Holding something: that arm stays up under it, whatever the other one gets up to.
+    if (this.holding) this.armR.rotation.set(-1.45, 0, 0.1);
+    else this.armR.rotation.set(s.armRx, 0, s.armRz);
     this.armL.position.set(-0.3 + s.reach * 0.07, 0.55 - s.drop, 0.05 + s.reach * 0.12);
     this.armR.position.set(0.3 - s.reach * 0.07, 0.55 - s.drop + s.reach * 0.04, 0.05 + s.reach * 0.14);
     this.feet.forEach((f, i) => f.position.set(i ? 0.12 : -0.12, 0.2 + (i ? s.tap * 0.07 : 0), 0.05 + s.kick + (i ? s.tap * 0.03 : 0)));

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Usage } from '../shared/protocol.js';
 
-export type OpenCodeHookStatus = 'starting' | 'working' | 'needs_input' | 'done';
+export type OpenCodeHookStatus = 'starting' | 'working' | 'needs_input' | 'done' | 'interrupted';
 
 /** Compact, stable bridge payload sent by the generated OpenCode plugin. */
 export interface OpenCodeStatusEvent {
@@ -13,6 +13,7 @@ export interface OpenCodeStatusEvent {
   prompt?: string;
   tool?: string;
   detail?: string;
+  turnId?: string;
 }
 
 export interface OpenCodeUsageEvent {
@@ -69,6 +70,7 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
   let hydrationPending = false;
   let hydrationIncomplete = false;
   let usageEpoch = 0;
+  let turn = 0;
   let queued = Promise.resolve();
 
   // SDK lookups, session selection and delivery share one order. A slow selection cannot let
@@ -190,6 +192,7 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
     if (rootSession === id) return { type: "session", sessionId: id, status: "starting" };
     rootSession = id;
     usageEpoch++;
+    turn = 0;
     children.clear();
     usageByMessage.clear();
     liveUsageMessages.clear();
@@ -252,10 +255,14 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
     if (event.type === "session.status" && (p.status?.type === "busy" || p.status?.type === "retry")) return working();
     if (event.type === "session.idle" || (event.type === "session.status" && p.status?.type === "idle")) {
       pending.clear();
-      return { ...base, status: "done" };
+      return { ...base, status: "done", turnId: String(turn) };
     }
     if (event.type === "session.error") {
       const err = p.error || {};
+      if (err.name === "MessageAbortedError") {
+        pending.clear();
+        return { ...base, type: "error", status: "interrupted", detail: "Turn interrupted", turnId: String(turn) };
+      }
       return { ...base, type: "error", status: "needs_input", detail: detail(err.data?.message) || detail(err.message) || detail(err.name) };
     }
     if (event.type === "permission.asked" || event.type === "question.asked") {
@@ -265,7 +272,8 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
       return { ...base, type: kind, status: "needs_input", detail: detail(q?.question || q?.header || p.title || p.permission) };
     }
     if (["permission.replied", "question.replied", "question.rejected"].includes(event.type)) {
-      pending.delete(event.type.split(".")[0] + ":" + p.requestID);
+      // A reply can arrive after cancellation cleared the requests. It cannot resume the turn.
+      if (!pending.delete(event.type.split(".")[0] + ":" + p.requestID)) return;
       return working();
     }
   }
@@ -274,12 +282,23 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
     void hydrate(rootSession, usageEpoch);
   }
   return {
-    event: ({ event }) => enqueue(() => send(compact(event))),
+    event: ({ event }) => enqueue(async () => {
+      // Some versions report aborts on the assistant message instead of session.error.
+      // Keep forwarding its usage separately, including the aborted reply's tokens.
+      const info = event?.properties?.info;
+      if (event?.type === "message.updated" && info?.sessionID === rootSession
+        && info?.role === "assistant" && info?.error?.name === "MessageAbortedError") {
+        pending.clear();
+        await send({ type: "error", sessionId: rootSession, status: "interrupted", detail: "Turn interrupted", turnId: String(turn) });
+      }
+      await send(compact(event));
+    }),
     "chat.message": (input, output) => enqueue(async () => {
       if (typeof input.sessionID !== "string" || !await selectExisting(input.sessionID)) return;
       const parts = output && Array.isArray(output.parts) ? output.parts : [];
       const prompt = parts.filter((part) => part && part.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n").trim().slice(0, 20000);
-      await send({ type: "prompt", sessionId: input.sessionID, status: "working", ...(prompt ? { prompt } : {}) });
+      turn += 1;
+      await send({ type: "prompt", sessionId: input.sessionID, status: "working", turnId: String(turn), ...(prompt ? { prompt } : {}) });
     }),
     "tool.execute.before": (input) => enqueue(() => {
       if (input.sessionID === rootSession && !children.has(input.sessionID)) {

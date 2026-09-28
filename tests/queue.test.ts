@@ -10,11 +10,13 @@ function fixture(defaultProvider: AgentProvider = 'claude') {
   const dir = mkdtempSync(path.join(tmpdir(), 'office-queue-'));
   const workers: WorkerInfo[] = [];
   let hired = 0;
+  const workspaceRequests: unknown[] = [];
   const manager: QueueWorkers = {
     defaultProvider,
     list: () => workers,
     deskOccupied: (desk) => workers.some((w) => w.deskId === desk),
-    spawn(deskId, by, prompt, _worktree, kind, provider, model, effort) {
+    spawn(deskId, by, prompt, _worktree, kind, provider, model, effort, _meeting, workspace) {
+      workspaceRequests.push(workspace);
       const worker: WorkerInfo = {
         id: `worker-${hired++}`, deskId, kind, provider, model, effort, prompt, name: 'Test',
         color: '#ffffff', status: 'working', acked: false, createdBy: by,
@@ -40,7 +42,7 @@ function fixture(defaultProvider: AgentProvider = 'claude') {
     queues.push(queue);
     return queue;
   };
-  return { dir, workers, open, emptied: () => emptied, close() { queues.forEach((q) => q.shutdown()); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, workers, workspaceRequests, open, emptied: () => emptied, close() { queues.forEach((q) => q.shutdown()); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test('queue seats the selected provider and preserves it through completion and retry', (t) => {
@@ -56,12 +58,62 @@ test('queue seats the selected provider and preserves it through completion and 
   assert.equal(f.workers[1].provider, 'opencode');
 });
 
+test('paused and interrupted queue workers keep their slot without completing the task', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(1);
+  q.add('First', 'Tester'); q.add('Second', 'Tester');
+  for (const status of ['paused', 'interrupted'] as const) {
+    f.workers[0].status = status; q.onWorker(f.workers[0]);
+    assert.deepEqual(q.state().tasks.map(t => t.status), ['running', 'queued']);
+    assert.equal(q.state().tasks[0].outcome, undefined);
+    assert.equal(f.workers.length, 1);
+    assert.equal(f.emptied(), 0);
+  }
+  f.workers[0].status = 'working'; q.onWorker(f.workers[0]);
+  f.workers[0].status = 'done'; q.onWorker(f.workers[0]);
+  assert.deepEqual(q.state().tasks.map(t => t.status), ['done', 'running']);
+});
+
 test('queued provider survives restart even when the configured default differs', (t) => {
   const f = fixture(); t.after(() => f.close());
   const q = f.open(); q.setLimit(0);
   q.add('Fix login', 'Tester', undefined, undefined, 'opencode'); q.shutdown();
   const restored = f.open(); restored.setLimit(1);
   assert.equal(f.workers[0].provider, 'opencode');
+});
+
+test('a running task whose worker never reported a session stays running across a restart', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open();
+  q.add('Stop the arms moving', 'Tester', undefined, undefined, 'codex'); q.shutdown();
+  // The office went down before the agent reported a session; its worker comes back asleep.
+  f.workers[0].status = 'offline';
+  const restored = f.open();
+  assert.equal(restored.state().tasks[0].status, 'running');
+  // Not yet woken is not stopped, so there's nothing to requeue.
+  restored.onWorker(f.workers[0]);
+  assert.equal(restored.state().tasks[0].status, 'running');
+  assert.match(restored.retry(restored.state().tasks[0].id) ?? '', /still on the queue/);
+  // Woken with its task again, it finishes it the usual way.
+  f.workers[0].status = 'starting'; restored.onWorker(f.workers[0]);
+  f.workers[0].status = 'done'; restored.onWorker(f.workers[0]);
+  assert.equal(restored.state().tasks[0].outcome, 'done');
+  assert.equal(f.workers.length, 1);
+});
+
+test('a running task whose worker had a session, or is gone, still stops at a restart', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open();
+  q.add('With a session', 'Tester'); q.add('Sent home', 'Tester'); q.shutdown();
+  f.workers[0].sessionId = 'session-1';
+  f.workers[0].status = 'offline';
+  f.workers.splice(1, 1);
+  const restored = f.open();
+  for (const task of restored.state().tasks) {
+    assert.equal(task.status, 'done');
+    assert.equal(task.outcome, 'exited');
+    assert.equal(task.error, 'The office restarted while it was running');
+  }
 });
 
 test('new and legacy tasks without a provider use the configured agent', (t) => {
@@ -221,4 +273,67 @@ test('on a floor of several repositories, the same issue number in two of them a
   assert.match(q.add('Fix A again', 'Tester', undefined, 3, undefined, undefined, undefined, 'me/a') ?? '', /a#3 is already/);
   assert.equal(q.dropIssue(3, 'me/b'), true);
   assert.deepEqual(q.state().tasks.map((x) => x.repo), ['me/a']);
+});
+
+test('a task for a To Do Next item tells the plans board when it starts and how it ends, and goes on the queue once', (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'office-queue-plan-'));
+  const workers: WorkerInfo[] = [];
+  let hired = 0;
+  const workspaceRequests: unknown[] = [];
+  const manager: QueueWorkers = {
+    defaultProvider: 'claude',
+    list: () => workers,
+    deskOccupied: (desk) => workers.some((w) => w.deskId === desk),
+    spawn(deskId, by, prompt, _worktree, kind, provider) {
+      const w = { id: `w${hired++}`, deskId, kind, provider, prompt, name: `Worker ${hired}`, color: '#fff', status: 'working', acked: false, createdBy: by, createdAt: Date.now(), cols: 80, rows: 24, viewers: [], viewerIds: [] } as WorkerInfo;
+      workers.push(w);
+      return w;
+    },
+    kill(id) {
+      const i = workers.findIndex((w) => w.id === id);
+      if (i >= 0) workers.splice(i, 1);
+      return Promise.resolve({});
+    },
+  };
+  const started: [string, string, string][] = [];
+  const ended: [string, string][] = [];
+  const events = { update() {}, toast() {}, claimIssue: async () => undefined, refreshGitHub() {}, hiringPaused: () => undefined, emptied() {} };
+  const q = new TaskQueue(dir, manager, false, { ...events, startPlan: (plan, w, task) => started.push([plan, w.name, task]), endPlan: (plan, outcome) => ended.push([plan, outcome]) });
+  t.after(() => {
+    q.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(q.add('Renew the insurance', 'Ada', 'Renew the insurance', undefined, 'claude', undefined, undefined, undefined, 'plan-1'), undefined);
+  assert.equal(q.add('Again', 'Ada', undefined, undefined, 'claude', undefined, undefined, undefined, 'plan-1'), 'That To Do Next item is already on the queue');
+  const task = q.state().tasks[0];
+  assert.equal(task.plan, 'plan-1');
+  assert.equal(task.status, 'running');
+  assert.deepEqual(started, [['plan-1', 'Worker 1', task.id]]);
+  workers[0].status = 'done';
+  q.onWorker(workers[0]);
+  assert.deepEqual(ended, [['plan-1', 'done']]);
+  // Once it's done the item can go on the queue again, and the link survives a restart.
+  assert.equal(q.retry(task.id), undefined);
+  assert.equal(q.state().tasks[0].plan, 'plan-1');
+  assert.equal(started.length, 2);
+  q.shutdown();
+  const again = new TaskQueue(dir, manager, false, events);
+  t.after(() => again.shutdown());
+  assert.equal(again.state().tasks[0].plan, 'plan-1');
+});
+
+
+test('recovery repository selection survives queued restart, spawn and retry', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(0);
+  const workspace = { repositories: ['frontend'] };
+  q.add('Recover source', 'Tester', 'Recover', undefined, undefined, undefined, undefined, undefined, undefined, workspace);
+  q.shutdown();
+  const restored = f.open();
+  assert.deepEqual(restored.state().tasks[0].workspace, workspace);
+  restored.setLimit(1);
+  assert.deepEqual(f.workspaceRequests[0], workspace);
+  f.workers[0].status = 'done'; restored.onWorker(f.workers[0]);
+  assert.equal(restored.retry(restored.state().tasks[0].id), undefined);
+  assert.deepEqual(f.workspaceRequests[1], workspace);
 });
