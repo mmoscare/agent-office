@@ -311,8 +311,13 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     if (clip === 'copy') {
       e.preventDefault();
       const text = t.getSelection();
-      t.clearSelection();
-      if (text) void copyText(text).then((ok) => ok || toast("Couldn't copy here: right-click the selection and choose Copy", 'warn'));
+      // The selection stays until the copy lands, so the right-click fallback still has it.
+      if (text)
+        void copyText(text).then((ok) => {
+          t.focus();
+          if (ok) t.clearSelection();
+          else toast("Couldn't copy here: right-click the selection and choose Copy", 'warn');
+        });
       return false;
     }
     // Leave it to the browser, whose paste lands in xterm's own paste handling (bracketed, as typed).

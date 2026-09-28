@@ -7,6 +7,7 @@ import { $, h, openModal, STATUS_LABEL } from './dom';
 import { usageLabel, usageTitle } from './usage';
 import { providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
 import { whereabouts } from './whereabouts';
+import { isMac } from './terminal-clipboard';
 import { DESK_BY_ID } from '../../shared/layout';
 
 /** What the people list last showed, so it's only drawn again when something in it changed. */
@@ -161,7 +162,9 @@ export function openHelp() {
     ['Tab', 'The ☰ menu, top right: every window, and what shows on screen. Pin what you use most to the top bar'],
     ['Esc', 'Close any window and get back to looking around'],
     ['Ctrl + [', 'Send Esc to a terminal (e.g. to interrupt Claude)'],
-    ['Ctrl + C / V', 'In a terminal: copy the selected text / paste (Ctrl+C with nothing selected still interrupts). If dragging won’t select, hold Shift while you drag'],
+    isMac()
+      ? ['⌘ C / V', 'In a terminal: copy the selected text / paste (Ctrl+C still goes to the program). If dragging won’t select, hold ⌥ Option while you drag']
+      : ['Ctrl + C / V', 'In a terminal: copy the selected text / paste (Ctrl+C with nothing selected still interrupts). If dragging won’t select, hold Shift while you drag'],
     ['⚙️', 'Settings (in the ☰ menu): switch between first and third person'],
   ];
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
