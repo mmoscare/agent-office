@@ -61,6 +61,12 @@ const SCREEN_INTERVAL_MS = 250;
 /** What a worker with a live terminal can be doing. */
 const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input', 'paused', 'interrupted'] satisfies WorkerStatus[]);
 const LATE_PROMPT_GRACE_MS = 5000;
+/**
+ * Claude's idle notification stands in for a Stop hook that never came, but it can beat the screen
+ * showing that Esc stopped the turn instead. It waits this long, a few screen flushes, before the
+ * turn counts as done.
+ */
+export const IDLE_DONE_GRACE_MS = 1500;
 const KEYFRAME_MS = 8000;
 /** How often a steady typist's "last typed" time is refreshed for everyone. */
 const TYPED_REFRESH_MS = 15_000;
@@ -126,8 +132,8 @@ interface Worker {
   cancelledTurns: Set<string>;
   /** Where Claude's current turn starts on its screen: an interrupt notice at or above it is an older turn's. */
   turnStart?: { readonly line: number; dispose(): void };
-  /** Claude reports its progress on this terminal, so its idle marker, not the idle notification, says a turn stopped. */
-  reportsProgress?: boolean;
+  /** Claude's idle notification, waiting out IDLE_DONE_GRACE_MS before it marks the turn done. */
+  idleDone?: NodeJS.Timeout;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -435,6 +441,7 @@ export class WorkerManager {
     this.workers.delete(id);
     this.namer.forget(id);
     clearTimeout(w.scanTimer);
+    dropIdleDone(w);
     const proc = w.pty;
     w.pty = undefined; // so the exit handler knows this worker is gone and stays quiet
     try {
@@ -720,6 +727,8 @@ export class WorkerManager {
       this.persist();
     }
     this.scheduleScan(w);
+    // A tool call says the turn goes on, whatever the idle notification said.
+    if (event === 'PreToolUse' || event === 'PostToolUse' || event === 'PostToolUseFailure') dropIdleDone(w);
     switch (event) {
       case 'SessionStart':
         if (payload?.source === 'clear') {
@@ -773,15 +782,9 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          // Stands in for a Stop hook that never came, when nothing else says the turn ended. Where
-          // Claude reports its progress, its idle marker does (see onProgress); this notification can
-          // beat that marker here, and Esc leaves the prompt idle too, so it proves nothing.
-          if (w.info.status === 'working' && !w.reportsProgress && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) {
-            if (this.interruptedOnScreen(w)) {
-              cancelTurn(w);
-              this.setStatus(w, 'interrupted');
-            } else this.setStatus(w, 'done');
-          }
+          // Stands in for a Stop hook that never came. Esc leaves the prompt idle too, and this can
+          // beat the screen showing it, so it waits for that first (see holdIdleDone).
+          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.holdIdleDone(w);
         }
         break;
       case 'Stop':
@@ -973,6 +976,7 @@ export class WorkerManager {
     w.cancelledTurns.clear();
     w.turnStart?.dispose();
     w.turnStart = undefined;
+    dropIdleDone(w);
     w.prompts = [];
     w.tools = [];
     w.toolsSinceNamed = 0;
@@ -996,6 +1000,7 @@ export class WorkerManager {
     this.sides.killAll();
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
+      dropIdleDone(w);
       this.scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) this.saveScrollback(w);
@@ -1167,7 +1172,6 @@ export class WorkerManager {
     w.screenDirty = true;
     w.fresh = undefined;
     w.turnStart = undefined;
-    w.reportsProgress = false;
     return term;
   }
 
@@ -1328,16 +1332,36 @@ export class WorkerManager {
   }
 
   private onProgress(w: Worker, busy: boolean) {
-    w.reportsProgress = true;
     const s = w.info.status;
     if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event, and
+    // the idle notification standing in for it may have arrived before (see holdIdleDone).
     else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) {
       this.setStatus(w, 'paused');
       // Look for Claude's interrupt notice on the next screen check (see checkBlocked).
       w.screenDirty = true;
     }
+  }
+
+  /**
+   * Claude's idle notification says the turn ended, with no Stop hook to say how. Nothing is reported
+   * yet: the queue and plans would take a done as final. After IDLE_DONE_GRACE_MS, a turn still
+   * working, or paused by its idle marker since, is interrupted if its notice shows and otherwise
+   * done. A Stop, a tool call, any other status or a new turn in the meantime calls it off.
+   */
+  private holdIdleDone(w: Worker) {
+    if (w.idleDone) return;
+    const turn = w.turnId;
+    w.idleDone = setTimeout(() => {
+      w.idleDone = undefined;
+      const s = w.info.status;
+      if (this.workers.get(w.info.id) !== w || !w.pty || w.turnId !== turn || isCancelledTurn(w) || (s !== 'working' && s !== 'paused')) return;
+      if (this.interruptedOnScreen(w)) {
+        cancelTurn(w);
+        this.setStatus(w, 'interrupted');
+      } else this.setStatus(w, 'done');
+    }, IDLE_DONE_GRACE_MS);
   }
 
   /**
@@ -1351,6 +1375,8 @@ export class WorkerManager {
 
   private setStatus(w: Worker, status: WorkerStatus) {
     if (w.info.status === status) return;
+    // Only the idle marker leaves a held idle notification to finish the turn.
+    if (status !== 'paused') dropIdleDone(w);
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
     // Done, idle or asleep: it's not acting anything out any more.
@@ -1710,7 +1736,14 @@ function beginTurn(w: Worker, turnId?: string) {
   w.turnSeq = (w.turnSeq || 0) + 1;
   w.cancelledTurns ??= new Set();
   w.turnId = turnId || `t${w.turnSeq}`;
+  dropIdleDone(w);
   markTurnStart(w);
+}
+
+/** Calls off an idle notification still waiting to mark the turn done (see holdIdleDone). */
+function dropIdleDone(w: Worker) {
+  clearTimeout(w.idleDone);
+  w.idleDone = undefined;
 }
 
 /**
