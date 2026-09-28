@@ -318,6 +318,7 @@ export interface GhPull extends GhWhere {
   labels: { name: string; color: string }[];
   reviewDecision: string;
   headRefName: string;
+  headRefOid?: string;
   baseRefName: string;
   createdAt: string;
   updatedAt: string;
@@ -345,6 +346,8 @@ export interface QueueTask {
   repo?: string;
   /** The 📒 To Do Next item it's for, when it is: the office moves that to Progress and Finished as the task runs. */
   plan?: string;
+  /** Managed repositories to provision when this task starts (also retained for retry/restart). */
+  workspace?: WorkspaceRequest;
   title: string;
   prompt: string;
   addedBy: string;
@@ -362,6 +365,48 @@ export interface QueueTask {
   error?: string;
   /** The pull request that closes the issue, or was opened from the worker's branch. */
   pr?: { number: number; url: string; state: string; title: string };
+  /** Finished without a PR, but its branch still holds work: files not committed, commits no PR has (see server/unshipped.ts). */
+  unshipped?: { dirty: number; commits: number };
+}
+
+/** An office branch holding work that no open or merged pull request carries (see server/unshipped.ts). */
+export interface UnshippedItem {
+  /** Names it to the server, for a recovery task. */
+  key: string;
+  branch: string;
+  /** The repository's folder relative to the floor, on a floor that's a folder of several. */
+  repository?: string;
+  /** Its worktree folder relative to the floor; unset when only the branch is left. */
+  path?: string;
+  /** The branch its work should land on. */
+  base?: string;
+  workerId?: string;
+  workerName?: string;
+  /** Whether that worker is mid-turn, still at its desk, or gone home. */
+  worker: 'active' | 'idle' | 'gone';
+  taskId?: string;
+  taskTitle?: string;
+  /** Files with uncommitted changes, new ones included. */
+  dirty: number;
+  /** Commits not on the base branch (nor patch-equivalent to any there). */
+  commits: number;
+  /** Commits on no remote. */
+  unpushed: number;
+  added?: number;
+  deleted?: number;
+  /** Newest commit or changed file, ms. */
+  modifiedAt?: number;
+  /** 'unknown' when GitHub couldn't be asked (rate-limited, offline): it may have a PR after all. */
+  pr: 'none' | 'unknown';
+}
+
+export interface UnshippedState {
+  items: UnshippedItem[];
+  scannedAt: number;
+  scanning: boolean;
+  error?: string;
+  /** Why some PR statuses are unknown. */
+  prNote?: string;
 }
 
 export interface QueueState {
@@ -720,6 +765,8 @@ export interface FloorView {
   whiteboard: WhiteboardView;
   /** The meeting room: who's meeting about what, and the meetings before. */
   meeting: MeetingState;
+  /** Office branches with work no pull request carries (the PR board's Unshipped work column). */
+  unshipped?: UnshippedState;
   /** The 📒 To Do Next board: the floor's own to-do list. */
   plans: PlansState;
   /** The 📥 in-tray: what came in from outside. */
@@ -1045,6 +1092,10 @@ export type ClientMsg =
   /** Forget the finished tasks. */
   | { t: 'queue.clear' }
   | { t: 'queue.limit'; maxWorkers: number }
+  /** Look through the office's branches for work without a PR again; answered with `unshipped`. */
+  | { t: 'unshipped.scan' }
+  /** Queue a task for a fresh worker to recover that branch's work into a PR (UnshippedItem.key). */
+  | { t: 'unshipped.recover'; key: string }
   /** A note into the 📥 in-tray, written here in the office. */
   | { t: 'inbox.note'; title?: string; text: string }
   /** Put a dealt-with tray item away in the tray's archive. */
@@ -1184,6 +1235,7 @@ export type ServerMsg =
   | { t: 'worker.update'; worker: WorkerInfo }
   | { t: 'worker.remove'; workerId: string }
   | { t: 'worker.worktree'; workerId: string; state: WorktreeState }
+  | { t: 'unshipped'; state: UnshippedState }
   | { t: 'screen'; workerId: string; cols: number; rows: number; lines: Record<number, Run[]>; full: boolean; cursor: [number, number] }
   | { t: 'term.snapshot'; workerId: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; workerId: string; data: string }
