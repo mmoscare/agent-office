@@ -1,4 +1,5 @@
 import type { GitDiffMode } from '../shared/git-board.js';
+import { authorUpdates } from './author-updates.js';
 import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeStatus } from './git-board.js';
 
 /** A result that's a string is a failure, said for a person. */
@@ -23,6 +24,8 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
   const repo = (q.get('repo') ?? '').slice(0, 2048);
   const branch = (q.get('branch') ?? '').slice(0, 255) || undefined;
   try {
+    if (p === '/api/git/author-updates' && method === 'GET') return [200, await authorUpdates.read(floorDir)];
+    if (p === '/api/git/author-updates/check' && method === 'POST') return [200, await authorUpdates.read(floorDir, true)];
     if (p === '/api/git/repos' && method === 'GET') return [200, await gitRepositories(floorDir)];
     // The office's own code folder, whichever floor asks (see OfficeStatus).
     if (p === '/api/git/office' && method === 'GET') return [200, { office: (await officeStatus()) ?? null }];

@@ -1,0 +1,13 @@
+# Author updates on the wall
+
+The **Author updates** noticeboard sits on the north wall beside the merge gong. It appears only on the main checkout's own `mmoscare/agent-office` floor, not on portfolio folders, subfolders, other repositories or worker worktrees. The same control is in the Office menu, and an update badge appears in the top bar when updates or an unfinished merge need attention.
+
+While that floor is open in a visible browser, the server checks `AgentSystemLabs/agent-office`'s `main` about every five minutes. **Check now** requests another check (with a ten-second cooldown shared across browsers). These are commits merged into the author's main branch, not release announcements or activity on every branch. Network failures show as unavailable, never as up to date.
+
+The checkout must have `origin` pointing to `mmoscare/agent-office`, `upstream` pointing to `AgentSystemLabs/agent-office`, and a local `personal` branch. Checks fetch only `upstream/main` and compare it with local `personal`; they never switch branches, merge, change working files, push, build or restart the app. The displayed status says whether author commits are integrated in local `personal`, not whether that version has been built or is running.
+
+Click the board or look at it and press **E**. Review the commit list, then choose **Merge with a worker**. This opens an editable task and the usual provider/worker picker. Choose an existing update worker to continue its work, or hire a new one. Sending the task authorizes the worker to follow `upstream/main → main → personal`, resolve conflicts while retaining customizations, run checks and build, and push the tested branches to your fork. It does not launch a merge directly from the web server. Provider login and access are the same as for ordinary workers.
+
+If the actual `personal` checkout has an unfinished merge, the panel lists unresolved files and offers **Resolve / continue with a worker**. The task requires inspecting `MERGE_HEAD`, preserving uncommitted work, avoiding concurrent merges and asking about decisions that cannot safely be inferred. Agent instructions are guidance, not a transaction lock: continue with the same worker instead of launching another update task while one is active.
+
+The worker leaves a durable handoff and restart steps. Wait for active workers to finish before restarting the office. See [the personal workflow](../PERSONAL-WORKFLOW.md) for the branch policy and manual recovery commands.
