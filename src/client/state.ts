@@ -6,8 +6,10 @@ import { newer, type WbElement } from '../shared/whiteboard';
 import type { DogState } from '../shared/dog';
 import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
+import type { PlansState } from '../shared/plans';
+import type { InboxState } from '../shared/inbox';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -44,9 +46,9 @@ export function saveProfile(p: Profile) {
 export type ViewMode = 'first' | 'third';
 
 /** The panels you can show or hide on screen, from the ☰ menu. */
-export type HudPanel = 'workers' | 'people' | 'spend' | 'limits' | 'chat' | 'floor';
+export type HudPanel = 'workers' | 'people' | 'spend' | 'limits' | 'balances' | 'chat' | 'floor';
 /** Out of the way by default: only the chat shows until you turn the rest on. */
-export const HUD_DEFAULTS: Record<HudPanel, boolean> = { workers: false, people: false, spend: false, limits: false, chat: true, floor: false };
+export const HUD_DEFAULTS: Record<HudPanel, boolean> = { workers: false, people: false, spend: false, limits: false, balances: true, chat: true, floor: false };
 
 export interface Settings {
   view: ViewMode;
@@ -159,6 +161,10 @@ class Store {
   queue: QueueState = { tasks: [], maxWorkers: 0 };
   /** Office branches with work no PR carries (the PR board's Unshipped work column). */
   unshipped: UnshippedState = { items: [], scannedAt: 0, scanning: false };
+  /** The floor's 📒 To Do Next board. */
+  plans: PlansState = { revision: 0, items: [] };
+  /** The floor's 📥 in-tray: what came in from outside. */
+  inbox: InboxState = { revision: 0, items: [], dir: '', door: false };
   /** The meeting room: the meeting at the table, and the ones before. */
   meeting: MeetingState = { current: null, past: [] };
   /** Who you're signed in as (see /api/whoami). */
@@ -237,6 +243,8 @@ class Store {
     this.pulls = v.pulls;
     this.queue = v.queue;
     this.unshipped = v.unshipped ?? { items: [], scannedAt: 0, scanning: false };
+    this.plans = v.plans ?? { revision: 0, items: [] };
+    this.inbox = v.inbox ?? { revision: 0, items: [], dir: '', door: false };
     this.meeting = v.meeting;
     this.decor = v.decor;
     this.services = v.services;
@@ -246,7 +254,7 @@ class Store {
     this.cabinetFrame = v.cabinet.frame;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
   }
 
   private setDog(dog: DogState | null) {
@@ -411,6 +419,14 @@ class Store {
       case 'unshipped':
         this.unshipped = msg.state;
         this.emit('unshipped');
+        break;
+      case 'plans':
+        this.plans = msg.state;
+        this.emit('plans');
+        break;
+      case 'inbox':
+        this.inbox = msg.state;
+        this.emit('inbox');
         break;
       case 'meeting':
         this.meeting = msg.state;

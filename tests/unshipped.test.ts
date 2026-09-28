@@ -142,19 +142,21 @@ test('an open or merged PR ships a branch; a closed one does not', async (t) => 
   for (const slug of ['open-a', 'merged-b', 'closed-c', 'asked-d']) {
     const wt = f.hire(slug);
     writeFileSync(path.join(wt.abs, `${slug}.txt`), 'x\n');
+    git(wt.abs, 'add', '.');
+    git(wt.abs, 'commit', '-m', slug);
   }
   const asked: string[] = [];
   const pulls = new BranchPulls(
     board([
       { headRefName: 'office/open-a', state: 'OPEN' },
-      { headRefName: 'office/merged-b', state: 'MERGED' },
+      { headRefName: 'office/merged-b', state: 'MERGED', headRefOid: git(f.root, 'rev-parse', 'office/merged-b') },
       { headRefName: 'office/closed-c', state: 'CLOSED' },
     ]),
     async (args) => {
       const branch = args[args.indexOf('--head') + 1];
       asked.push(branch);
       // Older than the board's list reaches: only gh for the branch itself knows.
-      return JSON.stringify(branch === 'office/asked-d' ? [{ number: 3, state: 'MERGED', headRefName: branch }] : [{ number: 2, state: 'CLOSED', headRefName: branch }]);
+      return JSON.stringify(branch === 'office/asked-d' ? [{ number: 3, state: 'MERGED', headRefName: branch, headRefOid: git(f.root, 'rev-parse', branch) }] : [{ number: 2, state: 'CLOSED', headRefName: branch }]);
     },
   );
   const found = await scan(f.root, { pulls });
@@ -217,8 +219,8 @@ test('the recovery task copies the work without touching the original worktree',
   assert.ok(r.prompt.includes('ls-files --others --exclude-standard'));
   assert.ok(r.prompt.includes('gh pr create --base personal'));
   assert.match(r.prompt, /Gizmo \(working on “Add the feature”\)/);
-  // Without a worktree of its own (a floor of several repositories), it's told to make one.
-  assert.match((await recoveryTask(found, false)).prompt, /worktree add -b recover\/gizmo-bff0/);
+  // Recovery never instructs workers to create unmanaged worktrees.
+  assert.doesNotMatch((await recoveryTask(found, false)).prompt, /worktree add/);
 });
 
 test('the watch hands finished tasks their branches, and refuses to recover an active worker', async (t) => {
@@ -237,4 +239,77 @@ test('the watch hands finished tasks their branches, and refuses to recover an a
   const r = await watch.recover(key, true);
   assert.equal(typeof r, 'object');
   assert.match(String(await watch.recover('nope', true)), /no longer/);
+});
+
+
+test('merged PR head and cached result never hide later commits or dirty files', async (t) => {
+  const f = fixture(t);
+  const wt = f.hire('reused');
+  writeFileSync(path.join(wt.abs, 'first.txt'), 'first');
+  git(wt.abs, 'add', '.'); git(wt.abs, 'commit', '-m', 'First');
+  const headRefOid = git(f.root, 'rev-parse', wt.branch);
+  const merged = { number: 1, headRefName: wt.branch, state: 'MERGED', headRefOid };
+  for (const fromBoard of [true, false]) {
+    const pulls = new BranchPulls(board(fromBoard ? [merged] : []), async () => JSON.stringify([merged]));
+    assert.equal(await pulls.has(wt.branch, f.root), true);
+    writeFileSync(path.join(wt.abs, 'later.txt'), String(fromBoard));
+    assert.equal((await scan(f.root, { pulls }))[0].item.dirty, 1);
+    git(wt.abs, 'add', '.'); git(wt.abs, 'commit', '-m', 'Later');
+    assert.equal(await pulls.has(wt.branch, f.root), false);
+    assert.equal((await scan(f.root, { pulls })).length, 1);
+    git(wt.abs, 'reset', '--hard', headRefOid);
+  }
+});
+
+test('a refreshed closed PR invalidates a cached open answer immediately', async (t) => {
+  const f = fixture(t); const wt = f.hire('closed');
+  let items: Partial<GhPull>[] = [];
+  let state = 'OPEN'; let calls = 0;
+  const pulls = new BranchPulls(() => board(items)(), async () => {
+    calls++; return JSON.stringify([{ number: 1, headRefName: wt.branch, state }]);
+  });
+  assert.equal(await pulls.has(wt.branch, f.root), true);
+  state = 'CLOSED'; items = [{ number: 1, headRefName: wt.branch, state }];
+  assert.equal(await pulls.has(wt.branch, f.root), false);
+  assert.equal(calls, 2);
+  assert.equal(await pulls.has(wt.branch, f.root), false);
+  assert.equal(calls, 2);
+});
+
+test('a subfolder floor finds enclosing branches and its own dirty worker worktrees', async (t) => {
+  const f = fixture(t); const sub = path.join(f.root, 'sub'); mkdirSync(sub);
+  const wt = new Worktrees(sub).create('sub-worker');
+  assert.notEqual(typeof wt, 'string'); if (typeof wt === 'string') return;
+  writeFileSync(path.join(sub, wt.path, 'dirty.txt'), 'dirty');
+  const enclosing = f.hire('root-worker');
+  writeFileSync(path.join(enclosing.abs, 'other.txt'), 'other');
+  const found = await scan(sub, { workers: [worker({ worktree: wt })] });
+  assert.equal(found.length, 2);
+  const item = found.find((x) => x.item.branch === wt.branch)!.item;
+  assert.equal(item.dirty, 1); assert.equal(item.workerName, 'Gizmo');
+  assert.equal(item.path, wt.path.split(path.sep).join('/'));
+  assert.equal((await scan(sub)).length, 2); // departed workers still found
+});
+
+test('multi-repository recovery requests the managed repository and leaves the source intact', async (t) => {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'office-recover-multi-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  initRepo(path.join(root, 'frontend'));
+  const ws = new Workspaces(root).create('source', { repositories: ['frontend'] });
+  assert.notEqual(typeof ws, 'string'); if (typeof ws === 'string') return;
+  const source = path.join(root, ws.repositories[0].path);
+  writeFileSync(path.join(source, 'dirty.txt'), 'keep me');
+  const before = git(source, 'status', '--porcelain');
+  const [found] = await scan(root);
+  const task = await recoveryTask(found, false);
+  assert.deepEqual(task.workspace, { repositories: ['frontend'] });
+  assert.match(task.prompt, /managed workspace worktree/);
+  assert.doesNotMatch(task.prompt, /worktree add/);
+  const recovery = new Workspaces(root).create('recovery', task.workspace!);
+  assert.notEqual(typeof recovery, 'string'); if (typeof recovery === 'string') return;
+  assert.equal(recovery.repositories[0].repository, 'frontend');
+  assert.notEqual(recovery.repositories[0].branch, ws.repositories[0].branch);
+  assert.equal(git(source, 'status', '--porcelain'), before);
+  const checked = await new Workspaces(root).inspect(recovery);
+  assert.equal(checked.error, undefined); assert.equal(checked.repositories?.length, 1);
 });

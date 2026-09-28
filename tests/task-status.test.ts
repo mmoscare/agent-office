@@ -15,8 +15,8 @@ test('a finished task says honestly what it left behind', () => {
   assert.deepEqual(taskStatus({ status: 'done', outcome: 'done' }), { text: 'done', warn: false });
   assert.deepEqual(taskStatus({ status: 'done', outcome: 'killed' }), { text: 'done (killed)', warn: false });
   assert.deepEqual(taskStatus({ status: 'done', outcome: 'done', unshipped: { dirty: 3, commits: 0 } }), { text: 'done — no PR (unshipped work)', warn: true });
-  // A PR carries the work: nothing to warn about.
-  assert.deepEqual(taskStatus({ status: 'done', outcome: 'done', pr, unshipped: { dirty: 0, commits: 1 } }), { text: 'done', warn: false });
+  // A linked historical PR must not conceal work found by the scanner.
+  assert.deepEqual(taskStatus({ status: 'done', outcome: 'done', pr, unshipped: { dirty: 0, commits: 1 } }), { text: 'done — work outside PR (unshipped work)', warn: true });
   assert.deepEqual(taskStatus({ status: 'done', outcome: 'exited', error: RESTART_ERROR }), { text: 'stopped by restart', warn: true });
   assert.deepEqual(taskStatus({ status: 'done', outcome: 'exited', error: RESTART_ERROR, unshipped: { dirty: 0, commits: 1 } }), { text: 'stopped by restart — no PR (unshipped work)', warn: true });
   assert.equal(unshippedText({ dirty: 1, commits: 2 }), '1 uncommitted file, 2 unshipped commits');
@@ -55,8 +55,8 @@ test('old state files load; a restart-stopped task is flagged, then its unshippe
   ]));
   assert.equal(taskStatus(byId('a')).text, 'stopped by restart — no PR (unshipped work)');
   assert.equal(taskStatus(byId('c')).text, 'done — no PR (unshipped work)');
-  assert.equal(taskStatus(byId('d')).text, 'done');
-  assert.equal(byId('d').unshipped, undefined);
+  assert.equal(taskStatus(byId('d')).text, 'done — work outside PR (unshipped work)');
+  assert.deepEqual(byId('d').unshipped, { dirty: 1, commits: 0 });
 
   // Kept across a restart, and cleared once the work is shipped.
   const again = queueIn(dir);

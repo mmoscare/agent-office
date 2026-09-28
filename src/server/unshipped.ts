@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { sameRepo } from '../shared/floors.js';
 import type { GhPull, GhState, QueueTask, UnshippedItem, UnshippedState, WorkerInfo } from '../shared/protocol.js';
-import type { WorkerWorkspace } from '../shared/workspaces.js';
+import type { WorkerWorkspace, WorkspaceRequest } from '../shared/workspaces.js';
 import { isBusy } from '../shared/status.js';
 import { recoveryTitle } from '../shared/task-status.js';
 import { gh } from './github.js';
@@ -134,7 +134,7 @@ export async function held(c: Candidate, base: string | undefined): Promise<Held
 export class BranchPulls {
   /** Why GitHub couldn't be asked, while it's being left alone. */
   error?: string;
-  private cache = new Map<string, { at: number; has: boolean }>();
+  private cache = new Map<string, { at: number; has: boolean; revision: string }>();
   private backoffUntil = 0;
 
   constructor(
@@ -145,15 +145,20 @@ export class BranchPulls {
 
   async has(branch: string, repoDir: string, repo?: string): Promise<boolean | undefined> {
     const board = this.board();
-    if (board.items.some((p) => p.headRefName === branch && (p.state === 'OPEN' || p.state === 'MERGED') && (!repo || !p.repo || sameRepo(p.repo, repo)))) return true;
+    const tip = await tryGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoDir);
+    const matches = board.items.filter((p) => p.headRefName === branch && (!repo || !p.repo || sameRepo(p.repo, repo)));
+    const carries = (p: { state: string; headRefOid?: string }) => p.state === 'OPEN' || (p.state === 'MERGED' && !!tip && p.headRefOid === tip);
+    if (matches.some(carries)) return true;
+    // A new local tip or a refreshed CLOSED PR invalidates an earlier positive answer.
+    const revision = JSON.stringify([tip, matches.map((p) => [p.number, p.state, p.headRefOid])]);
     const key = `${real(repoDir)}\0${branch}`;
     const hit = this.cache.get(key);
-    if (hit && this.now() - hit.at < (hit.has ? HAS_PR_MS : NO_PR_MS)) return hit.has;
+    if (hit && hit.revision === revision && this.now() - hit.at < (hit.has ? HAS_PR_MS : NO_PR_MS)) return hit.has;
     if (this.now() < this.backoffUntil) return undefined;
     try {
-      const out = await this.query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,state,headRefName'], repoDir);
-      const has = (JSON.parse(out || '[]') as { state: string; headRefName: string }[]).some((p) => p.headRefName === branch && (p.state === 'OPEN' || p.state === 'MERGED'));
-      this.cache.set(key, { at: this.now(), has });
+      const out = await this.query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,state,headRefName,headRefOid'], repoDir);
+      const has = (JSON.parse(out || '[]') as { state: string; headRefName: string; headRefOid?: string }[]).some((p) => p.headRefName === branch && carries(p));
+      this.cache.set(key, { at: this.now(), has, revision });
       this.error = undefined;
       return has;
     } catch (err) {
@@ -167,7 +172,7 @@ export class BranchPulls {
 /** The repositories to look in: the floor itself when it's a checkout, else each one inside it (workspaces.ts finds them). */
 export async function floorRepositories(floorDir: string): Promise<{ dir: string; repository?: string }[]> {
   const top = await tryGit(['rev-parse', '--show-toplevel'], floorDir);
-  if (top && real(top) === real(floorDir)) return [{ dir: floorDir }];
+  if (top) return [{ dir: real(top) }];
   const found = await workspaceRepositories(floorDir);
   return found.repositories.filter((r) => !r.error).map((r) => ({ dir: floorRepository(floorDir, r.path), repository: r.path }));
 }
@@ -205,6 +210,12 @@ export async function candidates(floorDir: string, workers: WorkerInfo[]): Promi
     if (!listed) continue;
     for (const wt of listed.worktrees) if (wt.branch) add({ repoDir: r.dir, repository: r.repository, branch: wt.branch, path: wt.path });
     for (const branch of listed.branches) add({ repoDir: r.dir, repository: r.repository, branch });
+  }
+  // A subfolder floor creates its worktrees under that folder, not under the Git root.
+  const enclosing = repos.find((r) => !r.repository && real(r.dir) !== real(floorDir));
+  if (enclosing) {
+    const listed = await new Worktrees(floorDir).list();
+    for (const wt of listed.worktrees) if (wt.branch) add({ repoDir: enclosing.dir, branch: wt.branch, path: path.relative(enclosing.dir, path.resolve(floorDir, wt.path)) });
   }
   const workspaces = [...savedWorkspaces(floorDir), ...workers.flatMap((w) => (w.workspace ? [w.workspace] : []))];
   for (const ws of workspaces) {
@@ -252,7 +263,7 @@ export async function scanUnshipped(input: ScanInput): Promise<Found[]> {
   const owner = (c: Candidate) => {
     const repo = real(c.repoDir);
     return workers.find(
-      (w) => (w.worktree?.branch === c.branch && real(floorDir) === repo) || w.workspace?.repositories.some((r) => r.branch === c.branch && repoOf(r.repository) === repo),
+      (w) => (w.worktree?.branch === c.branch && !!c.path && real(path.resolve(floorDir, w.worktree.path)) === real(path.resolve(c.repoDir, c.path))) || w.workspace?.repositories.some((r) => r.branch === c.branch && repoOf(r.repository) === repo),
     );
   };
   const bases = new Map<string, string | undefined>();
@@ -270,7 +281,7 @@ export async function scanUnshipped(input: ScanInput): Promise<Found[]> {
     }
     if (!h) continue;
     const has = await pulls.has(c.branch, c.repoDir, input.repoName?.(c.repoDir));
-    if (has) continue;
+    if (has && !h.dirty) continue;
     const w = owner(c);
     const task = [...tasks].reverse().find((t) => t.branch === c.branch && (!w || !t.workerId || t.workerId === w.id));
     const floorPath = c.path ? path.relative(floorDir, path.join(c.repoDir, c.path)).split(path.sep).join('/') : undefined;
@@ -304,7 +315,7 @@ export async function scanUnshipped(input: ScanInput): Promise<Found[]> {
  * The task that gets a fresh worker to carry a branch's work into a pull request, leaving the original
  * worktree as it is. `ownWorktree`: the queue seats the worker in a worktree of its own (a one-repo floor).
  */
-export async function recoveryTask(found: Found, ownWorktree: boolean): Promise<{ title: string; prompt: string }> {
+export async function recoveryTask(found: Found, ownWorktree: boolean): Promise<{ title: string; prompt: string; workspace?: WorkspaceRequest }> {
   const { item, candidate: c } = found;
   const base = item.base ?? 'the base branch';
   const shas = item.commits && item.base
@@ -313,7 +324,7 @@ export async function recoveryTask(found: Found, ownWorktree: boolean): Promise<
   const wt = c.path ? path.join(c.repoDir, c.path) : undefined;
   const repoNote = item.repository ? ` in the repository checked out at \`${c.repoDir}\`` : '';
   const who = item.workerName ? `${item.workerName}${item.taskTitle ? ` (working on “${item.taskTitle}”)` : ''}` : item.taskTitle ? `the worker on “${item.taskTitle}”` : 'an earlier worker';
-  const slug = c.branch.replace(/^office\//, '').replace(/[^\w.-]+/g, '-');
+  const workspace = item.repository ? { repositories: [item.repository] } : undefined;
   const lines = [
     `Recover work that ${who} left without a pull request, and ship it as a new PR against \`${base}\`.`,
     '',
@@ -322,9 +333,9 @@ export async function recoveryTask(found: Found, ownWorktree: boolean): Promise<
     'Do NOT modify the source: no commits, checkouts, resets, stashes, cleans or deletes in that folder or on that branch. Only read from it.',
     '',
     'Steps:',
-    ownWorktree
-      ? `1. You are in your own fresh worktree. Make sure it starts from the latest \`${base}\`: \`git fetch origin\`, then \`git rebase origin/${base}\` if that remote branch exists and is ahead of yours.`
-      : `1. Make your own worktree for this, from the latest \`${base}\`, and work only there: \`git -C "${c.repoDir}" fetch origin\`, then \`git -C "${c.repoDir}" worktree add -b recover/${slug} "${path.join(c.repoDir, '.agent-office', 'worktrees', `recover-${slug}`)}" ${base}\` (use \`origin/${base}\` if it's newer), and cd into it. Don't touch the repository's own checkout.`,
+    ownWorktree || workspace
+      ? `1. ${workspace ? `Use the managed workspace worktree for repository ${JSON.stringify(item.repository)} listed in your workspace instructions.` : 'You are in your own fresh worktree.'} Make sure it starts from the latest \`${base}\`: \`git fetch origin\`, then \`git rebase origin/${base}\` if that remote branch exists and is ahead of yours.`
+      : '1. No managed worktree is available. Stop and ask for a repository to be selected before changing any files.',
     shas.length
       ? `2. Carry over the commits, oldest first: \`git cherry-pick ${shas.join(' ')}\`. (To recompute the list: \`git rev-list --reverse --cherry-pick --right-only --no-merges ${base}...${c.branch}\`.)`
       : '2. There are no commits to carry over.',
@@ -335,7 +346,7 @@ export async function recoveryTask(found: Found, ownWorktree: boolean): Promise<
     "5. Run the project's type check, build and tests, and fix what they find.",
     `6. Commit, push your branch, and open a pull request against \`${base}\`${item.repository ? ' in that repository' : ''} (\`gh pr create --base ${base}\`). Say in its description which branch and worktree the work came from, what you carried over, and the checks you ran.`,
   ];
-  return { title: recoveryTitle(c.branch, item.repository), prompt: lines.join('\n') };
+  return { title: recoveryTitle(c.branch, item.repository), prompt: lines.join('\n'), workspace };
 }
 
 /**
@@ -392,7 +403,7 @@ export class UnshippedWatch {
   }
 
   /** The item's recovery task, or why there can't be one. */
-  async recover(key: string, ownWorktree: boolean): Promise<{ title: string; prompt: string } | string> {
+  async recover(key: string, ownWorktree: boolean): Promise<{ title: string; prompt: string; workspace?: WorkspaceRequest } | string> {
     const f = this.found.get(key);
     if (!f) return 'That branch is no longer on the unshipped list — refresh the board';
     const w = f.item.workerId ? this.deps.workers().find((x) => x.id === f.item.workerId) : undefined;
