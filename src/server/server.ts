@@ -12,6 +12,7 @@ import type { Config } from './config.js';
 import { Auth, type Session } from './auth.js';
 import { Accounts } from './accounts.js';
 import { childEnv, resolveCommand } from './workers.js';
+import { ConsoleShells } from './console-shell.js';
 import { configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
 import { createOpenCodeModelCatalogue } from './models.js';
 import { Team } from './team.js';
@@ -224,6 +225,13 @@ export async function startServer(cfg: Config) {
     }
   };
   const toastAll = (text: string, level: ToastLevel = 'info') => broadcast({ t: 'toast', text, level });
+  const consoleStale = new Set<string>();
+  const consoles = new ConsoleShells((id, msg) => {
+    const c = clients.get(id);
+    if (!c || c.out) return;
+    if (msg.t === 'console.data' && (consoleStale.has(id) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES)) consoleStale.add(id);
+    else sendTo(c, msg);
+  });
 
   // --- The building: a floor per project, each with its own workers, boards and queue -----------
   const building = new Building(cfg.dataDir, cfg.projectsDir);
@@ -1254,6 +1262,8 @@ export async function startServer(cfg: Config) {
       handleMessage(client, msg);
     });
     ws.on('close', () => {
+      consoles.close(id);
+      consoleStale.delete(id);
       clients.delete(id);
       if (client.whiteboard) drawingChanged(floorOf(client));
       stopPlaying(client);
@@ -1525,7 +1535,7 @@ export async function startServer(cfg: Config) {
         }
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace);
+        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace, msg.pullWork);
         const issue = kind === 'agent' ? issueNumber(msg.issue) : undefined;
         const plan = kind === 'agent' ? str(msg.plan, 64) || undefined : undefined;
         if (typeof r === 'string') warn(c, r);
@@ -1534,6 +1544,12 @@ export async function startServer(cfg: Config) {
         if (typeof r !== 'string' && plan) takePlan(floor, plan, r);
         break;
       }
+      case 'console.attach':
+      case 'console.detach':
+      case 'console.input':
+      case 'console.resize':
+        consoles.handle(c.id, msg, floorOf(c)?.dir ?? cfg.dir);
+        break;
       case 'worker.workspace.add': {
         const w = worker(msg.workerId);
         if (!w) break;
@@ -1587,7 +1603,7 @@ export async function startServer(cfg: Config) {
       }
       case 'worker.prompt': {
         const w = worker(msg.workerId);
-        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who) : 'No such worker';
+        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who, msg.pullWork ?? (msg.issue || msg.plan ? null : msg.pullWork)) : 'No such worker';
         warn(c, err);
         const issue = w?.info.kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (w && !err && issue) {
@@ -2190,6 +2206,12 @@ export async function startServer(cfg: Config) {
   };
 
   const resync = setInterval(() => {
+    for (const id of consoleStale) {
+      const c = clients.get(id);
+      if (c && c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
+      consoleStale.delete(id);
+      if (c && !c.out) consoles.resync(id);
+    }
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
       for (const key of c.stale) {
@@ -2232,6 +2254,7 @@ export async function startServer(cfg: Config) {
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
   const shutdown = (keep = false) => {
+    consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
     clearTimeout(floorsTimer);

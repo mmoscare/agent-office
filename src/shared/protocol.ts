@@ -64,6 +64,13 @@ export interface PullRequestRef {
   state?: string;
 }
 
+/** Work explicitly handed to an agent from a PR, separate from its own branch's PR. */
+export interface PullWork {
+  number: number;
+  url: string;
+  action: 'comments' | 'conflicts' | 'review' | 'ask';
+}
+
 /** Live Git HEAD information for one of a worker's checkout folders. */
 export interface WorkerBranch {
   /** Set when the desk has multiple repository worktrees. */
@@ -108,6 +115,7 @@ export interface WorkerInfo {
   branches?: WorkerBranch[];
   /** The worktree branch's PR, whether opened in the office or elsewhere. */
   pr?: PullRequestRef;
+  pullWork?: PullWork & { assignedAt: number };
   /** True while the branch is being pushed and its pull request opened. */
   prOpening?: boolean;
   title?: string;
@@ -1047,7 +1055,7 @@ export type ClientMsg =
    * With `issue`, the worker is there for that GitHub issue: it's assigned on GitHub (so it moves to In progress) and taken off the queue.
    * With `plan`, it's there for that 📒 To Do Next item, which moves to Progress (and to Finished when the worker finishes its turn).
    */
-  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number; plan?: string }
+  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number; plan?: string; pullWork?: PullWork | null }
   | { t: 'worker.workspace.add'; workerId: string; workspace: WorkspaceRequest }
   | { t: 'worker.resume'; workerId: string }
   | { t: 'worker.kill'; workerId: string; cleanup?: WorktreeCleanup }
@@ -1056,7 +1064,7 @@ export type ClientMsg =
   | { t: 'worker.attach'; workerId: string }
   | { t: 'worker.detach'; workerId: string }
   /** With `issue` (or `plan`), the prompt hands the worker that GitHub issue (or To Do Next item), which is taken as for worker.spawn. */
-  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number; plan?: string }
+  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number; plan?: string; pullWork?: PullWork | null }
   /**
    * A prompt for the agent standing by a board (`deskId` is its kiosk, see STATIONS in layout). It's
    * typed into its session, which is woken up first if it's asleep, or hired there when nobody is.
@@ -1078,6 +1086,11 @@ export type ClientMsg =
   | { t: 'side.detach'; workerId: string }
   | { t: 'side.input'; workerId: string; data: string }
   | { t: 'side.resize'; workerId: string; cols: number; rows: number }
+  /** A standalone shell owned by this browser connection; fresh replaces it in the current floor. */
+  | { t: 'console.attach'; cols: number; rows: number; fresh?: boolean }
+  | { t: 'console.detach' }
+  | { t: 'console.input'; data: string }
+  | { t: 'console.resize'; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
   | { t: 'gh.merge'; number: number; repo?: string; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
@@ -1254,6 +1267,10 @@ export type ServerMsg =
   | { t: 'side.data'; workerId: string; data: string }
   /** The side shell couldn't start. */
   | { t: 'side.error'; workerId: string; error: string }
+  | { t: 'console.snapshot'; data: string; cols: number; rows: number; cwd: string }
+  | { t: 'console.data'; data: string }
+  | { t: 'console.exited' }
+  | { t: 'console.error'; error: string }
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */

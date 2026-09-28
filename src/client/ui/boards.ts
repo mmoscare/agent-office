@@ -1,18 +1,20 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo } from '../../shared/protocol';
+import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
+import { pullWorkers } from '../../shared/pull-work';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
 import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
+import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
-  assign(prompt: string, title: string): void;
+  assign(prompt: string, title: string, pullWork?: PullWork): void;
   /** Your own prompt about an issue or PR; `context` goes first so the worker knows which. */
-  ask(context: string, title: string): void;
+  ask(context: string, title: string, pullWork?: PullWork): void;
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
   /** Put an issue (of `repo`, on a floor of several) on the 📋 task queue; a worker is seated for it when there's room. */
@@ -218,7 +220,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
               it,
               [
                 repoChip(it),
-                w ? deskChip(w) : '',
+                ...pullWorkIndicators(it, actions.goToDesk),
+                w && !pullWorkers([w], it).length ? deskChip(w) : '',
                 ...labelChips(it.labels),
                 `by ${it.author}`,
                 it.reviewDecision === 'CHANGES_REQUESTED' ? '🛠 changes requested' : '',
