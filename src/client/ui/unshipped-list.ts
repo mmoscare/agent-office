@@ -1,7 +1,7 @@
 import type { UnshippedItem } from '../../shared/protocol';
 import { h, timeAgo } from './dom';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
-import { groupByRepo, manyRepos, sortUnshipped } from './pr-board-model';
+import { groupByRepo, showsRepo, sortUnshipped } from './pr-board-model';
 
 /**
  * The Pull Requests board's 🧳 Unshipped work section: office branches holding work that no open or
@@ -35,7 +35,7 @@ export function unshippedSection(p: UnshippedListProps): HTMLElement {
   const rows: Node[] = [];
   if (p.error) rows.push(h('li.prb-note.bad', {}, `⚠️ Couldn't look through the branches: ${p.error}`));
   if (p.prNote) rows.push(h('li.prb-note', {}, `❔ GitHub couldn't be asked about some branches (${p.prNote}), so they may have a PR after all. Showing what's on disk.`));
-  const many = manyRepos(items.map((it) => it.repository));
+  const many = showsRepo(items.map((it) => it.repository));
   for (const g of groupByRepo(items, (it) => (many ? it.repository : undefined))) {
     if (many) rows.push(repoHeading(g.repo || 'this folder', g.items.length));
     for (const it of g.items) rows.push(unshippedRow(it, p));

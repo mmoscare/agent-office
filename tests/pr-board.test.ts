@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GhPull, UnshippedItem } from '../src/shared/protocol.js';
-import { comparePulls, ghTrouble, groupByRepo, manyRepos, pullSections, pullStatus, sortUnshipped } from '../src/client/ui/pr-board-model.js';
+import { comparePulls, ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo, sortUnshipped } from '../src/client/ui/pr-board-model.js';
 
 function pr(number: number, over: Partial<GhPull> = {}): GhPull {
   return {
@@ -70,8 +70,10 @@ test('groupByRepo keeps order and leads with the repository of the most urgent i
   const items = [pr(1, { repo: 'o/b' }), pr(2, { repo: 'o/a' }), pr(3, { repo: 'o/b' }), pr(4)];
   const groups = groupByRepo(items, (p) => p.repo);
   assert.deepEqual(groups.map((g) => [g.repo, g.items.map((p) => p.number)]), [['o/b', [1, 3]], ['o/a', [2]], ['', [4]]]);
-  assert.equal(manyRepos(items.map((p) => p.repo)), true);
-  assert.equal(manyRepos(['o/A', 'o/a', undefined]), false, 'one repository, whatever its case');
+  assert.equal(showsRepo(items.map((p) => p.repo)), true);
+  assert.equal(showsRepo(['o/a', 'o/a']), true, 'a folder floor names the repository even while only one of them has PRs');
+  assert.equal(showsRepo([undefined, undefined]), false, "a floor that's one repository doesn't");
+  assert.equal(showsRepo([]), false);
 });
 
 test('ghTrouble tells rate limits, setup and network trouble apart', () => {

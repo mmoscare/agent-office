@@ -9,7 +9,7 @@ import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
 import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
-import { ghTrouble, groupByRepo, manyRepos, pullSections, pullStatus } from './pr-board-model';
+import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './pr-board-model';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
 
@@ -184,12 +184,12 @@ function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net
   const st = store.pulls;
   const loading = !st.fetchedAt && !st.error;
   const unavailable = !!st.error && !st.items.length;
-  const showRepo = manyRepos(st.items.map((p) => p.repo));
+  const showRepo = showsRepo(st.items.map((p) => p.repo));
   const s = pullSections(st.items, view.doneAll ? Infinity : 10);
   const trouble = st.error ? troubleText(st.error, st.items.length > 0) : undefined;
 
   const jump = (id: string, icon: string, n: number | string, what: string, tone: string) =>
-    h('button.prb-chip', { type: 'button', class: `tone-${tone}`, title: `Go to ${what}`, onclick: () => body.querySelector(`#${id}`)?.scrollIntoView({ block: 'start' }) }, h('span', { 'aria-hidden': 'true' }, icon), h('b', {}, String(n)), what);
+    h('button.prb-chip', { type: 'button', class: `tone-${tone}`, 'data-focus': `tally-${id}`, title: `Go to ${what}`, onclick: () => body.querySelector(`#${id}`)?.scrollIntoView({ block: 'start' }) }, h('span', { 'aria-hidden': 'true' }, icon), h('b', {}, String(n)), what);
   const pending = loading ? '…' : unavailable ? '?' : undefined;
   tally.replaceChildren(
     jump('prb-needs', '🙋', pending ?? s.needsYou.length, s.needsYou.length === 1 ? 'needs you' : 'need you', 'needs'),
@@ -205,7 +205,7 @@ function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net
 
   const doneRows = s.done.length ? pullRows(s.done, showRepo, net, actions) : blank('📭', 'Nothing merged yet');
   if (s.doneTotal > s.done.length || view.doneAll) {
-    doneRows.push(h('li.prb-more', {}, h('button.btn.prb-tool', { type: 'button', onclick: () => ((view.doneAll = !view.doneAll), rerender()) }, view.doneAll ? 'Show fewer' : `Show all ${s.doneTotal}`)));
+    doneRows.push(h('li.prb-more', {}, h('button.btn.prb-tool', { type: 'button', 'data-focus': 'done-more', onclick: () => ((view.doneAll = !view.doneAll), rerender()) }, view.doneAll ? 'Show fewer' : `Show all ${s.doneTotal}`)));
   }
   const done = section({ id: 'prb-done', tone: 'done', icon: '🎉', title: 'Recently done', count: s.doneTotal, hint: 'merged and closed', rows: doneRows });
   // Folds away, and stays as you left it across refreshes.
@@ -251,17 +251,23 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const st = kind === 'issues' ? store.issues : store.pulls;
     status.textContent = st.loading ? 'Refreshing…' : st.fetchedAt ? `Updated ${timeAgo(st.fetchedAt)}` : '';
     if (kind === 'pulls') {
-      // Every refresh rebuilds the board: keep its scroll, and keyboard focus on the same row or button.
-      const focused = document.activeElement instanceof HTMLElement && body.contains(document.activeElement) ? document.activeElement : null;
-      const focusKey = focused?.closest<HTMLElement>('[data-key]')?.dataset.key;
-      const focusIsRow = !!focused?.matches('[data-key]');
+      // Every refresh rebuilds the board and its tally: keep the scroll, and keyboard focus on the same
+      // tally chip, row, or button in that row.
+      const active = document.activeElement;
+      const focused = active instanceof HTMLElement && (body.contains(active) || tally.contains(active)) ? active : null;
+      const focusId = focused?.dataset.focus;
+      const focusRow = focused?.closest<HTMLElement>('[data-key]');
+      const focusKey = focusRow?.dataset.key;
+      const focusButton = focusRow && focused !== focusRow ? [...focusRow.querySelectorAll<HTMLElement>('button')].indexOf(focused!) : -1;
       const focusSection = focused?.closest('section')?.id;
       const { scrollTop } = body;
       renderPulls(body, tally, view, net, actions, render);
       body.scrollTop = scrollTop;
       if (focused) {
+        const same = focusId ? el.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focusId)}"]`) : null;
         const row = focusKey ? body.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`) : null;
-        const target = row && !focusIsRow ? row.querySelector<HTMLElement>('button') : row ?? (focusSection ? body.querySelector<HTMLElement>(`#${focusSection} h3 button:last-child`) : null);
+        const inRow = row && focusButton >= 0 ? row.querySelectorAll<HTMLElement>('button')[focusButton] ?? row : row;
+        const target = same ?? inRow ?? (focusSection ? body.querySelector<HTMLElement>(`#${focusSection} h3 button:last-child`) : null);
         target?.focus({ preventScroll: true });
       }
       return;

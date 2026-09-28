@@ -89,11 +89,15 @@ export function groupByRepo<T>(items: T[], repoOf: (it: T) => string | undefined
   return [...groups].map(([repo, items]) => ({ repo, items }));
 }
 
-/** Whether a floor's PRs or unshipped branches come from more than one repository, so the board should say which. */
-export function manyRepos(repos: Iterable<string | undefined>): boolean {
-  const seen = new Set<string>();
-  for (const r of repos) if (r) seen.add(r.toLowerCase());
-  return seen.size > 1;
+/**
+ * Whether the board should say which repository each PR or unshipped branch is in. The server marks
+ * every item with its repository on a floor that's a folder of them (GhWhere.repo,
+ * UnshippedItem.repository), and never on a floor that's one, so this holds on a folder floor even
+ * while only one of its repositories has anything to show.
+ */
+export function showsRepo(repos: Iterable<string | undefined>): boolean {
+  for (const r of repos) if (r) return true;
+  return false;
 }
 
 /** Why GitHub didn't answer, from gh's error text, so the board can say what to do about it. */
