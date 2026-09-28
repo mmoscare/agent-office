@@ -233,3 +233,6 @@ export class Workspaces {
     return root;
   }
 }
+
+/** A repository root inside the floor, by its path relative to it (throws for anything else). */
+export const floorRepository = source;

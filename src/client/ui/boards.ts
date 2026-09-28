@@ -20,6 +20,8 @@ export interface BoardActions {
   pickUp(issue: GhIssue): void;
   /** Call a meeting about it: the meeting room's form, filled in. */
   meeting(preset: MeetingPreset): void;
+  /** Turn the PR board over to the floor's Git repositories (ui/git-board.ts). */
+  gitBoard?(): void;
 }
 
 /** ` --repo owner/name` for gh, on a floor that's a folder of checkouts: from there gh can't tell which repository is meant. */
@@ -120,7 +122,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   const status = h('span.board-status');
   const refresh = h('button.btn', { title: 'Refresh from GitHub', onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
-  const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, refresh, close), body);
+  const git = kind === 'pulls' && actions.gitBoard ? h('button.btn', { title: 'Turn the board over to the Git repositories on this floor', onclick: () => { modal.close(); actions.gitBoard?.(); } }, '🌿 Git') : null;
+  const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close), body);
 
   const render = () => {
     const st = kind === 'issues' ? store.issues : store.pulls;

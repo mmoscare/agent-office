@@ -10,9 +10,9 @@ export interface QueueActions {
   openTerminal(workerId: string): void;
 }
 
-/** The queue task's name, linked to its GitHub issue when it has one. */
+/** The queue task's name, linked to its GitHub issue when it has one (or marked as a To Do Next item). */
 function taskTitle(t: QueueTask): HTMLElement {
-  if (t.issue === undefined) return h('div.queue-title', { title: t.prompt }, t.title);
+  if (t.issue === undefined) return h('div.queue-title', { title: t.prompt }, t.plan ? h('span', { title: 'From the 📒 To Do Next board' }, '📒 ') : null, t.title);
   const issue = store.issues.items.find((i) => i.number === t.issue && (i.repo ?? '').toLowerCase() === (t.repo ?? '').toLowerCase());
   const ref = ghRef({ number: t.issue, repo: t.repo });
   const text = t.title.startsWith(ref) || t.title.startsWith(`#${t.issue}`) ? t.title : `${ref} ${t.title}`;

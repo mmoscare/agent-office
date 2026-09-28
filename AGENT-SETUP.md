@@ -91,6 +91,15 @@ Dollar figures are **API-value estimates**: roughly what those tokens would cost
 
 History starts with sessions the office can still track; it cannot recover workers already removed before this feature. History is saved in the building's `.agent-office/model-usage.json`. The existing daily budget feature still covers Claude only.
 
+## API balances
+
+The **API balances** panel on the right shows your pay-as-you-go API accounts: Anthropic, OpenAI and xAI (Grok). It is about API credit, not a subscription plan; the Claude plan's 5-hour and weekly limits stay in their own panel. Click ⚙ in the panel heading to paste keys. Only an admin can change them; they are saved on the office server in the building's `.agent-office/api-balances.json` and are never sent to the browser.
+
+- **xAI** reports the team's remaining prepaid credit itself. Paste a Management API key (xAI Console → Settings → Management keys) and the team id, the UUID in the console URL after `/team/`. The panel shows `balance $12.34`.
+- **Anthropic** and **OpenAI** have no balance endpoint. Their admin APIs report spend per day, so the panel shows `spent this month` from an Admin key (Anthropic: `sk-ant-admin…` from Claude Console → Settings → Admin keys, which needs an organization; OpenAI: `sk-admin-…` from Organization settings → Admin keys). Ordinary API keys are refused. Type the balance the console shows in ⚙ and the panel shows `≈ balance est.`: that figure minus what the provider has reported since. Reports lag about five minutes, and the console is the truth.
+
+Keys can also come from the environment when the office starts: `AGENT_OFFICE_ANTHROPIC_ADMIN_KEY`, `AGENT_OFFICE_OPENAI_ADMIN_KEY`, `AGENT_OFFICE_XAI_MANAGEMENT_KEY` and `AGENT_OFFICE_XAI_TEAM_ID`. An environment key wins and can't be changed from the office. Providers are asked every five minutes; clicking the panel asks again (at most once a minute). Hide or show the panel from the ☰ menu.
+
 ## Your two Codex accounts
 
 The normal Codex login is shared across directories and floors. To change it, finish active work, run `codex.cmd logout` then `codex.cmd login`, choose the other account in the browser, and restart your Codex workers.
