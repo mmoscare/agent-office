@@ -6,6 +6,7 @@ import { normalizeRepo, sameRepo } from '../shared/floors.js';
 import { ghRef, isAgentEffort, isAgentProvider, isClaudeModel, type AgentEffort, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { CHECKPOINT_NOTE } from './handoff.js';
 import { RESTART_ERROR } from '../shared/task-status.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
@@ -337,7 +338,7 @@ export class TaskQueue {
       if (room < 0) break;
       const desk = (room > 0 ? this.freeDesk() : undefined) ?? this.recycleDesk();
       if (!desk) break;
-      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree && !t.workspace ? WORKTREE_NOTE : ''), this.useWorktree && !t.workspace, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort, undefined, t.workspace);
+      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree && !t.workspace ? WORKTREE_NOTE + CHECKPOINT_NOTE : ''), this.useWorktree && !t.workspace, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort, undefined, t.workspace);
       changed = true;
       if (typeof r === 'string') {
         t.status = 'done';

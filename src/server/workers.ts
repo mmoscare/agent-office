@@ -15,7 +15,7 @@ import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeMod
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
-import { retoldTask, withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
+import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
 import { isBusy } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -1788,7 +1788,7 @@ async function findOpenPr(branch: string, cwd: string, repository?: string): Pro
  * task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
  */
 function draftPr(info: WorkerInfo, commits: string[], by: string): { title: string; body: string } {
-  const task = (info.prompt ?? '').replace(/\r\n?/g, '\n').trim();
+  const task = withoutCheckpoint((info.prompt ?? '').replace(/\r\n?/g, '\n').trim());
   const firstLine = task.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   // The issues board hands work over as: Work on GitHub issue #12: "Title".
   const issue = /\bissue #(\d+):\s*["“](.+?)["”]\.?\s*$/i.exec(firstLine);
