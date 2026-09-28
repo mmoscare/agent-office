@@ -111,6 +111,10 @@ export async function pushReviewed(floor: string, id: string, token: string, app
     }
     // Push precisely the reviewed commit. New commits made concurrently are never uploaded unseen.
     await git(lockedDir, ['push', 'origin', `${before.head}:refs/heads/${before.target.branch}`]);
+    // Match the ordinary Push flow for new branches without changing an existing upstream.
+    if (!await git(lockedDir, ['for-each-ref', '--format=%(upstream)', `refs/heads/${before.target.branch}`])) {
+      await git(lockedDir, ['branch', `--set-upstream-to=origin/${before.target.branch}`, before.target.branch!], true);
+    }
     reviews.delete(token);
     return { branch: before.target.branch!, count: before.target.ahead };
   });

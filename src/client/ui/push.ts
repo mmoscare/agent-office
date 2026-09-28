@@ -66,11 +66,11 @@ export function openPush() {
     if (!preview) { info.replaceChildren(); return; }
     const s = preview.target;
     const advice = pushAdvice(s);
-    info.replaceChildren(h('div.push-advice', { class: advice.ready ? 'ready' : '' }, h('h3', {}, advice.title), h('p', {}, advice.detail)),
+    info.replaceChildren(h('div', {}, h('div.push-advice', { class: advice.ready ? 'ready' : '' }, h('h3', {}, advice.title), h('p', {}, advice.detail)),
       h('dl.push-details', {}, h('dt', {}, 'Checkout'), h('dd', {}, s.dir), h('dt', {}, 'Branch'), h('dd', {}, s.branch ?? 'Detached HEAD'), h('dt', {}, 'Destination'), h('dd', {}, s.destination ?? 'No origin remote')),
-      h('p.push-note', {}, s.dirty ? `${s.dirty} uncommitted file entries stay on this computer. This push only uploads the commits listed below.` : 'This uploads existing commits. It does not create a commit or a pull request.'),
+      h('p.push-note', {}, s.dirty ? `${s.dirty} uncommitted ${s.dirty === 1 ? 'file stays' : 'files stay'} on this computer. Only saved commits are uploaded.` : 'This uploads existing commits. It does not create a commit or a pull request.'),
       preview.commits.length ? h('div', {}, h('h3', {}, 'Commits to upload'), h('ul.push-commits', {}, ...preview.commits.map(c => h('li', {}, h('code', {}, c.hash), ' ', c.subject))),
-        s.ahead > preview.commits.length ? h('p.push-note', {}, `Showing the newest ${preview.commits.length} of ${s.ahead} commits.`) : null) : null);
+        s.ahead > preview.commits.length ? h('p.push-note', {}, `Showing the newest ${preview.commits.length} of ${s.ahead} commits.`) : null) : null));
   }
   async function inspect() {
     if (busy || closed || !choose.value) return;
@@ -116,5 +116,7 @@ export function openPush() {
   }
   const unsubscribe = store.on('floor', () => { if (store.floor !== floor) modal.close(); });
   const modal = openModal(el, { backdropCloses: false, doing: 'reviewing commits to push', onClose: () => { closed = true; opened = false; unsubscribe(); } });
+  // The update banner is outside the fixed #app stacking context. Keep this review above it.
+  document.body.append(modal.backdrop);
   void load();
 }
