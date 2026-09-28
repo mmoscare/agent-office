@@ -19,6 +19,7 @@ import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
+import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
 import { ApiBalances } from './api-balances.js';
 import type { BalanceUpdate } from '../shared/api-balances.js';
@@ -38,6 +39,7 @@ import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
+import { taskStatus, unshippedText } from '../shared/task-status.js';
 import { normalizeRepo } from '../shared/floors.js';
 import { PLAN_COLUMNS, PLAN_TEXT_MAX, planTitle, type PlanStatus } from '../shared/plans.js';
 import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../shared/inbox.js';
@@ -178,6 +180,8 @@ function arrivalSpot(at: unknown): { x: number; y: number; z: number; rotY: numb
   return { x: clamp(a.x, -60, 60), y: clamp(a.y, streetBelow(MAX_FLOORS - 1), 10), z: clamp(a.z, -60, 60), rotY: num(a.rotY) };
 }
 const issueNumber = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
+/** A worker's side shell, in a client's `attached` and `stale` sets (its own terminal goes by its id). */
+const sideKey = (workerId: string) => `side:${workerId}`;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const TOO_MANY_ATTEMPTS = 'Too many attempts. Try again in a few minutes.';
 /** WebSocket close code for a session that stopped counting: the account was revoked, or the shared password switched off. */
@@ -317,7 +321,8 @@ export async function startServer(cfg: Config) {
       const q = floor.queue.state();
       return {
         maxWorkers: q.maxWorkers,
-        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, outcome: t.outcome, issue: t.issue, repo: t.repo, plan: t.plan, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error })),
+        // `state` and `unshipped` say honestly what a finished task left behind (see shared/task-status.ts).
+        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, state: taskStatus(t).text, outcome: t.outcome, issue: t.issue, repo: t.repo, plan: t.plan, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error, unshipped: unshippedText(t.unshipped) || undefined })),
       };
     };
     if (req.method === 'GET') return send(res, 200, view());
@@ -553,14 +558,15 @@ export async function startServer(cfg: Config) {
     capacity: machine,
     emit: toFloor,
     toast: toastFloor,
-    termData: (workerId, data, viewers) => {
-      const json = JSON.stringify({ t: 'term.data', workerId, data } satisfies ServerMsg);
+    termData: (workerId, data, viewers, side) => {
+      const json = JSON.stringify({ t: side ? 'side.data' : 'term.data', workerId, data } satisfies ServerMsg);
+      const key = side ? sideKey(workerId) : workerId;
       for (const id of viewers) {
         const c = clients.get(id);
         if (!c || c.ws.readyState !== WebSocket.OPEN) continue;
         // A viewer on a slow link skips output and gets a fresh snapshot once it catches up,
         // instead of queueing unbounded data in server memory.
-        if (c.stale.has(workerId) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(workerId);
+        if (c.stale.has(key) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(key);
         else c.ws.send(json);
       }
     },
@@ -669,6 +675,7 @@ export async function startServer(cfg: Config) {
     jukebox: floor?.jukebox.state() ?? { on: false, track: JUKEBOX_TUNES[0].id, startedAt: Date.now(), elapsed: 0 },
     whiteboard: { elements: floor?.whiteboard.scene() ?? [], people: floor ? drawing(floor) : [] },
     meeting: floor?.meetings.state() ?? { current: null, past: [] },
+    unshipped: floor?.unshipped.state,
     cabinet: { ...cabinetState(floor), frame: (floor && cabinetPlayer(floor)?.frame) ?? null },
     plans: floor?.plans.state() ?? { revision: 0, items: [] },
     inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
@@ -855,6 +862,9 @@ export async function startServer(cfg: Config) {
         });
         res.end(logo.bytes);
         return;
+      }
+      if (p === '/api/ledger' && req.method === 'GET') {
+        return send(res, 200, ledgerFacts(ledger.state(), floors.values()));
       }
       if (p === '/api/model-usage' && req.method === 'GET') {
         const waiting = [];
@@ -1629,6 +1639,30 @@ export async function startServer(cfg: Config) {
       case 'term.resize':
         if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.resize(msg.workerId, num(msg.cols), num(msg.rows));
         break;
+      case 'side.attach': {
+        const w = worker(msg.workerId);
+        if (!w) break;
+        const snap = w.floor.workers.attachSide(w.wid, c.id, num(msg.cols), num(msg.rows));
+        if (typeof snap === 'string') {
+          sendTo(c, { t: 'side.error', workerId: w.wid, error: snap });
+          break;
+        }
+        c.attached.add(sideKey(w.wid));
+        sendTo(c, { t: 'side.snapshot', workerId: w.wid, ...snap });
+        break;
+      }
+      case 'side.detach': {
+        const wid = str(msg.workerId, 32);
+        c.attached.delete(sideKey(wid));
+        workerFloor(wid)?.workers.detachSide(wid, c.id);
+        break;
+      }
+      case 'side.input':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.writeSide(msg.workerId, str(msg.data, 64 * 1024));
+        break;
+      case 'side.resize':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.resizeSide(msg.workerId, num(msg.cols), num(msg.rows));
+        break;
       case 'gh.refresh':
         void floorOf(c)?.github.refresh();
         break;
@@ -1789,6 +1823,21 @@ export async function startServer(cfg: Config) {
       case 'queue.limit':
         floorOf(c)?.queue.setLimit(num(msg.maxWorkers));
         break;
+      case 'unshipped.scan':
+        void floorOf(c)?.unshipped.scan(true);
+        break;
+      case 'unshipped.recover': {
+        const floor = here();
+        if (!floor) break;
+        void floor.unshipped.recover(str(msg.key, 1000), !!floor.project.branch).then((r) => {
+          if (typeof r === 'string') return warn(c, r);
+          if (floor.queue.state().tasks.some((t) => t.title === r.title && t.status !== 'done')) return warn(c, 'Its recovery is already on the queue');
+          const err = floor.queue.add(r.prompt, who, r.title, undefined, undefined, undefined, undefined, undefined, undefined, r.workspace);
+          if (err) warn(c, err);
+          else toastFloor(floor, `📋 ${who} queued a PR for the unshipped work on ${r.title.replace(/^Recover unshipped work from /, '')}`);
+        });
+        break;
+      }
       case 'meeting.start': {
         const floor = here();
         if (!floor) break;
@@ -2132,9 +2181,17 @@ export async function startServer(cfg: Config) {
   const resync = setInterval(() => {
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
-      for (const wid of c.stale) {
-        const snap = c.attached.has(wid) ? workerFloor(wid)?.workers.attach(wid, c.id, c.peer.name) : undefined;
-        if (snap) sendTo(c, { t: 'term.snapshot', workerId: wid, ...snap });
+      for (const key of c.stale) {
+        if (!c.attached.has(key)) continue;
+        if (key.startsWith('side:')) {
+          const wid = key.slice(5);
+          const w = workerFloor(wid)?.workers.get(wid);
+          const snap = w?.side && workerFloor(wid)!.workers.attachSide(wid, c.id, w.side.cols, w.side.rows);
+          if (snap && typeof snap !== 'string') sendTo(c, { t: 'side.snapshot', workerId: wid, ...snap });
+          continue;
+        }
+        const snap = workerFloor(key)?.workers.attach(key, c.id, c.peer.name);
+        if (snap) sendTo(c, { t: 'term.snapshot', workerId: key, ...snap });
       }
       c.stale.clear();
     }

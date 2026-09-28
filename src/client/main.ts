@@ -78,6 +78,7 @@ import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { mountHud } from './ui/menu';
 import { openJukebox } from './ui/jukebox';
+import { openLedger } from './ui/ledger';
 import { Arcade } from './ui/arcade';
 import { Cabinet } from './ui/cabinet';
 import { trackTitle } from '../shared/jukebox';
@@ -88,6 +89,9 @@ import { whereabouts } from './ui/whereabouts';
 import { wayTo } from './walkto';
 import { MeetingBoardTexture, MeetingSignTexture, meetingStage } from './world/meeting';
 import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
+import { ClipboardSheet, clipboardProp } from './world/clipboard';
+import { currentRoster, openClipboard } from './ui/clipboard';
+import { rosterByRepo } from '../shared/roster';
 
 // ---- Renderer & scene ---------------------------------------------------------------------------
 const canvas = $('scene') as HTMLCanvasElement;
@@ -148,6 +152,8 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
   inbox: { icon: '📥', offer: 'Ask me to triage the tray', does: 'I file what came in on To Do Next or the queue', example: 'Go through the in-tray and file everything' },
 };
+/** What everyone in the building is on, on the clipboard the queue agent carries (see Clipboard). */
+const clipboardSheet = new ClipboardSheet();
 /** The board agents waiting by their boards before anyone has asked them anything (see buildKiosk). */
 const idleAgents = STATIONS.map((def) => {
   const kind = def.station!;
@@ -155,6 +161,7 @@ const idleAgents = STATIONS.map((def) => {
   const model = new Worker(agent.name, agent.color);
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
+  if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
@@ -1059,6 +1066,8 @@ function syncWorkers() {
       departures.vacate(w.deskId);
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
+      // The queue agent never goes anywhere without its clipboard.
+      if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
       desk.seatAnchor.add(model.root);
       // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over
       // its head and the back of its chair, so it shows from across the room.
@@ -1162,6 +1171,19 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+// ---- Clipboard ------------------------------------------------------------------------------------
+// The queue agent's clipboard lists every worker in the building by repository; walk up to it and
+// press C to read it all (see ui/clipboard.ts).
+const renderClipboard = () => clipboardSheet.render(rosterByRepo(currentRoster()));
+for (const topic of ['workers', 'floors', 'floor', 'project'] as const) store.on(topic, renderClipboard);
+renderClipboard();
+function showClipboard() {
+  openClipboard((floorId, workerId) => {
+    if (trip) return;
+    if (!floorId || floorId === store.floor) openWorkerTerminal(workerId);
+    else ride(floorId, workerId);
+  });
+}
 mountAttention((floorId, workerId) => {
   if (trip) return;
   if (floorId === store.floor) openWorkerTerminal(workerId);
@@ -1635,6 +1657,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (target.kind === 'station' && target.deskId) {
     const w = store.workerAtDesk(target.deskId);
     if (key === 'E' || key === 'P') return askStation(target.deskId);
+    if (key === 'C' && DESK_BY_ID.get(target.deskId)?.station === 'queue') return showClipboard();
     if (key === 'O' && w) return openWorkerTerminal(w.id);
     if (key === 'X' && w) return killWorker(w.id);
     return;
@@ -1673,6 +1696,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   else if (target.kind === 'meeting') showMeeting();
   else if (target.kind === 'bar') showBar();
   else if (target.kind === 'dj') blowHorn();
+  else if (target.kind === 'ledger') openLedger();
 }
 
 // ---- The rooftop bar ---------------------------------------------------------------------------------
@@ -2040,7 +2064,7 @@ let phoneUntil = 0;
 /** An agent on another floor finished: the phone by the elevator rings, since you can't hear its ding from here. */
 function phoneRang(floor: string, name: string, worker: string, task?: string) {
   if (!store.floor || floor === store.floor) return;
-  toast(`📞 ${worker} on the ${name} floor finished${task ? `: ${task}` : ''} — take the elevator up`);
+  toast(`📞 ${name} floor — ${worker} finished${task ? `: ${task}` : ''} — take the elevator up`);
   office.phone.ring(PHONE_RING_SECONDS);
   // Another call while it's still ringing doesn't start the bell over the top of itself.
   const now = performance.now();
@@ -2171,6 +2195,8 @@ function hintFor(it: Interactable): Hint {
       const what = !m || !p ? 'free' : m.status === 'running' ? `${p.icon} ${p.label} · ${meetingStage(m)}` : `${p.icon} ${p.label} ${m.status === 'done' ? 'done ✅' : 'stopped ⛔'}`;
       return { k: what, parts: [title('🤝 Meeting room'), aside(clip(what, 50)), key('E', m?.status === 'running' ? 'See how it’s going' : m ? 'See it / call a meeting' : 'Call a meeting')] };
     }
+    case 'ledger':
+      return { k: '', parts: [title('📒 The Office Ledger'), aside('what this office costs to run'), key('E', 'Read it')] };
     case 'elevator': {
       const f = store.currentFloor();
       const n = store.floors.length;
@@ -2310,6 +2336,7 @@ function stationHint(deskId: string): Hint {
         h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
         aside(trayNote ? `${trayNote} · ${info.offer.replace(/^Ask me /, '')}` : info.offer.replace(/^Ask me /, '')),
         full ? h('span.cost', {}, `🚫 Office full · ${m.workers} of ${m.limit} workers`) : key('E', 'Prompt'),
+        kind === 'queue' ? key('C', 'Clipboard') : '',
         ...trayKey,
       ],
     };
@@ -2325,6 +2352,7 @@ function stationHint(deskId: string): Hint {
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       key('O', 'Terminal'),
+      kind === 'queue' ? key('C', 'Clipboard') : '',
       key('X', 'Send home'),
       ...trayKey,
     ],
@@ -2619,7 +2647,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */

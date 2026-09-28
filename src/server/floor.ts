@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
+import { floorRoster } from '../shared/roster.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
@@ -21,6 +22,7 @@ import { Plans } from './plans.js';
 import { Inbox } from './inbox.js';
 import { MeetingRoom } from './meetings.js';
 import { Worktrees } from './worktrees.js';
+import { UnshippedWatch } from './unshipped.js';
 import { readProjectLogo, type ProjectLogo } from './project-logo.js';
 import type { Ledger } from './usage.js';
 import type { Capacity } from './machine.js';
@@ -39,8 +41,8 @@ export interface FloorContext {
   /** To everyone on this floor. */
   emit(floor: Floor, msg: ServerMsg, droppable?: boolean): void;
   toast(floor: Floor, text: string, level?: ToastLevel): void;
-  /** A worker's terminal output, for whoever has that terminal open. */
-  termData(workerId: string, data: string, viewers: string[]): void;
+  /** A worker's terminal output (or its side shell's), for whoever has that terminal open. */
+  termData(workerId: string, data: string, viewers: string[], side?: boolean): void;
   /** What a worker changed, for whoever has its Changes window open. */
   changes(state: ChangesState, clients: string[]): void;
   /** A worker on this floor changed, or left (then just its id). */
@@ -103,6 +105,8 @@ export class Floor {
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
   readonly ready: Promise<void>;
   readonly dog: Dog;
+  /** Office branches with work no PR carries, for the PR board and the queue's warnings (see unshipped.ts). */
+  readonly unshipped: UnshippedWatch;
   private timer: NodeJS.Timeout;
   /** Pull requests merging, to ring the gong for. */
   private merges = new MergeWatch();
@@ -154,6 +158,7 @@ export class Floor {
           ctx.workerChanged(this, workerId);
         },
         data: (workerId, data, viewers) => ctx.termData(workerId, data, viewers),
+        sideData: (workerId, data, viewers) => ctx.termData(workerId, data, viewers, true),
         screen: (workerId, frame) => ctx.emit(this, { t: 'screen', workerId, ...frame }, true),
         toast: (text, level) => ctx.toast(this, text, level),
       },
@@ -169,6 +174,7 @@ export class Floor {
         this.queue?.onPulls(state.items);
         if (state.loading || state.error) return;
         this.workers.onPulls(state.items);
+        void this.unshipped?.scan();
         for (const p of this.merges.look(state.items)) {
           ctx.toast(this, `🎉 PR ${ghRef(p)} merged: ${p.title}`);
           this.merged(p.number, undefined, p.repo);
@@ -191,6 +197,15 @@ export class Floor {
       },
       startPlan: (plan, worker, task) => void this.plans.start(plan, worker, task),
       endPlan: (plan, outcome) => this.plans.end(plan, outcome),
+      finished: () => this.unshipped?.soon(),
+    });
+    this.unshipped = new UnshippedWatch(def.dir, {
+      workers: () => this.workers.list(),
+      tasks: () => this.queue.state().tasks,
+      board: () => this.github.pulls,
+      repoName: (repoDir) => this.github.checkouts.find((c) => path.resolve(c.dir) === path.resolve(repoDir))?.repo,
+      update: (state) => ctx.emit(this, { t: 'unshipped', state }),
+      branches: (byBranch) => this.queue.onUnshipped(byBranch),
     });
 
     // Meetings seat their own workers round the meeting room's table and run them round by round.
@@ -250,6 +265,8 @@ export class Floor {
       door: () => ctx.inboxDoor(),
     });
     this.ready = this.workers.start();
+    // Once the workers are back: tasks the last office left running show whether their work was left behind.
+    void this.ready.then(() => this.unshipped.scan(true));
 
     void this.github.refresh();
     // A floor with people on it, or work under way, keeps its boards fresh; the others check in now and then.
@@ -283,6 +300,7 @@ export class Floor {
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
       ...summarizeWorkers(ws),
+      roster: floorRoster(ws, this.def.repo || this.def.name),
       people: this.ctx.people(this),
     };
   }
@@ -293,6 +311,7 @@ export class Floor {
     this.dog.stop();
     this.github.stop();
     this.queue.shutdown();
+    this.unshipped.stop();
     this.meetings.shutdown();
     this.changes.stop();
     this.workspaceChanges.stop();

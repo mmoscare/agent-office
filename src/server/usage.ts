@@ -304,7 +304,20 @@ export class Ledger {
 
   state(): UsageState {
     const day = localDay();
-    return { total: { ...this.total }, today: { ...(this.days[day] ?? zeroUsage()) }, day, budget: this.opts.budget, pauseHiring: this.opts.pauseHiring };
+    return { total: { ...this.total }, today: { ...(this.days[day] ?? zeroUsage()) }, day, month: this.month(), budget: this.opts.budget, pauseHiring: this.opts.pauseHiring };
+  }
+
+  /** Spend over the last 30 days, and how many of them the office has been keeping books for. */
+  private month(now = new Date()): { cost: number; days: number } {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+    const from = localDay(start);
+    const kept = Object.keys(this.days).filter((d) => d >= from && this.days[d].cost > 0).sort();
+    const cost = kept.reduce((sum, d) => sum + this.days[d].cost, 0);
+    if (!kept.length) return { cost: 0, days: 1 };
+    const [y, m, d] = kept[0].split('-').map(Number);
+    const first = new Date(y, m - 1, d);
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { cost, days: Math.round((today.getTime() - first.getTime()) / 86_400_000) + 1 };
   }
 
   get overBudget(): boolean {

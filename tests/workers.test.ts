@@ -155,6 +155,7 @@ function events(updates: WorkerInfo[]): WorkerEvents {
     update: (info) => updates.push(info),
     remove() {},
     data() {},
+    sideData() {},
     screen() {},
     toast() {},
   };
