@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
-import { floorPalette } from '../shared/floors';
+import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { pullBoardKey } from '../shared/pull-work';
@@ -689,11 +689,14 @@ function renderProject() {
     office.setProjectName(store.floors.length ? 'Pick a floor' : 'Lobby');
     return;
   }
-  const n = store.floors.findIndex((f) => f.id === store.floor);
+  // The same number the elevator shows: 1…n among the main floors, B1… in the Back Office.
+  const here = store.currentFloor();
+  const no = here ? floorNumber(store.floors, here.id) : '';
+  const of = here?.backOffice ? `🗄️ Back Office floor ${no} of ${backOfficeFloors(store.floors).length}` : `🛗 floor ${no} of ${mainFloors(store.floors).length}`;
   $('project-meta').classList.remove('lobby');
   $('project-name').textContent = `🏢 ${p.name}`;
-  $('project-meta').textContent = [n >= 0 && `🛗 floor ${n + 1} of ${store.floors.length}`, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
-  office.setProjectName(p.name, p.logo, n >= 0 ? n + 1 : undefined);
+  $('project-meta').textContent = [no && of, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
+  office.setProjectName(p.name, p.logo, no || undefined);
 }
 store.on('floors', renderProject);
 store.on('project', renderProject);

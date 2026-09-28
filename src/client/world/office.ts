@@ -107,7 +107,7 @@ export interface Office {
   /** The ceiling, the floor, and the ladder and fire poles between the floors of the building. */
   stack: Stack;
   /** The repo/directory plaques behind the whiteboard and above every doorway. */
-  setProjectName(name: string, logo?: string, floor?: number): void;
+  setProjectName(name: string, logo?: string, floor?: string): void;
   /** Paints the walls, their trim and the floor in a floor's colors, so each project looks like itself. */
   setLook(p: FloorPalette): void;
   /**
