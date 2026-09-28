@@ -322,7 +322,7 @@ export class Floor {
     this.whiteboard.flush();
     this.inbox.shutdown();
     this.workers.shutdown(keep);
-    return this.workers.checkpoint();
+    return this.workers.checkpoint(keep);
   }
 
   changesFor(workerId: string, repository?: string): Changes | undefined {

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { gitError } from './worktrees.js';
 
@@ -24,8 +25,9 @@ export interface CheckpointResult {
   branch: string;
   /** The WIP commit made, when there was uncommitted work. */
   hash?: string;
+  /** Origin's branch is at HEAD after the push. */
   pushed?: boolean;
-  /** Committing failed (or the deadline passed first). */
+  /** Committing failed, the deadline passed first, or a merge or rebase was in progress. */
   error?: string;
   /** The push failed: logged, never fatal. */
   pushError?: string;
@@ -81,6 +83,13 @@ async function checkpointOne(t: CheckpointTarget, r: CheckpointResult, signal: A
     if (!existsSync(t.dir)) return;
     const head = await git(['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'HEAD');
     if (head !== 'HEAD') r.branch = head;
+    // Mid-merge or mid-rebase, `add -A` would take the conflict markers and the commit would end it
+    // half done, then go out with the push. Left for the worker to finish.
+    const midway = await operation(git, t.dir);
+    if (midway) {
+      r.error = `a ${midway} is in progress`;
+      return;
+    }
     if (await git(['status', '--porcelain'])) {
       // `add -A` leaves out what .gitignore ignores. No hooks: a slow pre-commit mustn't eat the deadline.
       await git(['add', '-A']);
@@ -97,11 +106,32 @@ async function checkpointOne(t: CheckpointTarget, r: CheckpointResult, signal: A
     if (!hasOrigin) return;
     const unpushed = Number(await git(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']));
     if (!unpushed) return;
-    await git(['push', '-u', 'origin', r.branch], opts.pushTimeoutMs ?? PUSH_TIMEOUT_MS);
-    r.pushed = true;
+    // HEAD, not the branch by name: on a detached HEAD the WIP commit isn't on the branch, which
+    // would go up as it was. Never forced, so a branch that has moved on at origin turns it down.
+    const sha = await git(['rev-parse', 'HEAD']);
+    await git(['push', '-u', 'origin', `HEAD:refs/heads/${r.branch}`], opts.pushTimeoutMs ?? PUSH_TIMEOUT_MS);
+    // Pushed only if origin has that commit now (a push moves origin/<branch> along with it).
+    const there = await git(['rev-parse', '--verify', '-q', `refs/remotes/origin/${r.branch}`]).catch(() => '');
+    if (there === sha) r.pushed = true;
+    else r.pushError = `origin/${r.branch} isn't at ${sha.slice(0, 12)} after the push`;
   } catch (err) {
     r.pushError = signal.aborted ? 'ran out of time' : why(err);
   }
+}
+
+const OPERATIONS: [string, string][] = [
+  ['MERGE_HEAD', 'merge'],
+  ['rebase-merge', 'rebase'],
+  ['rebase-apply', 'rebase'],
+  ['CHERRY_PICK_HEAD', 'cherry-pick'],
+  ['REVERT_HEAD', 'revert'],
+];
+
+/** The merge, rebase, cherry-pick or revert a worktree is in the middle of, if any. */
+async function operation(git: (args: string[]) => Promise<string>, dir: string): Promise<string | undefined> {
+  const paths = (await git(['rev-parse', ...OPERATIONS.flatMap(([name]) => ['--git-path', name])])).split('\n');
+  const i = paths.findIndex((p) => p.trim() && existsSync(path.resolve(dir, p.trim())));
+  return i < 0 ? undefined : OPERATIONS[i][1];
 }
 
 function why(err: unknown): string {

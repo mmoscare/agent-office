@@ -16,7 +16,7 @@ import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeMod
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
-import { checkpointNotice, retoldTask, withCheckpointNotice, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
+import { checkpointNotice, isSlashCommand, retoldTask, withCheckpointNotice, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
 import { CHECKPOINT_DEADLINE_MS, checkpointWorktrees, type CheckpointTarget } from './wip-checkpoint.js';
 import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
@@ -368,8 +368,11 @@ export class WorkerManager {
     return info;
   }
 
-  /** Starts a worker that isn't running again, carrying on its session, with `prompt` as its next message. */
-  resume(id: string, prompt?: string): string | undefined {
+  /**
+   * Starts a worker that isn't running again, carrying on its session, with `prompt` as its next message.
+   * `wake`: the office is waking it by itself (see wakeAll), not someone asking it to carry on.
+   */
+  resume(id: string, prompt?: string, wake = false): string | undefined {
     const w = this.workers.get(id);
     if (!w) return 'No such worker';
     if (w.pty) return 'Worker is already running';
@@ -380,9 +383,11 @@ export class WorkerManager {
     // Any other worker with none (it never started, or its id was never reported) gets its task again
     // rather than being told it has none. Not a board agent: its first request is long done.
     const told = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
-    // Work the office committed for it as it went down: it carries on from that commit. Told once.
-    const first = withCheckpointNotice(told, checkpointNotice(w.info.checkpoints));
-    w.info.checkpoints = undefined;
+    // Work the office committed for it as it went down: it carries on from that commit. Woken with a
+    // session and nothing to say, it's told nothing yet: the notice alone would start a turn behind a
+    // queue task that restoring marked stopped by the restart (see TaskQueue.restore), and would set a
+    // worker going that someone had stopped or that was done. It waits for someone to ask it for something.
+    const first = wake && told === undefined ? undefined : withCheckpointNotice(told, this.takeNotice(w, told));
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
@@ -420,7 +425,28 @@ export class WorkerManager {
 
   /** Starts every worker that isn't running: nobody should be found asleep at their desk. */
   wakeAll() {
-    for (const w of this.workers.values()) if (!w.pty) this.resume(w.info.id);
+    for (const w of this.workers.values()) if (!w.pty) this.resume(w.info.id, undefined, true);
+  }
+
+  /**
+   * Its queue task went to another worker (requeued): the office's note about its WIP commit, still
+   * waiting to be told (see resume), must never set it going on that task again.
+   */
+  forgetCheckpoints(id: string) {
+    const w = this.workers.get(id);
+    if (!w?.info.checkpoints) return;
+    w.info.checkpoints = undefined;
+    this.emitUpdate(w);
+    this.persist();
+  }
+
+  /** The note about the WIP commits the office made for it, to send with `prompt`: told once, so it's taken. */
+  private takeNotice(w: Worker, prompt: string | undefined): string | undefined {
+    const notice = checkpointNotice(w.info.checkpoints);
+    // A slash command runs as typed, so the note waits for a real request.
+    if (!notice || w.info.kind !== 'agent' || (prompt && isSlashCommand(prompt))) return undefined;
+    w.info.checkpoints = undefined;
+    return notice;
   }
 
   /**
@@ -588,8 +614,11 @@ export class WorkerManager {
     if (!w.pty) return 'Worker is not running';
     const clean = text.replace(/\r\n?/g, '\n').trim();
     if (!clean) return 'Empty prompt';
+    // The note about its WIP commit that waking it held back (see resume) goes with what it's asked next.
+    const notice = this.takeNotice(w, clean);
+    if (notice) this.persist();
     // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
-    const submitted = w.info.kind === 'agent' ? withWorkerHandoff(clean) : clean;
+    const submitted = w.info.kind === 'agent' ? withWorkerHandoff(withCheckpointNotice(clean, notice)) : clean;
     w.pty.write(`\x1b[200~${submitted}\x1b[201~`);
     setTimeout(() => w.pty?.write('\r'), 120);
     w.info.activity = truncate(clean, 80);
@@ -989,7 +1018,7 @@ export class WorkerManager {
       this.scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) this.saveScrollback(w);
-      if (keep && w.pty?.id) continue;
+      if (this.survives(w, keep)) continue;
       try {
         w.pty?.kill();
       } catch {
@@ -1001,18 +1030,37 @@ export class WorkerManager {
     else this.host.stop();
   }
 
+  /** On a restart (`keep`), a terminal the host keeps running for the next office (see shutdown). */
+  private survives(w: Worker, keep: boolean): boolean {
+    return keep && !!w.pty?.id;
+  }
+
   /**
-   * As the office goes down (after shutdown): commits each agent's uncommitted worktree changes as a
-   * WIP checkpoint on its branch and pushes branches with unpushed commits, all within `deadlineMs`.
-   * Only the office's own worktrees under .agent-office, never the main checkout or a board agent's.
-   * Each worker keeps the commit's hash, to be told about it when it's woken (see resume). Never throws.
+   * As the office goes down (after shutdown, with the same `keep`): commits each agent's uncommitted
+   * worktree changes as a WIP checkpoint on its branch and pushes branches with unpushed commits, all
+   * within `deadlineMs`. Only the office's own worktrees under .agent-office, never the main checkout or
+   * a board agent's, and never under an agent whose terminal survives the restart: it's still working
+   * there. Each worker keeps the commit's hash, to be told about it later (see resume). Never throws.
    */
-  async checkpoint(deadlineMs = CHECKPOINT_DEADLINE_MS, now = new Date()): Promise<void> {
+  async checkpoint(keep = false, deadlineMs = CHECKPOINT_DEADLINE_MS, now = new Date()): Promise<void> {
+    const keyOf = (rel: string) => {
+      const abs = path.resolve(this.dir, rel);
+      return WIN ? abs.toLowerCase() : abs;
+    };
+    // Worktrees someone is still at work in through the restart, a shared meeting one included:
+    // committing under them could take a half-written file, fight them for the index or move HEAD
+    // beneath them. They commit their own work (see CHECKPOINT_NOTE).
+    const live = new Set<string>();
+    for (const w of this.workers.values()) {
+      if (!this.survives(w, keep)) continue;
+      if (w.info.worktree) live.add(keyOf(w.info.worktree.path));
+      for (const r of w.info.workspace?.repositories ?? []) live.add(keyOf(r.path));
+    }
     const targets = new Map<string, CheckpointTarget & { owners: { w: Worker; repository?: string }[] }>();
     const add = (w: Worker, rel: string, branch: string, repository?: string) => {
       const abs = path.resolve(this.dir, rel);
-      if (!this.checkpointable(abs)) return;
-      const key = WIN ? abs.toLowerCase() : abs;
+      const key = keyOf(rel);
+      if (live.has(key) || !this.checkpointable(abs)) return;
       const t = targets.get(key) ?? { dir: abs, branch, owners: [] };
       // A meeting's worktree is shared by everyone at the table: one commit, and each of them is told.
       t.owners.push({ w, repository });
@@ -1238,7 +1286,7 @@ export class WorkerManager {
       }
       // The terminal host died and took the process with it: nothing the worker did.
       if (lost && !this.closing) {
-        this.resume(info.id);
+        this.resume(info.id, undefined, true);
         return;
       }
       if (isCodex && !this.closing) this.scheduleScan(w);
@@ -1377,6 +1425,12 @@ export class WorkerManager {
     if (w.info.status === status) return;
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
+    // Back at work without the note waking it held back (someone typed straight into its terminal):
+    // told later, it would be old news, so it goes.
+    if (status === 'working' && w.info.checkpoints) {
+      w.info.checkpoints = undefined;
+      this.persist();
+    }
     // Done, idle or asleep: it's not acting anything out any more.
     if (status !== 'working' && status !== 'needs_input') w.info.action = undefined;
     // Nobody is looking at the terminal right now -> raise the flag (the worker jumps). A worker at the

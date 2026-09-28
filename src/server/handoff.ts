@@ -43,7 +43,7 @@ export function retoldTask(task: string | undefined): string | undefined {
 
 const SAVED_PREFIX = 'The office saved your uncommitted work as WIP commit ';
 
-/** Tells a woken worker that the office committed what it left uncommitted when it went down. */
+/** Tells a worker that the office committed what it left uncommitted when it went down. */
 export function checkpointNotice(checkpoints: { hash: string; branch: string; repository?: string }[] | undefined): string | undefined {
   if (!checkpoints?.length) return undefined;
   return checkpoints
@@ -57,10 +57,15 @@ export function withCheckpointNotice(prompt: string | undefined, notice: string 
   return prompt ? `${prompt}\n\n${notice}` : notice;
 }
 
+/** A native slash command (/compact, /model …), which the agent runs as typed. */
+export function isSlashCommand(prompt: string): boolean {
+  return /^\/[\w:-]+(?:\s|$)/.test(prompt);
+}
+
 /** Preserve native slash commands and avoid submitting a new turn on a bare resume. */
 export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: string): string | undefined {
   if (!prompt && resumeSessionId) return undefined;
-  if (prompt && /^\/[\w:-]+(?:\s|$)/.test(prompt)) return prompt;
+  if (prompt && isSlashCommand(prompt)) return prompt;
   return `${prompt || WAIT_FOR_TASK}${HANDOFF_NOTE}`;
 }
 
