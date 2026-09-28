@@ -10,11 +10,13 @@ function fixture(defaultProvider: AgentProvider = 'claude') {
   const dir = mkdtempSync(path.join(tmpdir(), 'office-queue-'));
   const workers: WorkerInfo[] = [];
   let hired = 0;
+  const workspaceRequests: unknown[] = [];
   const manager: QueueWorkers = {
     defaultProvider,
     list: () => workers,
     deskOccupied: (desk) => workers.some((w) => w.deskId === desk),
-    spawn(deskId, by, prompt, _worktree, kind, provider, model, effort) {
+    spawn(deskId, by, prompt, _worktree, kind, provider, model, effort, _meeting, workspace) {
+      workspaceRequests.push(workspace);
       const worker: WorkerInfo = {
         id: `worker-${hired++}`, deskId, kind, provider, model, effort, prompt, name: 'Test',
         color: '#ffffff', status: 'working', acked: false, createdBy: by,
@@ -40,7 +42,7 @@ function fixture(defaultProvider: AgentProvider = 'claude') {
     queues.push(queue);
     return queue;
   };
-  return { dir, workers, open, emptied: () => emptied, close() { queues.forEach((q) => q.shutdown()); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, workers, workspaceRequests, open, emptied: () => emptied, close() { queues.forEach((q) => q.shutdown()); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test('queue seats the selected provider and preserves it through completion and retry', (t) => {
@@ -261,6 +263,7 @@ test('a task for a To Do Next item tells the plans board when it starts and how 
   const dir = mkdtempSync(path.join(tmpdir(), 'office-queue-plan-'));
   const workers: WorkerInfo[] = [];
   let hired = 0;
+  const workspaceRequests: unknown[] = [];
   const manager: QueueWorkers = {
     defaultProvider: 'claude',
     list: () => workers,
@@ -301,4 +304,20 @@ test('a task for a To Do Next item tells the plans board when it starts and how 
   const again = new TaskQueue(dir, manager, false, events);
   t.after(() => again.shutdown());
   assert.equal(again.state().tasks[0].plan, 'plan-1');
+});
+
+
+test('recovery repository selection survives queued restart, spawn and retry', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(0);
+  const workspace = { repositories: ['frontend'] };
+  q.add('Recover source', 'Tester', 'Recover', undefined, undefined, undefined, undefined, undefined, undefined, workspace);
+  q.shutdown();
+  const restored = f.open();
+  assert.deepEqual(restored.state().tasks[0].workspace, workspace);
+  restored.setLimit(1);
+  assert.deepEqual(f.workspaceRequests[0], workspace);
+  f.workers[0].status = 'done'; restored.onWorker(f.workers[0]);
+  assert.equal(restored.retry(restored.state().tasks[0].id), undefined);
+  assert.deepEqual(f.workspaceRequests[1], workspace);
 });
