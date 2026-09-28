@@ -8,9 +8,10 @@ import { CHECKPOINT_NOTE, retoldTask, withWorkerHandoff, withoutCheckpoint } fro
 import { stationBrief } from '../src/server/stations.js';
 import type { StationKind } from '../src/shared/layout.js';
 import type { WorkerInfo } from '../src/shared/protocol.js';
+import type { WorkspaceRequest } from '../src/shared/workspaces.js';
 
 // The prompt a queued task is started with, with or without its own worktree.
-function queuedPrompt(useWorktree: boolean, issue?: number): string {
+function queuedPrompt(useWorktree: boolean, issue?: number, workspace?: WorkspaceRequest): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'office-checkpoint-'));
   const prompts: string[] = [];
   const workers: WorkerInfo[] = [];
@@ -28,7 +29,7 @@ function queuedPrompt(useWorktree: boolean, issue?: number): string {
   };
   const q = new TaskQueue(dir, manager, useWorktree, { update() {}, toast() {}, claimIssue: async () => undefined, refreshGitHub() {}, hiringPaused: () => undefined, emptied() {} });
   try {
-    assert.equal(q.add('Fix the login redirect', 'Tester', 'Login', issue), undefined);
+    assert.equal(q.add('Fix the login redirect', 'Tester', 'Login', issue, undefined, undefined, undefined, undefined, undefined, workspace), undefined);
   } finally {
     q.shutdown();
     rmSync(dir, { recursive: true, force: true });
@@ -65,6 +66,10 @@ test('a pull request drafted from a queued task shows the task, not the checkpoi
 
 test('a queued task sharing the main checkout is not told to commit there', () => {
   assert.ok(!queuedPrompt(false).includes(CHECKPOINT_NOTE));
+});
+
+test('a queued task in a multi-repository workspace keeps its own brief, without the checkpoint rule', () => {
+  assert.ok(!queuedPrompt(true, undefined, { repositories: ['web', 'api'] }).includes(CHECKPOINT_NOTE));
 });
 
 test('a worker restarted without a session gets its task back with the checkpoint rule and what to check first', () => {
