@@ -9,7 +9,11 @@ export type ManualBlock =
   | { table: { head: string[]; rows: string[][] } }
   | { note: string }
   /** Tick boxes: a to-do list to work through. */
-  | { checklist: string[] };
+  | { checklist: string[] }
+  /** A command to paste, with a Copy button. `{PR}` becomes the number typed into the page's PR box. */
+  | { code: string; dir?: string }
+  /** The box that fills `{PR}` into the page's commands. */
+  | { prNumber: true };
 
 export interface ManualChapter {
   id: string;
@@ -17,6 +21,9 @@ export interface ManualChapter {
   title: string;
   blocks: ManualBlock[];
 }
+
+/** The folder the office runs from (see “The three copies of agent-office”). */
+const APP_DIR = 'C:\\Users\\Owner\\Documents\\Development\\Agent-Office\\agent-office';
 
 export const MANUAL: ManualChapter[] = [
   {
@@ -57,6 +64,53 @@ export const MANUAL: ManualChapter[] = [
           'A build only takes effect after a restart.',
         ],
       },
+    ],
+  },
+  {
+    id: 'merge-steps',
+    icon: '📋',
+    title: 'Merging an agent-office PR, step by step',
+    blocks: [
+      { p: 'Copy each command into PowerShell. Type the PR’s number here first and every command below uses it.' },
+      { prNumber: true },
+      { h: '1. Look at the PR' },
+      { p: 'Opens it in your browser. Read the description and the “Files changed” tab.' },
+      { code: 'gh pr view {PR} --repo mmoscare/agent-office --web' },
+      { h: '2. Merge it' },
+      { p: 'Your fork only allows merge commits, so this is the right kind.' },
+      { code: 'gh pr merge {PR} --repo mmoscare/agent-office --merge' },
+      { h: '3. Update the floor' },
+      { p: 'In the office: Git board → **agent-office** → **⬇️ Pull**. Or:' },
+      { code: 'git -C "C:\\Users\\Owner\\agent-office\\mmoscare\\agent-office" pull --ff-only' },
+      { h: '4. Go to the app folder and check it’s clean' },
+      { p: 'It should say “nothing to commit”.' },
+      { code: 'cd "C:\\Users\\Owner\\Documents\\Development\\Agent-Office\\agent-office"\ngit status' },
+      { h: '5. Pull the new code into the app' },
+      { code: 'git pull', dir: APP_DIR },
+      { p: 'If it says **CONFLICT**, see “If step 5 says CONFLICT” below, then come back to step 6.' },
+      { h: '6. Check the pull worked' },
+      { p: 'The first line must **not** say “behind”.' },
+      { code: 'git status -sb', dir: APP_DIR },
+      { h: '7. Build' },
+      { code: 'npm run build', dir: APP_DIR },
+      { h: '8. Restart the office' },
+      { p: 'Wait until your workers are idle. Press **Ctrl+C** in the office’s window, then start it again with your password in place of YOUR-PASSWORD:' },
+      { code: 'agent-office.cmd "C:\\Users\\Owner\\Documents\\Development\\Personal-Portfolio" --agent "C:/Users/Owner/.local/bin/claude.exe" --password \'YOUR-PASSWORD\'' },
+      { h: '9. Back in' },
+      { p: 'Open http://localhost:4600 and tell any worker that was busy: “continue”.' },
+      { h: 'If step 5 says CONFLICT' },
+      { p: '**The easy way:** undo the pull, then ask any Claude session to “update the app folder”.' },
+      { code: 'git merge --abort', dir: APP_DIR },
+      { p: '**Fixing it yourself:**' },
+      {
+        steps: [
+          'Open each file the message named and search for `<<<<<<<`.',
+          'Turn the two versions into **one line that has both** items, and delete the `<<<<<<<`, `=======` and `>>>>>>>` lines.',
+          'Then run the command below, and carry on from step 6.',
+        ],
+      },
+      { code: 'git add .\ngit commit --no-edit', dir: APP_DIR },
+      { note: 'A PR on one of your other floors (Personal-Portfolio, MFT-Trading-Dashboard, …) only needs steps 1–3: use that repository’s owner/name in place of `mmoscare/agent-office`, and pull that floor’s repository on the Git board. No build and no restart.' },
     ],
   },
   {

@@ -1,10 +1,11 @@
-import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitRepoDetail, GitRepoList, GitRepoSummary } from '../../shared/git-board';
+import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitRepoDetail, GitRepoList, GitRepoSummary, OfficeStatus } from '../../shared/git-board';
 import type { PullRequestRef } from '../../shared/protocol';
 import { pullRequestLabel } from '../../shared/pulls';
 import { store } from '../state';
 import { renderDiff } from './changes';
 import { h, openModal, timeAgo, toast } from './dom';
 import { confirmDialog, openPrompt } from './prompt';
+import { renderOfficeStatus } from './office-status';
 
 // The Git board: the PR board's other side. A button over the PR board on the wall (or in its
 // window) flips it. Its front lists every Git repository on the floor; open one for its branches and,
@@ -160,7 +161,24 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
   const title = h('h2', {}, '🌿 Git');
   const body = h('div.body.git-body');
   const footer = h('footer.git-actions', { hidden: true });
-  const el = h('div.modal.board.git-board', { role: 'dialog', 'aria-label': 'Git board', tabindex: -1 }, h('header', {}, title, status, pullsBtn, refresh, close), body, footer);
+  const officeBar = h('div.git-office-bar', { hidden: true });
+  const el = h('div.modal.board.git-board', { role: 'dialog', 'aria-label': 'Git board', tabindex: -1 }, h('header', {}, title, status, pullsBtn, refresh, close), officeBar, body, footer);
+
+  // The office's own code: is what's running the latest? (ui/office-status.ts)
+  let office: OfficeStatus | null = null;
+  /** Whether its steps are showing. Closed until asked for, or until you pull the office's own repository. */
+  let officeOpen = false;
+  officeBar.addEventListener('toggle', (e) => {
+    if ((e.target as HTMLElement).tagName === 'DETAILS') officeOpen = (e.target as HTMLDetailsElement).open;
+  }, true);
+  const loadOffice = async () => {
+    try {
+      office = (await api<{ office: OfficeStatus | null }>('office', {})).office;
+    } catch {
+      office = null;
+    }
+    if (!closed) renderOfficeStatus(officeBar, office, officeOpen);
+  };
 
   /** The repository open, or null on the list of them. */
   let repo: string | null = null;
@@ -292,6 +310,7 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
       fetching = false;
       if (!closed && repo === r) await loadDetail();
       renderFilesHead();
+      void loadOffice();
     }
   };
 
@@ -515,6 +534,13 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
         renderLists();
       }
       void loadGitRepos();
+      void loadOffice().then(() => {
+        if (ok && path === 'pull' && office && detail?.github && detail.github === office.github && office.dir) {
+          officeOpen = true;
+          if (!closed) renderOfficeStatus(officeBar, office, officeOpen);
+          if (office.needs.pull || office.needs.build || office.needs.restart) toast('Pulled. Next: update the running office: the steps are in the 🏢 bar at the top.');
+        }
+      });
     }
     return ok;
   };
@@ -671,8 +697,10 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
   });
 
   const unsubs = [onGitRepos(renderRepos)];
+  let ticks = 0;
   const timer = setInterval(() => {
     if (document.visibilityState !== 'visible') return;
+    if (++ticks % 4 === 0) void loadOffice();
     if (repo === null) renderRepos();
     else if (!fetching && !acting) void loadDetail();
   }, POLL_MS);
@@ -693,5 +721,6 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
   void loadGitRepos().then(() => {
     if (!startRepo && repo === null && gitRepos.list?.floorIsRepo) openRepo('.');
   });
+  void loadOffice();
   setTimeout(() => el.focus(), 30);
 }
