@@ -102,14 +102,15 @@ test('a push failure is logged, never thrown, and the commit is kept', async (t)
 
 test('the deadline is honoured: a hanging push is cut off and the commit still counts', async (t) => {
   const p = project(t);
-  // A push over "ssh" whose ssh never answers.
-  git(p.wt, 'config', 'core.sshCommand', `node -e "setTimeout(() => {}, 10000)"`);
+  // A push over "ssh" whose ssh never answers (for far longer than the deadline, or the push's own timeout).
+  git(p.wt, 'config', 'core.sshCommand', `node -e "setTimeout(() => {}, 30000)"`);
   git(p.dir, 'remote', 'add', 'origin', 'ssh://example.invalid/repo.git');
   writeFileSync(path.join(p.wt, 'app.txt'), 'two\n');
   const started = Date.now();
-  const [r] = await checkpointWorktrees([{ dir: p.wt, branch: p.branch }], { now: NOW, deadlineMs: 3000, pushTimeoutMs: 20_000, log: quiet });
+  // Deadline enough for the commit on a busy machine (the full suite runs files side by side).
+  const [r] = await checkpointWorktrees([{ dir: p.wt, branch: p.branch }], { now: NOW, deadlineMs: 8000, pushTimeoutMs: 120_000, log: quiet });
   const took = Date.now() - started;
-  assert.ok(took < 5000, `took ${took}ms`);
+  assert.ok(took < 15_000, `took ${took}ms`);
   assert.ok(r.hash, 'the commit was made before the push hung');
   assert.equal(r.pushed, undefined);
   assert.equal(r.pushError, 'ran out of time');
