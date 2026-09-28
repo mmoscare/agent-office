@@ -150,6 +150,7 @@ function pullRow(p: GhPull, showRepo: boolean, net: Net, actions: BoardActions):
     label: `${st.label}: ${ghRef(p)} ${p.title}`,
     when: timeAgo(p.updatedAt),
     compact: st.tier === 'done',
+    compactDetail: st.tier === 'done' ? submitterChip(p.headRefName) : '',
     meta: [
       h('span.prb-branch', { title: `${p.headRefName} into ${p.baseRefName}` }, `🌿 ${p.headRefName}`, h('span.prb-base', {}, ` → ${p.baseRefName}`)),
       ...pullWorkIndicators(p, actions.goToDesk),

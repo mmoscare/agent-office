@@ -135,6 +135,25 @@ try {
   await board.locator('.pr-work').focus();
   await board.locator('.pr-work').press('Enter');
   assert.equal(await dialog.count(), 0);
+  // Integration of the redesigned board and persistent desk attribution: even one
+  // repository with PRs keeps its identity, and finished cards retain the submitter.
+  await openBoard();
+  const archived = { ...pull, number: 13, url: 'https://github.com/example/project/pull/13',
+    title: 'Finished by Widget', headRefName: 'office/widget-0200', state: 'MERGED',
+    repo: 'example/project', repoDir: 'app' };
+  const archivedClosed = { ...archived, number: 14, url: 'https://github.com/example/project/pull/14', state: 'CLOSED', title: 'Closed by Widget' };
+  const manual = { ...archived, number: 15, url: 'https://github.com/example/project/pull/15', headRefName: 'fix/by-hand', title: 'Manual PR' };
+  const state = { items: [archived, archivedClosed, manual], fetchedAt: Date.now(), loading: false };
+  const tally = board.locator('[data-focus="tally-prb-done"]');
+  await tally.focus();
+  for (const ws of wss.clients) send(ws, { t: 'gh.pulls', state });
+  await board.getByText(archived.title, { exact: true }).waitFor();
+  assert.equal(await tally.evaluate(el => document.activeElement === el), true, 'tally focus survives redraw');
+  assert.match(await board.locator('.prb-repo').innerText(), /app/i);
+  assert.equal(await board.locator('.pr-submitter').count(), 2, 'merged/closed office PRs keep attribution; manual branches do not invent it');
+  assert.match(await board.locator('.pr-submitter').first().innerText(), /Widget/);
+  assert.match(await board.locator('.prb-ref').first().innerText(), /project#13/);
+  assert.equal(await board.evaluate(el => el.scrollWidth <= el.clientWidth), true);
   assert.deepEqual(errors, []);
   console.log('PASS: cancel, new worker, existing worker, comments/conflicts metadata, live card/window states, reconnect, narrow layout, reduced motion, and keyboard desk navigation.');
 } catch (error) {

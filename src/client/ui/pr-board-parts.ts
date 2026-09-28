@@ -34,6 +34,8 @@ export interface RowParts {
   /** Bottom right: a button or where its recovery stands. */
   action?: Node;
   compact?: boolean;
+  /** Small attribution retained when a finished row hides its full metadata. */
+  compactDetail?: Node | '';
   label: string;
   onOpen?: () => void;
 }
@@ -58,7 +60,7 @@ export function row(p: RowParts): HTMLElement {
           }) as EventListener)
         : undefined,
     },
-    h('div.prb-head', {}, p.pill, p.ref ? h('span.prb-ref', {}, p.ref) : '', h('span.prb-title', {}, p.title)),
+    h('div.prb-head', {}, p.pill, p.ref ? h('span.prb-ref', {}, p.ref) : '', h('span.prb-title', {}, p.title), p.compact ? p.compactDetail : ''),
     p.when ? h('span.prb-when', {}, p.when) : '',
     p.compact ? '' : h('div.prb-meta', {}, ...p.meta.filter((m): m is Node | string => !!m).map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
     p.action ? h('div.prb-action', { onclick: ((e: Event) => e.stopPropagation()) as EventListener }, p.action) : '',
