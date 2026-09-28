@@ -5,6 +5,50 @@ import os from 'node:os';
 import path from 'node:path';
 import { DEFAULT_ASSUMPTIONS, claudeMonthly, codexCost, estimate, weekPace, type LedgerFacts } from '../src/shared/ledger.js';
 import { Ledger } from '../src/server/usage.js';
+import { ledgerFacts } from '../src/server/ledger-facts.js';
+import type { AgentProvider, Usage, UsageState, WorkerInfo } from '../src/shared/protocol.js';
+
+const zero: Usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0, calls: 0 };
+const officeUsage: UsageState = { total: zero, today: zero, day: '2026-09-28', pauseHiring: false };
+const worker = (provider: AgentProvider | undefined, usage?: Usage): WorkerInfo => ({
+  id: 'worker', name: 'Test', kind: 'agent', provider, usage, deskId: 'desk-1', color: '#fff',
+  status: 'working', acked: false, createdBy: 'Test', createdAt: 1, cols: 80, rows: 24, viewers: [],
+});
+const floor = (defaultProvider: AgentProvider, workers: WorkerInfo[]) => ({
+  project: { defaultProvider }, workers: { list: () => workers },
+});
+
+test('live ledger aggregates every floor, using each floor default and explicit worker providers', () => {
+  const floors = [
+    floor('codex', [worker(undefined, { ...zero, input: 100, output: 20, reasoning: 5 })]),
+    floor('opencode', [worker(undefined, { ...zero, cost: 2 }), worker('codex', { ...zero, input: 200, cacheRead: 50 })]),
+    floor('claude', [worker('claude', { ...zero, cost: 10 }), { ...worker('opencode'), kind: 'shell' as const }]),
+  ];
+  const result = ledgerFacts(officeUsage, floors);
+  assert.deepEqual(result.codex, { input: 300, cacheRead: 50, cacheWrite: 0, output: 25, sessions: 2, unknown: 0 });
+  assert.deepEqual(result.opencode, { cost: 2, sessions: 1, unknown: 0 });
+  assert.deepEqual(ledgerFacts(officeUsage, [...floors].reverse()), result);
+  // A later snapshot reflects workers removed from a floor; no stale browser cache.
+  assert.equal(ledgerFacts(officeUsage, floors.slice(0, 1)).codex.sessions, 1);
+});
+
+test('OpenCode awaiting reports, unknown prices and partial reports remain unavailable until usable', () => {
+  const workers = [worker(undefined), worker('opencode', { ...zero, costKnown: false }), worker('opencode', { ...zero, cost: 2, incomplete: true })];
+  const floors = [floor('opencode', workers)];
+  const waiting = ledgerFacts(officeUsage, floors);
+  assert.equal(waiting.opencode.unknown, 3);
+  assert.equal(estimate(DEFAULT_ASSUMPTIONS, waiting).lines.find(l => l.item === 'OpenCode workers')!.usage, null);
+  for (const w of workers) w.usage = { ...zero, cost: 1, costKnown: true };
+  const ready = ledgerFacts(officeUsage, floors);
+  assert.deepEqual(ready.opencode, { cost: 3, sessions: 3, unknown: 0 });
+  assert.equal(estimate(DEFAULT_ASSUMPTIONS, ready).unknown.recurring, 0);
+});
+
+test('a waiting Codex session prevents a partial known total from being presented as complete', () => {
+  const result = ledgerFacts(officeUsage, [floor('codex', [worker(undefined), worker(undefined, { ...zero, input: 100 })])]);
+  assert.equal(result.codex.unknown, 1);
+  assert.equal(estimate(DEFAULT_ASSUMPTIONS, result).lines.find(l => l.item === 'Codex workers')!.usage, null);
+});
 
 const facts = (over: Partial<LedgerFacts> = {}): LedgerFacts => ({
   claude: { today: 0, total: 0, calls: 0 },

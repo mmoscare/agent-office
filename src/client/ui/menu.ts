@@ -1,3 +1,4 @@
+import { mountPush, pushAction } from './push';
 import { store, type HudPanel, type Settings, type Topic } from '../state';
 import { waitingOnSomeone } from '../notify';
 import { DESK_BY_ID } from '../../shared/layout';
@@ -61,6 +62,7 @@ export interface Hud {
  * and the panels you choose to show. Everything else waits in the menu, so the office stays in view.
  */
 export function mountHud(actions: HudAction[], settings: Settings, save: () => void): Hud {
+  actions = [...actions, pushAction];
   const dock = $('dock');
   const labelOf = (a: HudAction) => (typeof a.label === 'string' ? a.label : a.label());
   const iconOf = (a: HudAction) => (typeof a.icon === 'string' ? a.icon : a.icon());
@@ -279,5 +281,6 @@ export function mountHud(actions: HudAction[], settings: Settings, save: () => v
   for (const t of ['workers', 'peers', 'issues', 'pulls', 'services', 'queue', 'meeting', 'upgrade', 'me', 'floors'] as Topic[]) store.on(t, render);
   applyPanels();
   render();
+  mountPush(render);
   return { refresh: render, toggleMenu };
 }

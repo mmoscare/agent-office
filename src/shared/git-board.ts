@@ -133,5 +133,9 @@ export interface OfficeStatus {
   needs: { pull: boolean; build: boolean; restart: boolean };
   /** When GitHub was last fetched from there. */
   fetchedAt?: number;
+  /** The GitHub commit it should be at (its upstream's), so a dismissed update bar comes back for the next one. */
+  target?: string;
+  /** Floors that are checkouts of the office's own repository, and how far behind GitHub each is. */
+  floors?: { name: string; dir: string; behind: number; dirty: number }[];
   error?: string;
 }

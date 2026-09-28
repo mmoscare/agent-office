@@ -117,7 +117,7 @@ export interface LedgerFacts {
   /** Claude Code at API rates: today, the last 30 days (over `days` of them) and all time. */
   claude: { today: number; month?: { cost: number; days: number }; total: number; calls: number };
   /** Tokens of the Codex sessions at desks now; `sessions` of them. */
-  codex: TokenCounts & { sessions: number };
+  codex: TokenCounts & { sessions: number; unknown?: number };
   /** OpenCode's own reported cost for the sessions at desks now; `unknown` more report no cost. */
   opencode: { cost: number; sessions: number; unknown?: number };
 }
@@ -188,14 +188,16 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
     `About ${Math.round(cards).toLocaleString('en-US')} short Haiku calls a month, one per ~${CALLS_PER_CARD} worker API calls. ${a.claudePlan === 'api' ? 'Billed to the API key.' : 'Comes out of the Claude plan.'}`,
   );
   // With no Codex session at a desk there are no tokens to price: that's unknown, not free.
-  const codex = f.codex.sessions ? codexCost(f.codex, a.codexRate) * DAYS_PER_MONTH : null;
+  const codex = f.codex.sessions && !f.codex.unknown ? codexCost(f.codex, a.codexRate) * DAYS_PER_MONTH : null;
   const chat = CHATGPT_PLANS[a.chatgptPlan];
   add(
     'AI',
     'Codex workers',
     codex,
     chat.monthly || codex,
-    f.codex.sessions
+    f.codex.unknown
+      ? `${f.codex.unknown} Codex session${f.codex.unknown === 1 ? '' : 's'} awaiting token reports: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`
+      : f.codex.sessions
       ? `${f.codex.sessions} session${f.codex.sessions === 1 ? '' : 's'} at desks now, priced at ${CODEX_RATES[a.codexRate].label} API rates, as if every day were like today. ${a.chatgptPlan === 'none' ? 'Without a plan Codex bills an API key.' : `${chat.label} covers them.`}`
       : `No Codex worker at a desk right now, so no tokens to price: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`,
   );

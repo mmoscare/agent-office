@@ -115,6 +115,50 @@ test('resumes keep the session idle without a prompt, and include the rule with 
   assert.match(launches[2].opts.args.at(-1)!, /^Next task\n\n<agent-office-handoff>/);
 });
 
+for (const provider of ['claude', 'opencode', 'codex', 'custom'] as const) {
+  test(`${provider} restarted without a session to continue is handed its original task, not told it has none`, (t) => {
+    const { workers, launches } = fixture(t, provider);
+    // The office restarts before the agent reports a session (e.g. it was still on a setup screen).
+    const info = worker(workers.spawn('desk-1', 'Tester (queue)', 'Stop the arms moving when idle'));
+    const originalTask = info.task;
+    launches[0].exit();
+    assert.equal(workers.resume(info.id), undefined);
+    const submitted = launches[1].opts.args.at(-1)!;
+    assert.ok(submitted.startsWith('Stop the arms moving when idle\n\n'));
+    assert.match(submitted, /original task again/);
+    assert.match(submitted, /<agent-office-handoff>/);
+    assert.doesNotMatch(submitted, /No task has been assigned/);
+    assert.equal(info.prompt, 'Stop the arms moving when idle');
+
+    // The echoed prompt still reads as the request alone on the task card.
+    const token = launches[1].opts.env.AGENT_OFFICE_HOOK_TOKEN;
+    if (provider === 'codex') workers.handleCodexHook(info.id, token, 'UserPromptSubmit', { session_id: 'fresh', prompt: submitted });
+    else if (provider === 'opencode') workers.handleOpenCodeHook(info.id, token, { type: 'prompt', sessionId: 'fresh', status: 'working', prompt: submitted });
+    else workers.handleHook(info.id, token, 'UserPromptSubmit', { session_id: 'fresh', prompt: submitted });
+    assert.equal(info.activity, 'Stop the arms moving when idle');
+    assert.deepEqual(info.task, originalTask);
+  });
+}
+
+test('a worker hired without a task still waits after a restart without a session', (t) => {
+  const { workers, launches } = fixture(t, 'codex');
+  const info = worker(workers.spawn('desk-1', 'Tester'));
+  launches[0].exit();
+  assert.equal(workers.resume(info.id), undefined);
+  assert.match(launches[1].opts.args.at(-1)!, /^No task has been assigned yet/);
+});
+
+test('a board agent restarted without a session does not repeat its first request', (t) => {
+  const { workers, launches } = fixture(t);
+  const hired = workers.station('station-issues', 'Tester', 'Label issue #12');
+  assert.notEqual(typeof hired, 'string');
+  launches[0].exit();
+  assert.equal(workers.resume((hired as { info: WorkerInfo }).info.id), undefined);
+  const submitted = launches[1].opts.args.at(-1)!;
+  assert.doesNotMatch(submitted, /Label issue #12/);
+  assert.match(submitted, /^No task has been assigned yet/);
+});
+
 test('board workers get both their role and the shared handoff rule', (t) => {
   const { workers, launches } = fixture(t);
   const hired = workers.station('station-issues', 'Tester', 'Label issue #12');

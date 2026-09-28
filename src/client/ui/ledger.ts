@@ -16,7 +16,6 @@ import {
 } from '../../shared/ledger';
 import { store } from '../state';
 import { h, openModal } from './dom';
-import { resolvedProvider } from './provider';
 import { fmtCost } from './usage';
 
 const KEY = 'agent-office.ledger';
@@ -44,32 +43,6 @@ function saveAssumptions(a: LedgerAssumptions) {
   } catch {}
 }
 
-function facts(): LedgerFacts {
-  const u = store.usage;
-  const f: LedgerFacts = {
-    claude: { today: u.today.cost, month: u.month, total: u.total.cost, calls: u.total.calls },
-    codex: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, sessions: 0 },
-    opencode: { cost: 0, sessions: 0, unknown: 0 },
-  };
-  for (const w of store.workers.values()) {
-    if (w.kind !== 'agent' || !w.usage) continue;
-    const provider = resolvedProvider(w.provider, store.project);
-    if (provider === 'codex') {
-      f.codex.sessions++;
-      f.codex.input += w.usage.input;
-      f.codex.cacheRead += w.usage.cacheRead;
-      f.codex.cacheWrite += w.usage.cacheWrite;
-      f.codex.output += w.usage.output + (w.usage.reasoning ?? 0);
-    } else if (provider === 'opencode' && w.usage.costKnown === false) {
-      f.opencode.unknown!++;
-    } else if (provider === 'opencode') {
-      f.opencode.sessions++;
-      f.opencode.cost += w.usage.cost;
-    }
-  }
-  return f;
-}
-
 /** A line's cost: n/a when unknown, free when the whole line costs nothing. */
 function cell(l: LedgerLine, n: number | null): string {
   if (n === null) return 'n/a';
@@ -83,6 +56,11 @@ const GROUPS: Record<LedgerLine['group'], string> = { AI: '🤖 The workers', Ho
 
 export function openLedger() {
   let a = loadAssumptions();
+  let facts: LedgerFacts | null = null;
+  let error = false;
+  let closed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const summary = h('div.ledger-summary');
   const table = h('div.ledger-lines');
@@ -147,7 +125,14 @@ export function openLedger() {
   }
 
   function render() {
-    const e = estimate(a, facts());
+    if (!facts) {
+      summary.replaceChildren(h('p', {}, error
+        ? 'Office usage is unavailable. Retrying...'
+        : 'Loading usage from every floor...'));
+      table.replaceChildren();
+      return;
+    }
+    const e = estimate(a, facts);
     const verdict =
       e.unknown.usage || e.unknown.recurring
         ? 'Some costs are unavailable (n/a), so the totals leave them out and the two bases can’t be fairly compared.'
@@ -160,8 +145,8 @@ export function openLedger() {
     const pace = week?.resetsAt ? weekPace(week.pct, week.resetsAt, Date.now()) : null;
     const plan = CLAUDE_PLANS[a.claudePlan];
     const notes: (HTMLElement | null)[] = [
-      h('div.total', { title: 'Every token at API rates, the machine billed only for the hours it is up' }, h('span', {}, 'Usage basis (estimate)'), h('b', {}, `${total(e.usage, e.unknown.usage)}/mo`), h('small', {}, `${fmtCost(e.usage * 12)} a year`)),
-      h('div.total', { title: 'The flat monthly bills: plans, and a machine that stays on' }, h('span', {}, 'Recurring basis (estimate)'), h('b', {}, `${total(e.recurring, e.unknown.recurring)}/mo`), h('small', {}, `${fmtCost(e.recurring * 12)} a year`)),
+      h('div.total', { title: 'Every token at API rates, the machine billed only for the hours it is up' }, h('span', {}, 'Usage basis (estimate)'), h('b', {}, `${total(e.usage, e.unknown.usage)}/mo`), h('small', {}, `${total(e.usage * 12, e.unknown.usage)} a year`)),
+      h('div.total', { title: 'The flat monthly bills: plans, and a machine that stays on' }, h('span', {}, 'Recurring basis (estimate)'), h('b', {}, `${total(e.recurring, e.unknown.recurring)}/mo`), h('small', {}, `${total(e.recurring * 12, e.unknown.recurring)} a year`)),
       h('p.verdict', {}, verdict),
       a.claudePlan !== 'api' && plan.monthly
         ? h('p.muted', {}, `Claude Code would cost ${fmtCost(e.claudeMonthly)} a month at API rates: ${(e.claudeMonthly / plan.monthly).toFixed(1)}× what ${plan.label} costs.`)
@@ -195,7 +180,28 @@ export function openLedger() {
 
   renderKnobs();
   render();
-  const offs = (['usage', 'workers', 'limits'] as const).map((t) => store.on(t, render));
-  const modal = openModal(el, { onClose: () => offs.forEach((off) => off()) });
+  // The endpoint reads all floors, including ones this browser has never visited.
+  async function refresh() {
+    try {
+      const response = await fetch('/api/ledger', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error('Usage unavailable');
+      facts = await response.json() as LedgerFacts;
+      error = false;
+    } catch {
+      facts = null;
+      error = true;
+    }
+    if (closed) return;
+    render();
+    timer = setTimeout(refresh, 5000);
+  }
+  const off = store.on('limits', render);
+  const modal = openModal(el, { onClose: () => {
+    closed = true;
+    controller.abort();
+    clearTimeout(timer);
+    off();
+  } });
+  void refresh();
   close.addEventListener('click', () => modal.close());
 }
