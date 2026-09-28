@@ -21,7 +21,8 @@ export function buildProjectSigns() {
   const trim = toonUnique(FLOOR_PALETTES[0].trim);
   let palette = FLOOR_PALETTES[0];
   let name = 'Agent Office';
-  let floor: number | undefined;
+  /** The floor's number as the elevator shows it: "3", or "B1" in the Back Office. */
+  let floor: string | undefined;
   let logo: HTMLImageElement | undefined;
   let signature = '';
   let revision = 0;
@@ -116,7 +117,7 @@ export function buildProjectSigns() {
     return group;
   }
 
-  function setProject(nextName: string, url?: string, nextFloor?: number) {
+  function setProject(nextName: string, url?: string, nextFloor?: string) {
     const next = JSON.stringify([nextName, url, nextFloor]);
     if (next === signature) return;
     signature = next;

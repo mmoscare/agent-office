@@ -29,10 +29,11 @@ export function stoppedByRestart(t: Pick<QueueTask, 'outcome' | 'error'>): boole
 /** Where a task stands, honestly: a finished task whose worktree still holds work without a PR says so. */
 export function taskStatus(t: Pick<QueueTask, 'status' | 'outcome' | 'error' | 'pr' | 'unshipped'>): TaskStatusView {
   if (t.status !== 'done') return { text: t.status, warn: false };
-  const work = !t.pr && !!t.unshipped && (t.unshipped.dirty > 0 || t.unshipped.commits > 0);
-  if (stoppedByRestart(t)) return { text: `stopped by restart${work ? ' — no PR (unshipped work)' : ''}`, warn: true };
+  const work = !!t.unshipped && (t.unshipped.dirty > 0 || t.unshipped.commits > 0);
+  const warning = t.pr ? 'work outside PR (unshipped work)' : 'no PR (unshipped work)';
+  if (stoppedByRestart(t)) return { text: `stopped by restart${work ? ` — ${warning}` : ''}`, warn: true };
   const base = t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : 'done';
-  return work ? { text: `${base} — no PR (unshipped work)`, warn: true } : { text: base, warn: false };
+  return work ? { text: `${base} — ${warning}`, warn: true } : { text: base, warn: false };
 }
 
 /** The title of the queue task that recovers a branch's unshipped work; the board finds it on the queue by it. */

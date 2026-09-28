@@ -464,7 +464,7 @@ export class GitHub {
     this.pulls = { ...this.pulls, loading: true };
     this.onPulls(this.pulls);
     try {
-      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,mergeable,body,closingIssuesReferences';
+      const fields = 'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,mergeable,body,closingIssuesReferences';
       const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
         const [open, merged, closed] = await Promise.all([
           gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], dir),
@@ -484,6 +484,7 @@ export class GitHub {
           labels: labels(p.labels),
           reviewDecision: p.reviewDecision ?? '',
           headRefName: p.headRefName,
+          headRefOid: p.headRefOid,
           baseRefName: p.baseRefName,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,

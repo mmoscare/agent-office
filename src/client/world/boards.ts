@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DESK_BY_ID } from '../../shared/layout';
 import { ghRef, type GhIssue, type GhPull, type GhState, type QueueState, type QueueTask, type ServiceInfo, type WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
+import { pullWorkers, pullWorkStatus } from '../../shared/pull-work';
 import { stoppedByRestart, taskStatus } from '../../shared/task-status';
 import { comparePulls, pullStatus, type PullStatusKey } from '../ui/pr-board-model';
 
@@ -172,7 +173,7 @@ export class BoardTexture {
         g.stroke();
         g.fillStyle = '#5c5f73';
         g.font = `800 ${Math.round(fs * 0.78)}px Nunito, ui-rounded, system-ui, sans-serif`;
-        g.fillText(clip(g, `${w.name} · ${DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
+        g.fillText(clip(g, `${w.name} · ${pullWorkers([w], it as GhPull).length ? pullWorkStatus(w).text : DESK_BY_ID.get(w.deskId)?.label ?? 'desk'}`, nw - 28 - r * 2 - 8), -nw / 2 + 14 + r * 2 + 8, y + fs * 0.28);
       }
       g.beginPath();
       g.arc(0, -nh / 2 + 10, 11, 0, Math.PI * 2);
@@ -305,14 +306,14 @@ export class QueueBoardTexture {
     const rows = [
       ...running.map((t) => {
         const w = t.workerId ? workers.get(t.workerId) : undefined;
-        const st = { starting: 'starting', idle: 'ready', working: 'working', needs_input: 'needs input ✋', done: 'done', exited: 'stopped', offline: 'asleep' }[w?.status ?? 'working'];
+        const st = { starting: 'starting', idle: 'ready', working: 'working', needs_input: 'needs input ✋', paused: 'paused ⏸', interrupted: 'interrupted ⏹', done: 'done', exited: 'stopped', offline: 'asleep' }[w?.status ?? 'working'];
         return { icon: '🤖', text: name(t), side: `${t.workerName ?? 'a worker'} · ${st}`, color: '#1e8f4e' };
       }),
       ...queued.map((t, i) => ({ icon: '⏳', text: name(t), side: i === 0 ? 'up next' : `${i + 1}${['th', 'st', 'nd', 'rd'][i + 1 <= 3 ? i + 1 : 0]} in line`, color: '#2b2d42' })),
       ...done.map((t) => ({
         icon: t.outcome === 'done' && !taskStatus(t).warn ? '✅' : '⚠️',
         text: name(t),
-        side: taskStatus(t).warn ? (stoppedByRestart(t) ? 'stopped by restart' : 'no PR · unshipped') : t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
+        side: taskStatus(t).warn ? (stoppedByRestart(t) ? 'stopped by restart' : t.pr ? 'work outside PR' : 'no PR · unshipped') : t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
         color: taskStatus(t).warn ? '#c2410c' : '#8a8f98',
       })),
     ];

@@ -10,7 +10,36 @@ If there is no appropriate GitHub thread, save the same handoff in a uniquely na
 Finish with a concise user-facing summary linking to the durable handoff. A terminal-only summary is not a substitute when a durable record can be saved.
 </agent-office-handoff>`;
 
+/**
+ * For queued workers in their own worktree: an office restart kills a running task, so whatever
+ * isn't committed and pushed by then is stranded. Never given to board agents (they share the main checkout).
+ */
+export const CHECKPOINT_NOTE = `
+
+<agent-office-checkpoint>
+Checkpoint rule: the office can restart at any time and end this session, so make your work durable early and often.
+- After your first meaningful change (or within a few minutes), run git add -A && git commit -m "WIP: <task title>" and git push -u origin HEAD so the branch exists on the fork.
+- Commit and push again at each milestone (a passing test, a working piece). WIP commits are fine; tidy or squash them later if you like.
+- Before ending, leave no uncommitted changes: commit and push everything, or say in the handoff what was left out and why.
+- If you can't push (no origin or no access), keep committing locally and say so in the handoff.
+- If you're woken after a restart, first run git status and git log @{u}..HEAD (or git log origin/<your branch>..HEAD) to see what was already saved, and continue from there.
+</agent-office-checkpoint>`;
+
+/** A queued task without the checkpoint rule: the rule is for the worker, not for its pull request. */
+export function withoutCheckpoint(task: string): string {
+  return task.endsWith(CHECKPOINT_NOTE) ? task.slice(0, -CHECKPOINT_NOTE.length) : task;
+}
+
 const WAIT_FOR_TASK = 'No task has been assigned yet. Keep these standing instructions for future tasks and wait for the user\'s request.';
+
+const RETOLD_NOTE = `
+
+(Agent Office restarted you in a fresh session because the earlier one could not be continued. This is your original task again: check the working tree, branch and any pull request for work already done before starting over: run git status and git log @{u}..HEAD first, and continue from what was saved.)`;
+
+/** A worker's original task, for a fresh session that replaces one it can't continue. */
+export function retoldTask(task: string | undefined): string | undefined {
+  return task ? `${task}${RETOLD_NOTE}` : undefined;
+}
 
 /** Preserve native slash commands and avoid submitting a new turn on a bare resume. */
 export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: string): string | undefined {
@@ -23,5 +52,6 @@ export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: 
 export function withoutWorkerHandoff(prompt: string): string {
   if (!prompt.endsWith(HANDOFF_NOTE)) return prompt;
   const request = prompt.slice(0, -HANDOFF_NOTE.length);
-  return request === WAIT_FOR_TASK ? '' : request;
+  if (request === WAIT_FOR_TASK) return '';
+  return request.endsWith(RETOLD_NOTE) ? request.slice(0, -RETOLD_NOTE.length) : request;
 }

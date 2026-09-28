@@ -9,14 +9,15 @@ import { workerBranches } from './worker-branches.js';
 import { codexInputPrompt } from './codex-input.js';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
+import { readPullWork } from '../shared/pull-work.js';
 import type { AgentEffort, AgentProvider, GhPull, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
 import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js';
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
-import { QUEUE_AGENT_DISALLOWED_TOOLS, stationBrief, type Checkout } from './stations.js';
-import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
-import { isBusy } from '../shared/status.js';
+import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
+import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
+import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
@@ -34,6 +35,7 @@ import { screenSnapshot } from './screen.js';
 import type { Capacity } from './machine.js';
 import type { WorkspaceRequest } from '../shared/workspaces.js';
 import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
+import { SideShells } from './sideshell.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
@@ -57,7 +59,7 @@ const scrubbed = (k: string) => SCRUB_ENV.has(k) || SCRUB_PREFIXES.some((p) => k
 
 const SCREEN_INTERVAL_MS = 250;
 /** What a worker with a live terminal can be doing. */
-const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input'] satisfies WorkerStatus[]);
+const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input', 'paused', 'interrupted'] satisfies WorkerStatus[]);
 const LATE_PROMPT_GRACE_MS = 5000;
 const KEYFRAME_MS = 8000;
 /** How often a steady typist's "last typed" time is refreshed for everyone. */
@@ -118,6 +120,10 @@ interface Worker {
   namedAt: number;
   /** Bumped by /clear: a new conversation, so a new task. */
   taskEpoch: number;
+  /** Current provider/local turn; cancelled-turn completions are ignored after a new prompt. */
+  turnId?: string;
+  turnSeq: number;
+  cancelledTurns: Set<string>;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -133,6 +139,8 @@ export interface WorkerEvents {
   update(info: WorkerInfo): void;
   remove(workerId: string): void;
   data(workerId: string, data: string, viewers: string[]): void;
+  /** Output of a worker's side shell (its Shell tab), for whoever has that tab open. */
+  sideData(workerId: string, data: string, viewers: string[]): void;
   screen(workerId: string, frame: { cols: number; rows: number; lines: Record<number, Run[]>; full: boolean; cursor: [number, number] }): void;
   toast(text: string, level: 'info' | 'warn' | 'error'): void;
 }
@@ -149,7 +157,7 @@ export class WorkerManager {
   checkouts: () => Checkout[] = () => [];
   private openCodePlugin: string;
   private codexHook: string;
-  /** Where the office-queue command is, for the board agents' PATH (see writeQueueCommand). */
+  /** Where the office-queue, office-plans and office-inbox commands are, for the board agents' PATH (see writeQueueCommand). */
   private queueBin: string | undefined;
   private screenTimer: NodeJS.Timeout;
   /** The office is shutting down: workers exiting now are being stopped, not failing to resume. */
@@ -162,6 +170,8 @@ export class WorkerManager {
   /** Each worker's terminal on disk, so a restart doesn't wipe it (see history.ts). */
   private scrollback: ScrollbackStore;
   private saveTimer: NodeJS.Timeout;
+  /** A plain shell beside each worker, in its checkout, from the Shell tab of its terminal (see sideshell.ts). */
+  private sides: SideShells;
 
   constructor(
     private dir: string,
@@ -194,6 +204,15 @@ export class WorkerManager {
     });
     this.host = new PtyHost(dataDir, () => this.events.toast("The workers' terminal host stopped — resuming them", 'warn'));
     this.scrollback = new ScrollbackStore(dataDir);
+    this.sides = new SideShells({
+      data: (id, data, viewers) => this.events.sideData(id, data, viewers),
+      size: (id, size) => {
+        const w = this.workers.get(id);
+        if (!w) return;
+        w.info.side = size;
+        this.emitUpdate(w);
+      },
+    });
     this.restore();
     this.scrollback.prune(new Set(this.workers.keys()));
     // A session may have ended (and written its final tally) while the office was down.
@@ -277,7 +296,7 @@ export class WorkerManager {
    * Hires a worker at a desk. `meeting` seats one at the meeting room's table instead, for that meeting
    * (see meetings.ts), in the meeting's own worktree, which everyone at the table shares.
    */
-  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, workspace?: WorkspaceRequest): WorkerInfo | string {
+  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, workspace?: WorkspaceRequest, pullWork?: unknown): WorkerInfo | string {
     const selectedProvider = kind === 'agent' ? provider ?? this.defaultProvider : undefined;
     const modelError = validateWorkerModel(kind, selectedProvider, model);
     if (modelError) return modelError;
@@ -314,6 +333,7 @@ export class WorkerManager {
       if (typeof made === 'string') return made;
       wt = made;
     }
+    const assignment = kind === 'agent' && prompt?.trim() ? readPullWork(pullWork) : undefined;
     const info: WorkerInfo = {
       id,
       kind,
@@ -330,6 +350,7 @@ export class WorkerManager {
       prompt: kind === 'shell' ? undefined : prompt?.trim() || undefined,
       worktree: wt,
       workspace: ws,
+      pullWork: assignment ? { ...assignment, assignedAt: Date.now() } : undefined,
       cols: 100,
       rows: 30,
       viewers: [],
@@ -355,7 +376,9 @@ export class WorkerManager {
     w.info.exitCode = undefined;
     const station = DESK_BY_ID.get(w.info.deskId)?.station;
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt;
+    // Any other worker with none (it never started, or its id was never reported) gets its task again
+    // rather than being told it has none. Not a board agent: its first request is long done.
+    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
@@ -416,6 +439,7 @@ export class WorkerManager {
       // already gone
     }
     w.term?.dispose();
+    this.sides.kill(id);
     this.scrollback.remove(id);
     this.events.remove(id);
     this.persist();
@@ -478,6 +502,30 @@ export class WorkerManager {
     return { data, cols: w.info.cols, rows: w.info.rows };
   }
 
+  /**
+   * Opens a worker's side shell (starting it in the worker's checkout if none runs) for `clientId`:
+   * what it shows so far, or why it couldn't start.
+   */
+  attachSide(id: string, clientId: string, cols: number, rows: number): { data: string; cols: number; rows: number } | string {
+    const w = this.workers.get(id);
+    if (!w) return 'No such worker';
+    const cwd = this.cwd(w.info);
+    if (!existsSync(cwd)) return `${w.info.name}'s working directory is gone (${cwd})`;
+    return this.sides.attach(id, clientId, cwd, { ...childEnv(), AGENT_OFFICE_WORKER_ID: id }, cols || w.info.cols, rows || w.info.rows);
+  }
+
+  detachSide(id: string, clientId: string) {
+    this.sides.detach(id, clientId);
+  }
+
+  writeSide(id: string, data: string) {
+    this.sides.write(id, data);
+  }
+
+  resizeSide(id: string, cols: number, rows: number) {
+    this.sides.resize(id, cols, rows);
+  }
+
   /** Lines of every worker's terminal holding `needle` (a searchKey), newest first, at most `perWorker` each. */
   search(needle: string, perWorker: number): { hits: TerminalHit[]; more: boolean } {
     const hits: TerminalHit[] = [];
@@ -498,6 +546,7 @@ export class WorkerManager {
   }
 
   detachAll(clientId: string) {
+    this.sides.detachAll(clientId);
     for (const w of this.workers.values()) {
       if (w.viewers.delete(clientId) && this.syncViewers(w)) this.emitUpdate(w);
     }
@@ -529,7 +578,7 @@ export class WorkerManager {
   }
 
   /** Types a prompt into the agent's input box and submits it; `by` is the person who sent it, if any. */
-  prompt(id: string, text: string, by?: string): string | undefined {
+  prompt(id: string, text: string, by?: string, pullWork?: unknown): string | undefined {
     const w = this.workers.get(id);
     if (!w) return 'No such worker';
     if (!w.pty) return 'Worker is not running';
@@ -541,6 +590,11 @@ export class WorkerManager {
     setTimeout(() => w.pty?.write('\r'), 120);
     w.info.activity = truncate(clean, 80);
     this.notePrompt(w, clean);
+    if (w.info.kind === 'agent' && pullWork !== undefined) {
+      const link = readPullWork(pullWork);
+      w.info.pullWork = link ? { ...link, assignedAt: Date.now() } : undefined;
+      this.persist();
+    }
     if (by) w.info.lastInput = { by, at: Date.now() };
     this.emitUpdate(w);
     return undefined;
@@ -676,6 +730,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         w.bootBlocked = false;
         w.info.action = undefined;
+        beginTurn(w, hookTurnId(payload?.turn_id));
         if (typeof payload?.prompt === 'string') {
           w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
           this.notePrompt(w, payload.prompt);
@@ -695,6 +750,11 @@ export class WorkerManager {
         break;
       case 'PostToolUse':
       case 'PostToolUseFailure':
+        if (payload?.is_interrupt && !payload?.agent_id && !payload?.agent_type) {
+          cancelTurn(w, hookTurnId(payload?.turn_id));
+          this.setStatus(w, 'interrupted');
+          break;
+        }
         this.noteOutcome(w, payload, event === 'PostToolUseFailure');
         if (w.info.status === 'needs_input') {
           w.leftNeedsInputAt = now;
@@ -709,11 +769,11 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          if (w.info.status === 'working') this.setStatus(w, 'done');
+          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         }
         break;
       case 'Stop':
-        this.setStatus(w, 'done');
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         break;
     }
     return true;
@@ -754,6 +814,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         clearInput();
         w.info.action = undefined;
+        beginTurn(w, report.turnId);
         if (report.prompt) {
           w.info.activity = truncate(withoutWorkerHandoff(report.prompt), 80) || undefined;
           this.notePrompt(w, report.prompt);
@@ -761,6 +822,7 @@ export class WorkerManager {
         this.setStatus(w, 'working');
         break;
       case 'PreToolUse':
+        if (isCancelledTurn(w, report.turnId)) break;
         if (!w.codexInput) {
           w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
           w.info.action = toolAction(report.tool);
@@ -770,15 +832,21 @@ export class WorkerManager {
       case 'PermissionRequest':
         // A hook can be auto-approved before a human sees anything. The rendered
         // question/approval controls, checked below, are what warrant an alert.
+        if (isCancelledTurn(w, report.turnId)) break;
         busy();
         break;
       case 'PostToolUse':
-        busy();
+        // A cancelled tool can finish reporting after the turn's Interrupt hook.
+        if (!isCancelledTurn(w, report.turnId) && !isStopped(w.info.status) && w.info.status !== 'done') busy();
         break;
       case 'Stop':
+        clearInput();
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, report.turnId)) this.setStatus(w, 'done');
+        break;
       case 'Interrupt':
         clearInput();
-        this.setStatus(w, 'done');
+        cancelTurn(w, report.turnId);
+        this.setStatus(w, 'interrupted');
         break;
     }
     this.emitUpdate(w);
@@ -814,8 +882,9 @@ export class WorkerManager {
       w.openCodeError = false;
       this.persist();
     }
-    if (payload.type === 'error') w.openCodeError = true;
+    if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
+    if (payload.prompt || payload.type === 'prompt') beginTurn(w, payload.turnId);
     if (payload.prompt) {
       w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
       w.info.action = undefined;
@@ -826,9 +895,13 @@ export class WorkerManager {
     } else if (payload.detail) {
       w.info.activity = truncate(payload.detail, 80);
     }
-    if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
+    if (payload.status === 'interrupted') {
+      cancelTurn(w, payload.turnId);
+      this.setStatus(w, 'interrupted');
+    }
+    else if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
     else if (payload.status === 'working') this.setStatus(w, 'working');
-    else if (payload.status === 'done' && w.pty) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
+    else if (payload.status === 'done' && w.pty && !isStopped(w.info.status) && !isCancelledTurn(w, payload.turnId)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
     return true;
@@ -884,6 +957,8 @@ export class WorkerManager {
 
   private clearTask(w: Worker) {
     w.taskEpoch++;
+    w.turnId = undefined;
+    w.cancelledTurns.clear();
     w.prompts = [];
     w.tools = [];
     w.toolsSinceNamed = 0;
@@ -904,6 +979,7 @@ export class WorkerManager {
     clearInterval(this.usageTimer);
     clearInterval(this.branchTimer);
     clearInterval(this.saveTimer);
+    this.sides.killAll();
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
       this.scanUsage(w);
@@ -959,8 +1035,9 @@ export class WorkerManager {
       // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
       if (info.model) args.push('--model', info.model);
       if (info.effort) args.push('--effort', info.effort);
-      // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
-      if (station === 'queue') args.push('--disallowedTools', ...QUEUE_AGENT_DISALLOWED_TOOLS);
+      // The queue agent and the receptionist only ever file and queue work: without these they can't touch the checkout's files.
+      const denied = station ? stationDisallowedTools(station) : [];
+      if (denied.length) args.push('--disallowedTools', ...denied);
       if (resumeSessionId) args.push('--resume', resumeSessionId);
       // `--` so a prompt like "- fix login" is never parsed as a CLI option.
       if (prompt) args.push('--', prompt);
@@ -990,7 +1067,7 @@ export class WorkerManager {
       AGENT_OFFICE_HOOK_URL: this.hook.url,
       AGENT_OFFICE_HOOK_TOKEN: w.hookToken,
     });
-    // A board agent reaches the queue with the office-queue command, whichever agent it runs.
+    // A board agent reaches the queue, the To Do Next board and the in-tray with the office-* commands, whichever agent it runs.
     if (station && this.queueBin) {
       // Windows spells it Path.
       const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
@@ -1236,10 +1313,10 @@ export class WorkerManager {
 
   private onProgress(w: Worker, busy: boolean) {
     const s = w.info.status;
-    if (busy && (s === 'idle' || s === 'done' || s === 'starting')) this.setStatus(w, 'working');
+    if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn ended without a Stop hook (the prompt was rejected or Esc'd).
-    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'done');
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
+    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'paused');
   }
 
   private setStatus(w: Worker, status: WorkerStatus) {
@@ -1308,6 +1385,8 @@ export class WorkerManager {
    */
   private checkBlocked(w: Worker) {
     if (w.info.kind === 'agent' && w.info.provider === 'codex' && w.term && w.pty) {
+      // The TUI can still show its old approval controls while cancellation redraws.
+      if (isStopped(w.info.status)) return;
       const prompt = codexInputPrompt(screenText(w.term));
       if (prompt) {
         w.codexInput ??= {
@@ -1398,21 +1477,25 @@ process.stdin.on('end', () => {
   }
 
   /**
-   * Writes the office-queue command into the data dir's bin/, running bin/office-queue.js with the
-   * office's own node, and returns that directory. Rewritten on every start, so after an upgrade it
-   * runs the new install's script.
+   * Writes the board agents' commands (office-queue, office-plans and office-inbox) into the data
+   * dir's bin/, each running its bin/*.js with the office's own node, and returns that directory.
+   * Rewritten on every start, so after an upgrade they run the new install's scripts.
    */
   private writeQueueCommand(): string | undefined {
-    const script = queueScript();
-    if (!script) return undefined;
     const dir = path.join(this.dataDir, 'bin');
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, 'office-queue');
-    writeFileSync(file, `#!/bin/sh\n# Agent Office's task queue, for the board agents (see bin/office-queue.js).\nexec ${shq(process.execPath)} ${shq(script)} "$@"\n`, { mode: 0o700 });
-    chmodSync(file, 0o700);
-    // cmd.exe and PowerShell find it by PATHEXT; Git Bash (Claude Code's shell there) runs the sh one.
-    if (WIN) writeFileSync(`${file}.cmd`, `@"${process.execPath}" "${script}" %*\r\n`);
-    return dir;
+    let any = false;
+    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray']] as const) {
+      const script = binScript(`${name}.js`);
+      if (!script) continue;
+      if (!any) mkdirSync(dir, { recursive: true, mode: 0o700 });
+      any = true;
+      const file = path.join(dir, name);
+      writeFileSync(file, `#!/bin/sh\n# Agent Office's ${what}, for the board agents (see bin/${name}.js).\nexec ${shq(process.execPath)} ${shq(script)} "$@"\n`, { mode: 0o700 });
+      chmodSync(file, 0o700);
+      // cmd.exe and PowerShell find it by PATHEXT; Git Bash (Claude Code's shell there) runs the sh one.
+      if (WIN) writeFileSync(`${file}.cmd`, `@"${process.execPath}" "${script}" %*\r\n`);
+    }
+    return any ? dir : undefined;
   }
 
   private saveScrollback(w: Worker) {
@@ -1443,6 +1526,7 @@ process.stdin.on('end', () => {
       activity: info.activity,
       task: info.task,
       pr: info.pr,
+      pullWork: info.pullWork,
       meeting: info.meeting,
       tracker: info.kind === 'agent' ? tracker : undefined,
       usage: info.provider === 'opencode' || info.provider === 'codex' ? info.usage : undefined,
@@ -1494,6 +1578,8 @@ process.stdin.on('end', () => {
           sessionId: s.sessionId,
           activity: s.activity,
           task: validTask(s.task),
+          pullWork: s.kind !== 'shell' && readPullWork(s.pullWork) && Number.isFinite(s.pullWork?.assignedAt)
+            ? { ...readPullWork(s.pullWork)!, assignedAt: s.pullWork!.assignedAt } : undefined,
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url, state: typeof s.pr.state === 'string' ? s.pr.state : undefined } : undefined,
           usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (provider === 'claude' || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
           cols: 100,
@@ -1536,6 +1622,8 @@ function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBy
     toolsSinceNamed: 0,
     namedAt: 0,
     taskEpoch: 0,
+    turnSeq: 0,
+    cancelledTurns: new Set(),
     tracker,
   };
 }
@@ -1571,15 +1659,47 @@ function validTask(t: unknown): WorkerTask | undefined {
   return typeof v?.name === 'string' && typeof v.summary === 'string' ? { name: v.name, summary: v.summary } : undefined;
 }
 
+const MAX_CANCELLED_TURNS = 16;
+
+function hookTurnId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text && text.length <= 160 ? text : undefined;
+}
+
+function beginTurn(w: Worker, turnId?: string) {
+  w.turnSeq = (w.turnSeq || 0) + 1;
+  w.cancelledTurns ??= new Set();
+  w.turnId = turnId || `t${w.turnSeq}`;
+}
+
+function cancelTurn(w: Worker, turnId?: string) {
+  w.cancelledTurns ??= new Set();
+  const id = turnId || w.turnId;
+  if (!id) return;
+  w.cancelledTurns.add(id);
+  while (w.cancelledTurns.size > MAX_CANCELLED_TURNS) {
+    const oldest = w.cancelledTurns.values().next().value;
+    if (oldest === undefined) break;
+    w.cancelledTurns.delete(oldest);
+  }
+}
+
+function isCancelledTurn(w: Worker, turnId?: string): boolean {
+  const id = turnId || w.turnId;
+  return !!id && !!w.cancelledTurns?.has(id);
+}
+
 function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
   return typeof v.type === 'string' && ['session', 'prompt', 'tool', 'permission', 'question', 'error'].includes(v.type)
     && typeof v.sessionId === 'string' && v.sessionId.length > 0
-    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done'].includes(v.status)
+    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done', 'interrupted'].includes(v.status)
     && (v.prompt === undefined || typeof v.prompt === 'string')
     && (v.tool === undefined || typeof v.tool === 'string')
-    && (v.detail === undefined || typeof v.detail === 'string');
+    && (v.detail === undefined || typeof v.detail === 'string')
+    && (v.turnId === undefined || (typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 160));
 }
 
 function snapshotScreen(term: HeadlessTerminal, last: string[]) {
@@ -1645,11 +1765,11 @@ function screenText(term: HeadlessTerminal, from = 0): string {
   return out.join('\n');
 }
 
-/** bin/office-queue.js in the install this office runs from (src/server under tsx, dist/server/server built). */
-function queueScript(): string | undefined {
+/** A bin/*.js script in the install this office runs from (src/server under tsx, dist/server/server built). */
+function binScript(name: string): string | undefined {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 4; i++, dir = path.dirname(dir)) {
-    const file = path.join(dir, 'bin', 'office-queue.js');
+    const file = path.join(dir, 'bin', name);
     if (existsSync(file)) return file;
   }
   return undefined;
@@ -1740,7 +1860,7 @@ async function findOpenPr(branch: string, cwd: string, repository?: string): Pro
  * task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
  */
 function draftPr(info: WorkerInfo, commits: string[], by: string): { title: string; body: string } {
-  const task = (info.prompt ?? '').replace(/\r\n?/g, '\n').trim();
+  const task = withoutCheckpoint((info.prompt ?? '').replace(/\r\n?/g, '\n').trim());
   const firstLine = task.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   // The issues board hands work over as: Work on GitHub issue #12: "Title".
   const issue = /\bissue #(\d+):\s*["“](.+?)["”]\.?\s*$/i.exec(firstLine);

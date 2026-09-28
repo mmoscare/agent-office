@@ -4,6 +4,7 @@ import path from 'node:path';
 import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
+import { floorRoster } from '../shared/roster.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
@@ -17,6 +18,8 @@ import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { Plans } from './plans.js';
+import { Inbox } from './inbox.js';
 import { MeetingRoom } from './meetings.js';
 import { Worktrees } from './worktrees.js';
 import { UnshippedWatch } from './unshipped.js';
@@ -38,8 +41,8 @@ export interface FloorContext {
   /** To everyone on this floor. */
   emit(floor: Floor, msg: ServerMsg, droppable?: boolean): void;
   toast(floor: Floor, text: string, level?: ToastLevel): void;
-  /** A worker's terminal output, for whoever has that terminal open. */
-  termData(workerId: string, data: string, viewers: string[]): void;
+  /** A worker's terminal output (or its side shell's), for whoever has that terminal open. */
+  termData(workerId: string, data: string, viewers: string[], side?: boolean): void;
   /** What a worker changed, for whoever has its Changes window open. */
   changes(state: ChangesState, clients: string[]): void;
   /** A worker on this floor changed, or left (then just its id). */
@@ -48,6 +51,8 @@ export interface FloorContext {
   people(floor: Floor): number;
   /** Who's on this floor, and where they stand. */
   peers(floor: Floor): PeerInfo[];
+  /** Whether the office's in-tray door is open (see inbox.ts): one door for every floor. */
+  inboxDoor(): boolean;
 }
 
 /** Boards on a floor nobody is on, with nothing running, are asked GitHub about this seldom. */
@@ -92,6 +97,9 @@ export class Floor {
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
   readonly whiteboard: Whiteboard;
+  readonly plans: Plans;
+  /** The 📥 in-tray: what came into the office from outside (see inbox.ts). */
+  readonly inbox: Inbox;
   /** The meeting room, where workers work through a question together (see meetings.ts). */
   readonly meetings: MeetingRoom;
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
@@ -134,6 +142,7 @@ export class Floor {
           ctx.emit(this, { t: 'worker.update', worker });
           // Still being built: the first updates come from waking the workers already at their desks.
           this.queue?.onWorker(worker);
+          this.plans?.onWorker(worker);
           this.meetings?.onWorker(worker);
           this.dog.onWorker(worker);
           ctx.workerChanged(this, worker);
@@ -143,11 +152,13 @@ export class Floor {
           this.workspaceChanges?.forget(workerId);
           ctx.emit(this, { t: 'worker.remove', workerId });
           this.queue?.onWorkerGone(workerId);
+          this.plans?.onWorkerGone(workerId);
           this.meetings?.onWorkerGone(workerId);
           this.dog.onWorkerGone(workerId);
           ctx.workerChanged(this, workerId);
         },
         data: (workerId, data, viewers) => ctx.termData(workerId, data, viewers),
+        sideData: (workerId, data, viewers) => ctx.termData(workerId, data, viewers, true),
         screen: (workerId, frame) => ctx.emit(this, { t: 'screen', workerId, ...frame }, true),
         toast: (text, level) => ctx.toast(this, text, level),
       },
@@ -170,6 +181,8 @@ export class Floor {
         }
       },
     );
+    // The 📒 To Do Next board: before the queue, which moves its items along as their tasks run.
+    this.plans = new Plans(dataDir, (state) => ctx.emit(this, { t: 'plans', state }));
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
       update: (state) => ctx.emit(this, { t: 'queue', state }),
@@ -182,6 +195,8 @@ export class Floor {
         ctx.toast(this, '📋 The queue is empty: every task is done 🎉');
         ctx.emit(this, { t: 'gong', why: 'queue' });
       },
+      startPlan: (plan, worker, task) => void this.plans.start(plan, worker, task),
+      endPlan: (plan, outcome) => this.plans.end(plan, outcome),
       finished: () => this.unshipped?.soon(),
     });
     this.unshipped = new UnshippedWatch(def.dir, {
@@ -244,6 +259,11 @@ export class Floor {
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
+    // The 📥 in-tray watches its folder for what comes in from outside.
+    this.inbox = new Inbox(dataDir, {
+      update: (state) => ctx.emit(this, { t: 'inbox', state }),
+      door: () => ctx.inboxDoor(),
+    });
     this.ready = this.workers.start();
     // Once the workers are back: tasks the last office left running show whether their work was left behind.
     void this.ready.then(() => this.unshipped.scan(true));
@@ -279,7 +299,9 @@ export class Floor {
       palette: this.def.palette,
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
+      ...(this.def.backOffice ? { backOffice: true } : {}),
       ...summarizeWorkers(ws),
+      roster: floorRoster(ws, this.def.repo || this.def.name),
       people: this.ctx.people(this),
     };
   }
@@ -295,6 +317,7 @@ export class Floor {
     this.changes.stop();
     this.workspaceChanges.stop();
     this.whiteboard.flush();
+    this.inbox.shutdown();
     this.workers.shutdown(keep);
   }
 

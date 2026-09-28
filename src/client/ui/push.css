@@ -1,0 +1,12 @@
+.modal.push-modal { width: min(720px, 96vw); }
+.push-modal select { display: block; width: 100%; min-width: 0; margin-top: 8px; padding: 10px; font: inherit; border: 2px solid var(--ink); border-radius: 10px; background: white; }
+.push-advice { padding: 14px; border-radius: 12px; background: #fff0ca; margin: 12px 0; }
+.push-advice.ready { background: #e0f2e6; }
+.push-advice h3, .push-advice p { margin: 0 0 6px; }
+.push-details { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 8px; font-size: 13px; }
+.push-details dt { font-weight: 800; }
+.push-details dd { margin: 0; overflow-wrap: anywhere; }
+.push-note { color: var(--muted); font-size: 13px; }
+.push-commits { padding-left: 20px; }
+.push-commits li { margin: 7px 0; overflow-wrap: anywhere; }
+.push-commits code { font-size: 12px; }

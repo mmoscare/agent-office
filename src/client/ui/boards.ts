@@ -1,11 +1,13 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo } from '../../shared/protocol';
+import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
+import { pullWorkers } from '../../shared/pull-work';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
 import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
+import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
 import { ghTrouble, groupByRepo, manyRepos, pullSections, pullStatus } from './pr-board-model';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
@@ -13,9 +15,9 @@ import { unshippedSection } from './unshipped-list';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
-  assign(prompt: string, title: string): void;
+  assign(prompt: string, title: string, pullWork?: PullWork): void;
   /** Your own prompt about an issue or PR; `context` goes first so the worker knows which. */
-  ask(context: string, title: string): void;
+  ask(context: string, title: string, pullWork?: PullWork): void;
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
   /** Put an issue (of `repo`, on a floor of several) on the 📋 task queue; a worker is seated for it when there's room. */
@@ -150,7 +152,8 @@ function pullRow(p: GhPull, showRepo: boolean, net: Net, actions: BoardActions):
     compact: st.tier === 'done',
     meta: [
       h('span.prb-branch', { title: `${p.headRefName} into ${p.baseRefName}` }, `🌿 ${p.headRefName}`, h('span.prb-base', {}, ` → ${p.baseRefName}`)),
-      w ? deskChip(w) : '',
+      ...pullWorkIndicators(p, actions.goToDesk),
+      w && !pullWorkers([w], p).length ? deskChip(w) : '',
       ...labelChips(p.labels),
       `by ${p.author}`,
       checks,

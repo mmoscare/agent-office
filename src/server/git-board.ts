@@ -426,6 +426,9 @@ async function act<T>(floorDir: string, rel: string, label: string, fn: (dir: st
   }
 }
 
+/** Share the Git board’s per-checkout action lock with the reviewed Push flow. */
+export { act as withGitRepository };
+
 async function currentBranch(dir: string): Promise<string> {
   const b = await gitMaybe(['symbolic-ref', '--short', '-q', 'HEAD'], dir);
   if (!b) throw new GitError('HEAD is detached: check out a branch first');
@@ -540,10 +543,9 @@ export function gitOpenPr(floorDir: string, rel: string, title: string, body: st
 
 const startedAt = Date.now() - process.uptime() * 1000;
 const OFFICE_FETCH_MS = 2 * 60_000;
-let officeFetched = 0;
 
 /** The package the office runs from: up from this file to the agent-office package.json. */
-function officeRoot(): string | undefined {
+export function officeRoot(): string | undefined {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 6; i++) {
     try {
@@ -567,7 +569,27 @@ async function mtime(file: string): Promise<number | undefined> {
   }
 }
 
-export async function officeStatus(): Promise<OfficeStatus | undefined> {
+/** Fetches a checkout from origin at most every OFFICE_FETCH_MS (or FRESH_FETCH_MS when asked to be fresh). */
+const fetchedHere = new Map<string, number>();
+const FRESH_FETCH_MS = 15_000;
+async function fetchNowAndThen(dir: string, fresh: boolean) {
+  const key = dir.toLowerCase();
+  if (Date.now() - (fetchedHere.get(key) ?? 0) < (fresh ? FRESH_FETCH_MS : OFFICE_FETCH_MS)) return;
+  fetchedHere.set(key, Date.now());
+  await run(['fetch', '--quiet', 'origin'], dir, 60_000).catch(() => undefined);
+}
+
+export interface OfficeFloor {
+  name: string;
+  dir: string;
+}
+
+/**
+ * `floors` are the office's floors: those that are checkouts of the office's own repository get
+ * reported too (they need pulling after a merge as well). `fresh`: a PR was just merged, so check
+ * GitHub now rather than in a couple of minutes.
+ */
+export async function officeStatus(floors: OfficeFloor[] = [], fresh = false): Promise<OfficeStatus | undefined> {
   const dir = officeRoot();
   if (!dir) return undefined;
   const top = await gitMaybe(['rev-parse', '--show-toplevel'], dir);
@@ -575,10 +597,7 @@ export async function officeStatus(): Promise<OfficeStatus | undefined> {
   const status: OfficeStatus = { dir, ahead: 0, behind: 0, dirty: 0, startedAt, needs: { pull: false, build: false, restart: false } };
   try {
     // Keep the GitHub side current here too, now and then: this is how "↓ to pull" knows.
-    if (Date.now() - officeFetched > OFFICE_FETCH_MS) {
-      officeFetched = Date.now();
-      await run(['fetch', '--quiet', 'origin'], dir, 60_000).catch(() => undefined);
-    }
+    await fetchNowAndThen(dir, fresh);
     const [branch, remotes, github, fetched, dirty, logPath] = await Promise.all([
       gitMaybe(['symbolic-ref', '--short', '-q', 'HEAD'], dir),
       remoteRefs(dir),
@@ -591,8 +610,10 @@ export async function officeStatus(): Promise<OfficeStatus | undefined> {
     const up = branch ? await upstreamOf(dir, branch, remotes) : undefined;
     if (up && !up.gone) {
       status.upstream = short(up.ref);
+      status.target = (await gitMaybe(['rev-parse', '--verify', '--quiet', up.ref], dir)) || undefined;
       Object.assign(status, await counts(dir, 'HEAD', up.ref));
     }
+    if (github) status.floors = (await pool(floors, 3, (f) => officeFloor(f, github, fresh))).filter((f): f is NonNullable<typeof f> => !!f);
     // HEAD's reflog moves on every pull, merge and commit: the code changed then.
     status.changedAt = logPath ? await mtime(path.resolve(dir, logPath)) : undefined;
     // A build writes both halves; the older one says when it was last complete.
@@ -607,4 +628,33 @@ export async function officeStatus(): Promise<OfficeStatus | undefined> {
     status.error = message(err);
   }
   return status;
+}
+
+/** A floor that is a checkout of the office's own repository (`github`), and how far behind GitHub it is. */
+async function officeFloor(f: OfficeFloor, github: string, fresh: boolean): Promise<{ name: string; dir: string; behind: number; dirty: number } | undefined> {
+  try {
+    const top = await gitMaybe(['rev-parse', '--show-toplevel'], f.dir);
+    if (!top || path.resolve(top).toLowerCase() !== path.resolve(f.dir).toLowerCase()) return undefined;
+    if ((await githubOf(f.dir))?.toLowerCase() !== github.toLowerCase()) return undefined;
+    // The office runs from this very folder: that's the app, not a separate floor copy.
+    const app = officeRoot();
+    if (app && path.resolve(app).toLowerCase() === path.resolve(f.dir).toLowerCase()) return undefined;
+    await fetchNowAndThen(f.dir, fresh);
+    const branch = await gitMaybe(['symbolic-ref', '--short', '-q', 'HEAD'], f.dir);
+    const up = branch ? await upstreamOf(f.dir, branch, await remoteRefs(f.dir)) : undefined;
+    const behind = up && !up.gone ? (await counts(f.dir, 'HEAD', up.ref)).behind : 0;
+    const dirty = ((await gitMaybe(['status', '--porcelain=v1', '-unormal'], f.dir)) ?? '').split('\n').filter(Boolean).length;
+    return { name: f.name, dir: f.dir, behind, dirty };
+  } catch {
+    return undefined;
+  }
+}
+
+/** ⬇️ Pull on a floor that's a checkout of the office's own repository, from the update bar. */
+export async function officeFloorPull(floors: OfficeFloor[], dir: string): Promise<string | undefined> {
+  const f = floors.find((x) => path.resolve(x.dir).toLowerCase() === path.resolve(dir).toLowerCase());
+  if (!f) return 'That is not one of the office’s floors';
+  const status = await officeStatus([f]);
+  if (!status?.floors?.length) return 'That floor is not a copy of the office’s own code';
+  return gitPull(f.dir, '.');
 }
