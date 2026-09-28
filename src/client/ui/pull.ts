@@ -1,4 +1,4 @@
-import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type GhIssue, type GhIssueDetail, type GhMergeMethod, type GhPull, type GhPullDetail, type GhReviewComment, type GhWhere, type ServerMsg } from '../../shared/protocol';
+import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type GhIssue, type GhIssueDetail, type GhMergeMethod, type GhPull, type GhPullDetail, type GhReviewComment, type GhWhere, type PullWork, type ServerMsg } from '../../shared/protocol';
 import type { Net } from '../net';
 import { AVATAR_COLORS, store, workerForPull } from '../state';
 import { checkoutNote, issuePrompt, repoFlag, type BoardActions } from './boards';
@@ -7,6 +7,7 @@ import { h, openModal, timeAgo, type Modal } from './dom';
 import { markdown, repoUrlOf } from './markdown';
 import { buildTree, looksGenerated, parseDiff, renderFileDiff, renderThread, repliesOf, Reviewed, STATUS_WORD, treeOrder, type DiffFile, type TreeDir } from './pulldiff';
 import { providerPicker } from './provider';
+import { pullWorkIndicators } from './pull-work';
 
 // The windows behind the board cards. A PR opens on its conversation (description, comments,
 // reviews, line comments, checks) with a Files tab for the diff, where you tick files off as
@@ -549,11 +550,14 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
   conv.append(h('div.gh-col', {}, thread, comment.el));
   const filesPane = h('div.pd');
   const footBtns = h('span.gh-foot');
+  const work = h('div.pr-work-banner', { 'aria-live': 'polite' });
+  const assignment = (action: PullWork['action']): PullWork => ({ number: it.number, url: it.url, action });
   const el = h(
     'div.modal.gh-window',
     { role: 'dialog', 'aria-label': `Pull request #${it.number}`, tabindex: -1 },
     h('header', {}, pill, title, reload, close),
     meta,
+    work,
     h('nav.gh-tabs', { role: 'tablist' }, tabConv, tabFiles),
     h('div.gh-body', {}, conv, filesPane),
     h('footer', {}, h('a.grow', { href: it.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open on GitHub ↗'), footBtns),
@@ -561,11 +565,13 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
 
   const handToWorker = () => {
     const p = mergePref(detail?.repo.methods ?? ['squash', 'merge', 'rebase']);
-    if (detail && conflicted(detail)) actions.assign(fixConflictsPrompt(it, p.method, p.deleteBranch), `Fix conflicts & merge PR #${it.number}`);
-    else actions.assign(fixAndMergePrompt(it, p.method, p.deleteBranch), `Fix up & merge PR #${it.number}`);
+    if (detail && conflicted(detail)) actions.assign(fixConflictsPrompt(it, p.method, p.deleteBranch), `Fix conflicts & merge PR #${it.number}`, assignment('conflicts'));
+    else actions.assign(fixAndMergePrompt(it, p.method, p.deleteBranch), `Fix up & merge PR #${it.number}`, assignment('comments'));
   };
 
   const renderFrame = () => {
+    work.replaceChildren(...pullWorkIndicators(it, actions.goToDesk));
+    work.classList.toggle('hidden', !work.childElementCount);
     const [word, cls] = stateOf(it);
     pill.className = `pill ${cls}`;
     pill.textContent = word;
@@ -603,8 +609,8 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     footBtns.replaceChildren(
       ...nodes(
       w ? h('button.btn', { type: 'button', onclick: () => actions.goToDesk(w.deskId) }, `🪑 Go to ${w.name}'s desk`) : null,
-      h('button.btn', { type: 'button', title: 'Send a worker your own prompt about this PR', onclick: () => actions.ask(pullContext(it), `Ask about PR #${it.number}`) }, '✍️ Ask a worker…'),
-      isOpen ? h('button.btn', { type: 'button', onclick: () => actions.assign(reviewPrompt(it), `Review PR #${it.number}`) }, '🔍 Review') : null,
+      h('button.btn', { type: 'button', title: 'Send a worker your own prompt about this PR', onclick: () => actions.ask(pullContext(it), `Ask about PR #${it.number}`, assignment('ask')) }, '✍️ Ask a worker…'),
+      isOpen ? h('button.btn', { type: 'button', onclick: () => actions.assign(reviewPrompt(it), `Review PR #${it.number}`, assignment('review')) }, '🔍 Review') : null,
       isOpen
         ? h('button.btn', { type: 'button', title: 'A few workers review it in the meeting room, each through its own lens, and the office posts one combined review', onclick: () => actions.meeting({ pattern: 'review', pr: it.number, title: `Review of PR #${it.number}`, prompt: `Review pull request #${it.number}: “${it.title}”.` }) }, '🤝 Review panel…')
         : null,
@@ -993,6 +999,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     loadAll();
   });
 
+  const unsubWorkers = store.on('workers', renderFrame);
   const unsub = store.on('pulls', () => {
     const fresh = store.pulls.items.find((p) => ghKey(p) === ghKey(it));
     if (!fresh) return;
@@ -1003,6 +1010,7 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
     doing: `🔀 reading PR #${it.number}`,
     onClose: () => {
       unsub();
+      unsubWorkers();
       comment.dispose();
     },
   });

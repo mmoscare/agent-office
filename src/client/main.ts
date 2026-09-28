@@ -4,8 +4,9 @@ import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
-import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
+import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
+import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
@@ -43,6 +44,7 @@ import { DesktopNotifier, askNotifyPermission, notifyPermission, waitingOnSomeon
 import { NextUp, waitingInOrder, waitingLabel } from './nextup';
 import { $, h, clip, closeAllModals, doingNow, modalOpen, onModalChange, openModal, toast, STATUS_LABEL } from './ui/dom';
 import { openTerminal, openTerminalFor, routeTerminalMessage, type TerminalFind } from './ui/terminal';
+import { openConsole, routeConsoleMessage } from './ui/console';
 import { openSearch } from './ui/search';
 import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
@@ -226,10 +228,10 @@ const showPullsWall = () => {
 };
 onPullsWallMode(showPullsWall);
 showPullsWall();
-// PR notes name the desk they came from. Redraw when that changes, not on every worker update.
+// PR notes name the desk they came from, or the agent a PR was handed to and how it's going.
 let deskLinks = '';
 store.on('workers', () => {
-  const k = JSON.stringify([...store.workers.values()].filter((w) => w.worktree).map((w) => [w.worktree!.branch, w.pr?.number, w.name, w.color, w.deskId]));
+  const k = pullBoardKey(store.workers.values());
   if (k === deskLinks) return;
   deskLinks = k;
   renderPullsBoard();
@@ -545,6 +547,7 @@ net.onMessage((msg) => {
   seatedAlready = false;
   sentHome.clear();
   routeTerminalMessage(msg);
+  routeConsoleMessage(msg);
   routeChangesMessage(msg);
   routeTeamMessage(msg);
   routeAccountsMessage(msg);
@@ -1242,8 +1245,8 @@ function officeIsFull(): boolean {
   return true;
 }
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string, pullWork?: PullWork | null) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan, pullWork });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -1530,7 +1533,7 @@ function showJukebox() {
 }
 
 /** A prompt from the boards goes to a new worker at a free desk, or to one already at a desk. */
-function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string) {
+function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string, pullWork?: PullWork) {
   const desk = freeDesk();
   const awake = [...store.workers.values()].filter((w) => w.kind === 'agent' && !isAsleep(w.status));
   if (!desk && !awake.length) {
@@ -1545,8 +1548,8 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     worktreeOption: true,
     providerOption: true,
     onSubmit: (prompt, to, worktree, provider, model, effort, workspace) => {
-      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan });
-      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan);
+      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan, pullWork: pullWork ?? null });
+      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan, pullWork);
     },
   });
 }
@@ -1589,8 +1592,8 @@ function triageInbox() {
 function boardActions() {
   return {
     queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string) => net.send({ t: 'queue.add', prompt, title, issue, repo, provider, model, effort }),
-    assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
-    ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
+    assign: (prompt: string, title: string, pullWork?: PullWork) => sendToWorker(`🤖 ${title}`, { initial: prompt }, undefined, pullWork),
+    ask: (context: string, title: string, pullWork?: PullWork) => sendToWorker(`✍️ ${title}`, { context }, undefined, pullWork),
     meeting: (preset: MeetingPreset) => showMeeting(preset),
     goToDesk,
     pickUp,
@@ -2485,6 +2488,14 @@ store.on('inbox', () => office.setInTray(store.inbox.items.length));
 
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!e.repeat) openConsole(net);
+  }
+}, true);
+
+window.addEventListener('keydown', (e) => {
   if (modalOpen() || isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
   if (relookOnKey && e.key !== 'Escape' && player.canLock) player.lock();
   if (hanger.active && hangingKey(e.code)) {
@@ -2799,6 +2810,7 @@ const waitingNow = () => waitingInOrder(store.workers.values());
 const noMedia = () => (window.isSecureContext ? undefined : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel');
 const hud = mountHud(
   [
+    { id: 'terminal', icon: '>_', label: 'Terminal', section: 'Open', key: 'Ctrl+`', status: () => true, title: () => 'Open a standalone terminal anywhere (Ctrl+`); PowerShell on Windows', run: () => openConsole(net) },
     { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions()) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
     { id: 'manual', icon: '📘', label: 'Manual', section: 'Office', title: () => 'The Office Manual: how work gets to GitHub and back, what to do after a merge, and more', run: () => openManual() },
