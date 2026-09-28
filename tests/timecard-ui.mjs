@@ -56,12 +56,16 @@ try {
   await context.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Time Test', color: '#ff8a5b', look: {} }));
     localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
+    // This browser's clock runs three hours fast: the card goes by the office's clock, which stamped the stints.
+    const browserNow = Date.now;
+    Date.now = () => browserNow.call(Date) + 3 * 3_600_000;
   });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
-  await page.waitForFunction(() => window.__office?.store.floor && window.__office.store.timecard.open);
+  // Once the page has the office's clock from a ping, it keeps time by that.
+  await page.waitForFunction(() => window.__office?.store.floor && window.__office.store.timecard.open && window.__office.store.clock);
 
   // The card lies on the boss's desk, and clicking it (a real raycast) opens it.
   await page.evaluate(() => { window.__office.player.update = () => {}; window.__office.player.updateCamera = () => {}; });
@@ -100,6 +104,20 @@ try {
   assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+
+  // Walking up: at the desk's front right it's the card (not the boss's chair or the manual shelf); at its right end, still the Office Ledger.
+  const hint = page.locator('#hint');
+  const standAt = (kind, dx, dz) => page.evaluate(([kind, dx, dz]) => {
+    const o = window.__office;
+    let thing;
+    o.office.group.traverse(obj => { if (obj.userData.interact?.kind === kind) thing = obj; });
+    const p = thing.getWorldPosition(thing.position.clone());
+    o.player.pos.set(p.x + dx, p.y - 0.83, p.z + dz);
+  }, [kind, dx, dz]);
+  await standAt('timecard', 0.45, 0.65);
+  await hint.getByText('Today 0m in the office', { exact: true }).waitFor();
+  await standAt('ledger', 0.8, 0);
+  await hint.getByText('📒 The Office Ledger', { exact: true }).waitFor();
 
   // A reload is the same stint, not a new one; a second tab doesn't double up.
   const start = await page.evaluate(() => window.__office.store.timecard.stints.at(-1).start);

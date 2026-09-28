@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { TimeCard, timeCardKey } from '../src/server/timecard.js';
 import { dayKey, hoursText, liveStints, startOfWeek, timeBetween, timeDays, TIMECARD_GRACE_MS, TIMECARD_KEEP_MS } from '../src/shared/timecard.js';
+import { store } from '../src/client/state.js';
+import { todayText } from '../src/client/ui/timecard.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -137,4 +139,19 @@ test('an open stint runs to now on the card', () => {
   assert.equal(live[0].end, start - 2 * HOUR);
   assert.equal(live[1].end, start + 2 * HOUR);
   assert.equal(hoursText(12 * MIN), '12m');
+});
+
+test('the card runs an open stint to the office clock, not a browser clock that is off', t => {
+  // The office stamped the stint: in at 11:30, last seen at 11:59, and it's noon there now.
+  const office = new Date(2026, 8, 28, 12, 0).getTime();
+  const was = store.timecard;
+  t.after(() => { store.timecard = was; });
+  store.timecard = { name: 'Michael', stints: [{ start: office - 30 * MIN, end: office - MIN }], open: true };
+  t.mock.method(store, 'officeNow', () => office);
+  for (const skew of [3 * HOUR, -3 * HOUR]) {
+    // This browser's own clock is three hours fast, then three hours slow.
+    const now = t.mock.method(Date, 'now', () => office + skew);
+    assert.equal(todayText(), '30m');
+    now.mock.restore();
+  }
 });

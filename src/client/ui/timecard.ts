@@ -6,8 +6,9 @@ import { h, openModal } from './dom';
 /** How many days the card lists; the CSV has every day the office kept. */
 const DAYS_SHOWN = 14;
 
-/** Your time in the office today, as it stands now. */
-export function todayText(now = Date.now()): string {
+/** Your time in the office today, as it stands now. The stints are stamped by the office's clock, so
+ *  "now" is too (a browser clock that's off would stretch or cut an open stint); days are still local. */
+export function todayText(now = store.officeNow()): string {
   return hoursText(timeBetween(liveStints(store.timecard, now), startOfDay(now), now));
 }
 
@@ -32,9 +33,10 @@ export function openTimeCard(net: Net) {
       error, totals, days));
 
   function render() {
-    const now = Date.now();
+    const now = store.officeNow();
     const card = store.timecard;
     const stints = liveStints(card, now);
+    const liveEnd = card.open ? stints.at(-1)?.end : undefined;
     who.textContent = card.name ? `${card.name}${card.open ? ' · clocked in' : ''}` : '';
     error.textContent = card.saveError ?? '';
     const today = startOfDay(now);
@@ -48,7 +50,7 @@ export function openTimeCard(net: Net) {
       const day = byDay.get(dayKey(at));
       const date = new Date(at).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       // Only a stint that's still going ends right now.
-      const spans = (day?.stints ?? []).map((s) => `${clock(s.start)}–${card.open && s.end === now ? 'now' : clock(s.end)}`);
+      const spans = (day?.stints ?? []).map((s) => `${clock(s.start)}–${s.end === liveEnd ? 'now' : clock(s.end)}`);
       rows.push(h(`li.timecard-day${day ? '' : '.empty'}${at === today ? '.today' : ''}`, {},
         h('span.timecard-date', {}, date),
         h('span.timecard-spans', {}, spans.join(', ') || '—'),
@@ -60,10 +62,11 @@ export function openTimeCard(net: Net) {
     return h('div.timecard-total', { title: title ?? '' }, h('span', {}, label), h('strong', {}, hoursText(ms)), h('small', {}, `${decimalHours(ms)} h`));
   }
   function download() {
+    const now = store.officeNow();
     const lines = ['Date,Clock in,Clock out,Hours'];
-    const all = timeDays(liveStints(store.timecard, Date.now())).reverse();
+    const all = timeDays(liveStints(store.timecard, now)).reverse();
     for (const d of all) for (const s of d.stints) lines.push([d.day, clock24(s.start), s.end === nextDay(s.start) ? '24:00' : clock24(s.end), decimalHours(s.end - s.start)].join(','));
-    const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv' })), download: `indirect-time-${dayKey(Date.now())}.csv` });
+    const a = h('a', { href: URL.createObjectURL(new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv' })), download: `indirect-time-${dayKey(now)}.csv` });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }

@@ -1757,7 +1757,8 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   const card = buildTimeCard();
   card.position.set(0.5, 0.83, 0.3);
   card.rotation.y = 0.1;
-  const timecard: Interactable = { kind: 'timecard', x: deskX + 0.5, y: floorY, z: deskZ + 0.3, radius: 1.8 };
+  // Walked up to at the desk's front edge, between the boss's chair and the manual shelf.
+  const timecard: Interactable = { kind: 'timecard', x: deskX + 0.5, y: floorY, z: deskZ + 0.6, radius: 1.8 };
   card.userData.interact = timecard;
   interactables.push(timecard);
   desk.add(card);
