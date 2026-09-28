@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DESK_BY_ID } from '../../shared/layout';
 import { ghRef, type GhIssue, type GhPull, type GhState, type QueueState, type QueueTask, type ServiceInfo, type WorkerInfo } from '../../shared/protocol';
 import { workerForPull } from '../state';
+import { stoppedByRestart, taskStatus } from '../../shared/task-status';
 
 export const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
 export const PINS = ['#ef476f', '#118ab2', '#06d6a0', '#ffd166'];
@@ -305,10 +306,10 @@ export class QueueBoardTexture {
       }),
       ...queued.map((t, i) => ({ icon: '⏳', text: name(t), side: i === 0 ? 'up next' : `${i + 1}${['th', 'st', 'nd', 'rd'][i + 1 <= 3 ? i + 1 : 0]} in line`, color: '#2b2d42' })),
       ...done.map((t) => ({
-        icon: t.outcome === 'done' ? '✅' : '⚠️',
+        icon: t.outcome === 'done' && !taskStatus(t).warn ? '✅' : '⚠️',
         text: name(t),
-        side: t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
-        color: '#8a8f98',
+        side: taskStatus(t).warn ? (stoppedByRestart(t) ? 'stopped by restart' : 'no PR · unshipped') : t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
+        color: taskStatus(t).warn ? '#c2410c' : '#8a8f98',
       })),
     ];
     const summary = state.maxWorkers === 0 ? 'paused' : `${running.length} working · ${queued.length} waiting · up to ${state.maxWorkers} at once`;

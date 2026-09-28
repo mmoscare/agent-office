@@ -5,6 +5,7 @@ import { normalizeRepo, sameRepo } from '../shared/floors.js';
 import { ghRef, isAgentEffort, isAgentProvider, isClaudeModel, type AgentEffort, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { RESTART_ERROR } from '../shared/task-status.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
 export interface QueueWorkers {
@@ -29,6 +30,8 @@ export interface QueueEvents {
   room?(): number;
   /** The last task on the queue just finished, done: nothing is left queued or running. */
   emptied(): void;
+  /** A task just finished, however it went: time to look at what its branch was left holding. */
+  finished?(): void;
 }
 
 export const DEFAULT_MAX_WORKERS = 3;
@@ -201,6 +204,23 @@ export class TaskQueue {
     if (changed) this.changed();
   }
 
+  /**
+   * The office's branches holding work no PR carries, by branch (see unshipped.ts): each finished
+   * task without a PR is flagged while its branch is in there, and unflagged once it isn't.
+   */
+  onUnshipped(byBranch: Map<string, { dirty: number; commits: number }>) {
+    let changed = false;
+    for (const t of this.tasks) {
+      if (t.status !== 'done' || !t.branch) continue;
+      const u = t.pr ? undefined : byBranch.get(t.branch);
+      const next = u && (u.dirty || u.commits) ? { dirty: u.dirty, commits: u.commits } : undefined;
+      if (next?.dirty === t.unshipped?.dirty && next?.commits === t.unshipped?.commits) continue;
+      t.unshipped = next;
+      changed = true;
+    }
+    if (changed) this.changed();
+  }
+
   /** Finishes tasks whose worker stopped, then seats queued tasks while there's room. */
   pump() {
     if (this.stopped) return;
@@ -256,6 +276,7 @@ export class TaskQueue {
       // The worker most likely just opened the PR; go and link it.
       this.events.refreshGitHub();
     } else if (outcome === 'exited') this.events.toast(`📋 ${who} stopped before finishing ${label(t)} — requeue it from the queue board`, 'warn');
+    this.events.finished?.();
     return outcome === 'done';
   }
 
@@ -375,13 +396,14 @@ export class TaskQueue {
           outcome: s.outcome,
           error: s.error,
           pr: s.pr,
+          unshipped: s.unshipped && Number.isFinite(s.unshipped.dirty) && Number.isFinite(s.unshipped.commits) ? { dirty: s.unshipped.dirty, commits: s.unshipped.commits } : undefined,
         };
         // Whatever was running died with the old office process; its worker comes back asleep at best.
         if (t.status === 'running') {
           t.status = 'done';
           t.outcome = 'exited';
           t.finishedAt = Date.now();
-          t.error = 'The office restarted while it was running';
+          t.error = RESTART_ERROR;
         }
         this.tasks.push(t);
       }
