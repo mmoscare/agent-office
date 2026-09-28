@@ -16,6 +16,7 @@ import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
 import { buildPlansBinder } from './plans-binder';
+import { buildTimeCard } from './time-card';
 
 export interface Collider {
   minX: number;
@@ -29,7 +30,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'authorUpdates' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'authorUpdates' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1753,6 +1754,15 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   binder.userData.interact = plans;
   interactables.push(plans);
   desk.add(binder);
+  // The 🗂️ Indirect Time card, front right: when you had the office open, per day.
+  const card = buildTimeCard();
+  card.position.set(0.5, 0.83, 0.3);
+  card.rotation.y = 0.1;
+  // Walked up to at the desk's front edge, between the boss's chair and the manual shelf.
+  const timecard: Interactable = { kind: 'timecard', x: deskX + 0.5, y: floorY, z: deskZ + 0.6, radius: 1.8 };
+  card.userData.interact = timecard;
+  interactables.push(timecard);
+  desk.add(card);
   const bossChair = chair('#2b2d42');
   bossChair.scale.setScalar(1.2);
   bossChair.position.set(0, 0, 1.0);

@@ -23,6 +23,8 @@ import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
 import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
+import { TimeCard, timeCardKey } from './timecard.js';
+import { TIMECARD_TICK_MS } from '../shared/timecard.js';
 import { ApiBalances } from './api-balances.js';
 import type { BalanceUpdate } from '../shared/api-balances.js';
 import { PlanLimitsReader } from './limits.js';
@@ -109,6 +111,8 @@ interface Client {
   isAlive: boolean;
   /** Since when their tab has been in the background (see 'presence'): long enough, and they're not really here. */
   awaySince?: number;
+  /** Whose 🗂️ time card this window clocks (see TimeCard). */
+  timeKey: string;
 }
 
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
@@ -600,6 +604,9 @@ export async function startServer(cfg: Config) {
     toastAll,
   );
   const modelUsage = new ModelUsageLedger(cfg.dataDir);
+  // Everyone's 🗂️ Indirect Time card: when they had the office open, per day.
+  const timecard = new TimeCard(cfg.dataDir);
+  const timecardTimer = setInterval(() => timecard.tick(), TIMECARD_TICK_MS);
   // Pay-as-you-go balances for the sidebar's API balances panel; keys stay on this side.
   const apiBalances = new ApiBalances(cfg.dataDir);
 
@@ -1354,6 +1361,7 @@ export async function startServer(cfg: Config) {
       lastFrameAt: 0,
       typingAt: new Map(),
       isAlive: true,
+      timeKey: timeCardKey(account?.id, name),
       peer: {
         id,
         name,
@@ -1374,6 +1382,7 @@ export async function startServer(cfg: Config) {
     };
     clients.set(id, client);
     if (account) accounts.seen(account.id);
+    timecard.join(client.timeKey, name);
     ws.on('pong', () => (client.isAlive = true));
 
     sendTo(client, {
@@ -1398,6 +1407,7 @@ export async function startServer(cfg: Config) {
       ...(onRoof ? roofView() : floorView(floor)),
     });
     screensOf(client, floor);
+    sendTo(client, { t: 'timecard', state: timecard.state(client.timeKey) });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -1422,6 +1432,7 @@ export async function startServer(cfg: Config) {
       consoles.close(id);
       consoleStale.delete(id);
       clients.delete(id);
+      timecard.leave(client.timeKey);
       if (client.whiteboard) drawingChanged(floorOf(client));
       stopPlaying(client);
       for (const f of floors.values()) {
@@ -1591,7 +1602,17 @@ export async function startServer(cfg: Config) {
       }
       case 'profile': {
         const name = str(msg.name, 24).trim();
-        if (name && !c.accountId) c.peer.name = name;
+        if (name && !c.accountId) {
+          c.peer.name = name;
+          // On the shared password your name is whose card you clock.
+          const key = timeCardKey(undefined, name);
+          if (key !== c.timeKey) {
+            timecard.leave(c.timeKey);
+            c.timeKey = key;
+            timecard.join(key, name);
+            sendTo(c, { t: 'timecard', state: timecard.state(key) });
+          }
+        }
         if (COLOR_RE.test(msg.color)) c.peer.color = msg.color;
         c.peer.look = sanitizeLook(msg.look, c.peer.look);
         broadcast({ t: 'peer.update', peer: c.peer });
@@ -1674,6 +1695,9 @@ export async function startServer(cfg: Config) {
       }
       case 'dog.pet':
         floorOf(c)?.dog.pet(c.peer);
+        break;
+      case 'timecard':
+        sendTo(c, { t: 'timecard', state: timecard.state(c.timeKey) });
         break;
       case 'dog.name': {
         const floor = here();
@@ -2424,6 +2448,7 @@ export async function startServer(cfg: Config) {
     consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
+    clearInterval(timecardTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();
@@ -2436,6 +2461,7 @@ export async function startServer(cfg: Config) {
     for (const f of floors.values()) f.shutdown(keep);
     ledger.flush();
     modelUsage.flush();
+    timecard.flush();
     limits.close();
     for (const c of clients.values()) c.ws.close();
     server.close();
