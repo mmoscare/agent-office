@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as pty from '@lydell/node-pty';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { IPty } from '@lydell/node-pty';
 import { spawnLocal } from '../src/server/conpty.js';
 
@@ -34,7 +38,7 @@ test('a terminal whose ConPTY never got its program going starts once more; its 
     const f = fakePty(100 + made.length);
     made.push(f);
     return f as unknown as IPty;
-  }, 1, 10);
+  }, 'fake', 1, 10);
   const seen: string[] = [];
   const exits: number[] = [];
   t.onData((d) => seen.push(d));
@@ -64,7 +68,7 @@ test('real exits, exits after output, a second failure and a kill are passed on 
       const f = fakePty(made.length);
       made.push(f);
       return f as unknown as IPty;
-    }, 1, 10);
+    }, 'fake', 1, 10);
     const exits: number[] = [];
     t.onExit((e) => exits.push(e.exitCode));
     await script(made, t);
@@ -77,15 +81,31 @@ test('real exits, exits after output, a second failure and a kill are passed on 
   assert.deepEqual(await run((f, t) => { t.kill(); f[0].end(-1); }), { exits: [-1], starts: 1 });
 });
 
-test('Windows: a ConPTY spawn survives the office being busy for longer than node-pty waits', { skip: process.platform !== 'win32' }, async () => {
-  const start = () => pty.spawn(process.execPath, ['-e', "process.stdout.write('child ran'); setTimeout(() => {}, 300)"], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(), env: process.env as Record<string, string> });
-  const t = spawnLocal(start);
-  let out = '';
-  t.onData((d) => (out += d));
-  const exited = new Promise<number>((resolve) => t.onExit((e) => resolve(e.exitCode)));
-  // Two synchronous `git worktree add`s and a bit: past node-pty's 5 second ConPTY timeout.
-  const end = Date.now() + 6000;
-  while (Date.now() < end) { /* busy */ }
-  assert.equal(await exited, 0);
-  assert.match(out, /child ran/);
+test('Windows: a ConPTY spawn survives the office being busy for longer than node-pty waits', { skip: process.platform !== 'win32' }, () => {
+  // In a process of its own, so the event loop is really held up before node-pty's timer runs
+  // (inside the test runner, the loop can pick the ConPTY up first).
+  const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-conpty-'));
+  const url = (file: string) => pathToFileURL(file).href;
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const script = path.join(dir, 'busy.ts');
+  writeFileSync(script, `import * as pty from ${JSON.stringify(url(path.join(root, 'node_modules/@lydell/node-pty/index.js')))};
+import { spawnLocal } from ${JSON.stringify(url(path.join(root, 'src/server/conpty.ts')))};
+let starts = 0;
+let out = '';
+const t = spawnLocal(() => {
+  starts++;
+  return pty.spawn(process.execPath, ['-e', "process.stdout.write('child ran'); setTimeout(() => {}, 300)"], { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(), env: process.env as Record<string, string> });
+}, 'node');
+t.onData((d) => (out += d));
+t.onExit((e) => { process.stdout.write(JSON.stringify({ exitCode: e.exitCode, starts, ran: out.includes('child ran') })); process.exit(0); });
+// A few synchronous \`git worktree add\`s in a row: past node-pty's 5 second ConPTY timeout.
+const end = Date.now() + 7000;
+while (Date.now() < end) { /* busy */ }
+`);
+  try {
+    const result = JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', script], { cwd: root, encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'ignore'] }));
+    assert.deepEqual(result, { exitCode: 0, starts: 2, ran: true }, 'the first ConPTY timed out, and the terminal started again and ran');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

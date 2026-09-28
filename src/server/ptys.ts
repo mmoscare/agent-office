@@ -217,7 +217,7 @@ export class PtyHost {
     if (!this.sock) {
       const start = (cols = opts.cols, rows = opts.rows) => pty.spawn(opts.file, opts.args, { name: 'xterm-256color', cols, rows, cwd: opts.cwd, env: opts.env });
       // Windows has no host: a ConPTY that a busy office let time out gets another go (see conpty.ts).
-      return process.platform === 'win32' ? spawnLocal(start) : start();
+      return process.platform === 'win32' ? spawnLocal(start, path.basename(opts.file)) : start();
     }
     const id = randomBytes(8).toString('hex');
     const p = new RemotePty(id, (m) => this.send(m));
