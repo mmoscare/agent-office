@@ -161,6 +161,7 @@ export function openHelp() {
     ['Tab', 'The ☰ menu, top right: every window, and what shows on screen. Pin what you use most to the top bar'],
     ['Esc', 'Close any window and get back to looking around'],
     ['Ctrl + [', 'Send Esc to a terminal (e.g. to interrupt Claude)'],
+    ['Ctrl + C / V', 'In a terminal: copy the selected text / paste (Ctrl+C with nothing selected still interrupts). If dragging won’t select, hold Shift while you drag'],
     ['⚙️', 'Settings (in the ☰ menu): switch between first and third person'],
   ];
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');

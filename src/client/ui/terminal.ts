@@ -9,6 +9,8 @@ import { usageLabel, usageTitle } from './usage';
 import { openModelUsage } from './model-usage';
 import { testChangesButton } from './test-changes';
 import { terminalBranches } from './terminal-branches';
+import { clipboardAction, isMac } from './terminal-clipboard';
+import { copyText } from './copy-code';
 import type { ServerMsg, WorkerInfo } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
 import { findLine } from '../../shared/search';
@@ -38,6 +40,9 @@ function initials(name: string): string {
   const first = (w: string | undefined) => (w ? Array.from(w)[0].toUpperCase() : '');
   return first(words[0]) + (words.length > 1 ? first(words[words.length - 1]) : '') || '?';
 }
+
+/** On a Mac ⌘C/⌘V are the clipboard and Ctrl+C/V belong to the program. */
+const mac = isMac();
 
 let current: { workerId: string; modal: Modal; find(f: TerminalFind): void } | null = null;
 const listeners = new Set<(msg: ServerMsg) => void>();
@@ -273,7 +278,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       const made = newTerm();
       side = { ...made, ready: false };
       made.term.open(sideHost);
-      made.term.attachCustomKeyEventHandler(keys);
+      made.term.attachCustomKeyEventHandler(keysFor(made.term));
       made.term.onData((data) => {
         // It couldn't start (the checkout was missing, the shell wouldn't run): a key tries again.
         if (side?.failed) return attachSide();
@@ -297,10 +302,21 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   agentTab.addEventListener('click', () => showTab(false));
   shellTab.addEventListener('click', () => showTab(true));
   /**
-   * Ctrl+Shift+` flips between the agent and the shell. Every other key (Esc and Ctrl+] included)
-   * goes to the terminal; the window is left through its ✕.
+   * Ctrl+Shift+` flips between the agent and the shell. Ctrl+C copies what's selected and Ctrl+V
+   * pastes (see terminal-clipboard.ts). Every other key (Esc and Ctrl+] included) goes to the
+   * terminal; the window is left through its ✕.
    */
-  const keys = (e: KeyboardEvent) => {
+  const keysFor = (t: Terminal) => (e: KeyboardEvent) => {
+    const clip = clipboardAction(e, t.hasSelection(), mac);
+    if (clip === 'copy') {
+      e.preventDefault();
+      const text = t.getSelection();
+      t.clearSelection();
+      if (text) void copyText(text).then((ok) => ok || toast("Couldn't copy here: right-click the selection and choose Copy", 'warn'));
+      return false;
+    }
+    // Leave it to the browser, whose paste lands in xterm's own paste handling (bracketed, as typed).
+    if (clip === 'paste') return false;
     if (e.type !== 'keydown' || !e.ctrlKey) return true;
     if (tabs && e.shiftKey && (e.key === '~' || e.key === '`' || e.code === 'Backquote')) {
       showTab(!onSide);
@@ -391,7 +407,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   });
 
   term.open(host);
-  term.attachCustomKeyEventHandler(keys);
+  term.attachCustomKeyEventHandler(keysFor(term));
   term.onData((data) => {
     sendSize(true);
     net.send({ t: 'term.input', workerId, data });
@@ -426,6 +442,9 @@ function newTerm(): { term: Terminal; fit: FitAddon } {
     scrollback: 5000,
     allowProposedApi: true,
     macOptionIsMeta: true,
+    // A program that takes the mouse (OpenCode, vim) would get every drag: Shift-drag (⌥-drag on a
+    // Mac) selects text anyway, to copy.
+    macOptionClickForcesSelection: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
