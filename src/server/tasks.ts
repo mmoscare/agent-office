@@ -126,6 +126,17 @@ export function fallbackTask(prompt: string, branch?: string): WorkerTask {
   return { name: cap(clip(name, NAME_MAX)), summary: cap(clip(one, SUMMARY_MAX)), ...(kind && { kind }) };
 }
 
+/**
+ * A card saved before work kinds existed, with a kind guessed from the worker's first prompt, the
+ * card itself (newer, so it weighs more) and its branch. Codex and OpenCode workers are never
+ * renamed, so without this they'd stay uncoloured for the rest of their session.
+ */
+export function withGuessedKind(task: WorkerTask, prompt?: string, branch?: string): WorkerTask {
+  if (task.kind) return task;
+  const kind = guessWorkKind([prompt ?? '', `${task.name}. ${task.summary}`], branch);
+  return kind ? { ...task, kind } : task;
+}
+
 function describe(ctx: TaskContext): string {
   const parts: string[] = [];
   if (ctx.previous) parts.push(`Current label:\nName: ${ctx.previous.name}\nSummary: ${ctx.previous.summary}`);

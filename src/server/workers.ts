@@ -21,7 +21,7 @@ import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
-import { TaskNamer, fallbackTask } from './tasks.js';
+import { TaskNamer, fallbackTask, withGuessedKind } from './tasks.js';
 import { addUsage, newTracker, restoreTracker, scanTracker, trackerUsage, zeroUsage, type Ledger, type UsageTracker } from './usage.js';
 import { PtyHost, SCROLLBACK, type Adopted, type Pty } from './ptys.js';
 import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
@@ -1578,7 +1578,7 @@ process.stdin.on('end', () => {
           title: s.title,
           sessionId: s.sessionId,
           activity: s.activity,
-          task: validTask(s.task),
+          task: validTask(s.task, s.prompt, s.worktree?.branch),
           pullWork: s.kind !== 'shell' && readPullWork(s.pullWork) && Number.isFinite(s.pullWork?.assignedAt)
             ? { ...readPullWork(s.pullWork)!, assignedAt: s.pullWork!.assignedAt } : undefined,
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url, state: typeof s.pr.state === 'string' ? s.pr.state : undefined } : undefined,
@@ -1655,10 +1655,10 @@ export function childEnv(): Record<string, string> {
   return env;
 }
 
-function validTask(t: unknown): WorkerTask | undefined {
+function validTask(t: unknown, prompt?: string, branch?: string): WorkerTask | undefined {
   const v = t as Partial<WorkerTask> | undefined;
   if (typeof v?.name !== 'string' || typeof v.summary !== 'string') return undefined;
-  return isWorkKind(v.kind) ? { name: v.name, summary: v.summary, kind: v.kind } : { name: v.name, summary: v.summary };
+  return isWorkKind(v.kind) ? { name: v.name, summary: v.summary, kind: v.kind } : withGuessedKind({ name: v.name, summary: v.summary }, prompt, branch);
 }
 
 const MAX_CANCELLED_TURNS = 16;
