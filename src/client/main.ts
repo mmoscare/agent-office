@@ -51,6 +51,7 @@ import { issuePrompt, openBoard } from './ui/boards';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { openManual } from './ui/manual';
+import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -67,6 +68,9 @@ import { openModelUsage } from './ui/model-usage';
 import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elevator';
 import { toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from './ui/provider';
+import { openPlans } from './ui/plans';
+import { openInbox } from './ui/inbox';
+import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
 import { mountBalances } from './ui/balances';
@@ -84,6 +88,9 @@ import { whereabouts } from './ui/whereabouts';
 import { wayTo } from './walkto';
 import { MeetingBoardTexture, MeetingSignTexture, meetingStage } from './world/meeting';
 import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
+import { ClipboardSheet, clipboardProp } from './world/clipboard';
+import { currentRoster, openClipboard } from './ui/clipboard';
+import { rosterByRepo } from '../shared/roster';
 
 // ---- Renderer & scene ---------------------------------------------------------------------------
 const canvas = $('scene') as HTMLCanvasElement;
@@ -142,7 +149,10 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   issues: { icon: '📌', offer: 'Ask me about issues', does: 'I file, find, triage, label and close them', example: 'File an issue: the dog walks straight through the jukebox' },
   pulls: { icon: '🔀', offer: 'Ask me about PRs', does: 'I sum up, review, comment on and merge them', example: 'Review the newest PR and tell me if it’s ready to merge' },
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
+  inbox: { icon: '📥', offer: 'Ask me to triage the tray', does: 'I file what came in on To Do Next or the queue', example: 'Go through the in-tray and file everything' },
 };
+/** What everyone in the building is on, on the clipboard the queue agent carries (see Clipboard). */
+const clipboardSheet = new ClipboardSheet();
 /** The board agents waiting by their boards before anyone has asked them anything (see buildKiosk). */
 const idleAgents = STATIONS.map((def) => {
   const kind = def.station!;
@@ -150,6 +160,7 @@ const idleAgents = STATIONS.map((def) => {
   const model = new Worker(agent.name, agent.color);
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
+  if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
@@ -239,6 +250,9 @@ mountBoard(office.meetingSign, meetingSignTex.texture, () => meetingSignTex.rend
 const gallery = new Gallery();
 office.group.add(gallery.group);
 store.on('decor', () => gallery.sync(store.decor));
+
+// The bar across the top after Agent Office's own code changes on GitHub: the steps to run it (ui/update-bar.ts).
+mountUpdateBar();
 
 // The whiteboard shows what everyone's drawn on it.
 mirrorWhiteboard(office.whiteboard.show, office.whiteboard.fit.width, office.whiteboard.fit.height);
@@ -534,6 +548,8 @@ net.onMessage((msg) => {
   routeTeamMessage(msg);
   routeAccountsMessage(msg);
   routePullMessage(msg);
+  // A PR merged from here: the update bar checks straight away whether the office needs updating.
+  if (msg.t === 'gh.merged' && !msg.error) mergedJustNow();
   routeElevatorMessage(msg);
   routeWhiteboardMessage(msg, net);
   switch (msg.t) {
@@ -1049,6 +1065,8 @@ function syncWorkers() {
       departures.vacate(w.deskId);
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
+      // The queue agent never goes anywhere without its clipboard.
+      if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
       desk.seatAnchor.add(model.root);
       // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over
       // its head and the back of its chair, so it shows from across the room.
@@ -1151,6 +1169,19 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+// ---- Clipboard ------------------------------------------------------------------------------------
+// The queue agent's clipboard lists every worker in the building by repository; walk up to it and
+// press C to read it all (see ui/clipboard.ts).
+const renderClipboard = () => clipboardSheet.render(rosterByRepo(currentRoster()));
+for (const topic of ['workers', 'floors', 'floor', 'project'] as const) store.on(topic, renderClipboard);
+renderClipboard();
+function showClipboard() {
+  openClipboard((floorId, workerId) => {
+    if (trip) return;
+    if (!floorId || floorId === store.floor) openWorkerTerminal(workerId);
+    else ride(floorId, workerId);
+  });
+}
 mountAttention((floorId, workerId) => {
   if (trip) return;
   if (floorId === store.floor) openWorkerTerminal(workerId);
@@ -1210,8 +1241,8 @@ function officeIsFull(): boolean {
   return true;
 }
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -1498,7 +1529,7 @@ function showJukebox() {
 }
 
 /** A prompt from the boards goes to a new worker at a free desk, or to one already at a desk. */
-function sendToWorker(title: string, text: { context?: string; initial?: string }) {
+function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string) {
   const desk = freeDesk();
   const awake = [...store.workers.values()].filter((w) => w.kind === 'agent' && !isAsleep(w.status));
   if (!desk && !awake.length) {
@@ -1513,10 +1544,45 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     worktreeOption: true,
     providerOption: true,
     onSubmit: (prompt, to, worktree, provider, model, effort, workspace) => {
-      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt });
-      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace);
+      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan });
+      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan);
     },
   });
+}
+
+/** What the 📒 To Do Next binder can do with a plan: queue it for a fresh worker, or hand it to one at a desk. */
+function plansActions() {
+  return {
+    queue: (plan: Plan) => {
+      const { provider, model, effort } = rememberedChoice(store.project, 'queue');
+      net.send({ t: 'queue.add', prompt: planPrompt(plan), title: planTitle(plan.text), plan: plan.id, provider, model, effort });
+    },
+    assign: (plan: Plan) => sendToWorker(`🤖 ${clip(planTitle(plan.text), 60)}`, { initial: planPrompt(plan) }, plan.id),
+    openTerminal: (id: string) => openWorkerTerminal(id),
+  };
+}
+
+/** The 📥 in-tray window (I, or ☰ → In-tray). */
+function showInbox() {
+  openInbox(net, { triage: triageInbox });
+}
+
+/** Asks the Receptionist to go through the tray: hires it with the request when nobody is at the kiosk yet. */
+function triageInbox() {
+  const deskId = STATIONS.find((s) => s.station === 'inbox')?.id;
+  if (!deskId) return;
+  const w = store.workerAtDesk(deskId);
+  if (w?.status === 'needs_input') {
+    toast('The Receptionist is waiting on an answer — here’s its terminal', 'warn');
+    return openWorkerTerminal(w.id);
+  }
+  if (!w && officeIsFull()) return;
+  net.send({
+    t: 'station.prompt',
+    deskId,
+    prompt: 'Triage the in-tray: read every item, file what someone wants done on the To Do Next board (or queue what should be worked on right away), archive what needs nothing and what you have filed, and tell me what came in and where each item went.',
+  });
+  toast(`📥 Asked the Receptionist to go through the tray${w ? '' : ' — press O at its kiosk to watch'}`);
 }
 
 function boardActions() {
@@ -1589,6 +1655,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (target.kind === 'station' && target.deskId) {
     const w = store.workerAtDesk(target.deskId);
     if (key === 'E' || key === 'P') return askStation(target.deskId);
+    if (key === 'C' && DESK_BY_ID.get(target.deskId)?.station === 'queue') return showClipboard();
     if (key === 'O' && w) return openWorkerTerminal(w.id);
     if (key === 'X' && w) return killWorker(w.id);
     return;
@@ -1619,6 +1686,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
       toast('🚬 Smoke break');
     }
   } else if (target.kind === 'gong') hitGong();
+  else if (target.kind === 'plans') openPlans(plansActions());
   else if (target.kind === 'whiteboard') openWhiteboard(net);
   else if (target.kind === 'cabinet') cabinet.play();
   else if (target.kind === 'ladder') grabLadder();
@@ -2113,6 +2181,7 @@ function hintFor(it: Interactable): Hint {
       const about = left !== null ? `your game's paused at ${scoreText(left)}` : best ? `🏆 ${clip(best.name, 24)} · ${scoreText(best.score)}` : 'no high score yet';
       return { k: `${left}|${best?.name}|${best?.score}`, parts: [title(`🕹️ ${GAME}`), aside(about), key('E', left !== null ? 'Carry on' : 'Play')] };
     }
+    case 'plans': return { k: '', parts: [title('To Do Next'), aside('Your plans for this floor'), key('E', 'Open binder')] };
     case 'whiteboard': {
       const names = store.drawing.flatMap((id) => (id === store.you ? [] : (store.peers.get(id)?.name ?? []))).join(', ');
       return { k: names, parts: [title('📝 Whiteboard'), aside(names ? `✏️ ${clip(names, 40)} drawing` : 'draw together, live'), key('E', names ? 'Join in' : 'Draw')] };
@@ -2249,15 +2318,21 @@ function stationHint(deskId: string): Hint {
   if (!kind) return { k: '', parts: [] };
   const w = store.workerAtDesk(deskId);
   const info = STATION_INFO[kind];
+  // The receptionist's kiosk has the in-tray on it: how much is in it, and I to open it.
+  const tray = kind === 'inbox' ? store.inbox.items.length : -1;
+  const trayNote = tray < 0 ? '' : tray === 0 ? 'nothing in the tray' : `${tray} in the tray`;
+  const trayKey = tray < 0 ? [] : [key('I', 'In-tray')];
   if (!w) {
     const m = store.machine;
     const full = officeFull(m);
     return {
-      k: `${full}|${m.workers}|${m.limit}`,
+      k: `${full}|${m.workers}|${m.limit}|${tray}`,
       parts: [
         h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
-        aside(info.offer.replace(/^Ask me /, '')),
+        aside(trayNote ? `${trayNote} · ${info.offer.replace(/^Ask me /, '')}` : info.offer.replace(/^Ask me /, '')),
         full ? h('span.cost', {}, `🚫 Office full · ${m.workers} of ${m.limit} workers`) : key('E', 'Prompt'),
+        kind === 'queue' ? key('C', 'Clipboard') : '',
+        ...trayKey,
       ],
     };
   }
@@ -2265,14 +2340,16 @@ function stationHint(deskId: string): Hint {
   const provider = resolvedProvider(w.provider, store.project);
   const spent = w.usage ? usageLabel(w.usage, provider) : '';
   return {
-    k: w.status + w.id + doing + spent,
+    k: w.status + w.id + doing + spent + tray,
     parts: [
       h('span.title', {}, `${info.icon} ${w.name} · ${STATUS_LABEL[w.status]}`),
-      doing ? aside(doing) : '',
+      doing ? aside(doing) : trayNote ? aside(trayNote) : '',
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       key('O', 'Terminal'),
+      kind === 'queue' ? key('C', 'Clipboard') : '',
       key('X', 'Send home'),
+      ...trayKey,
     ],
   };
 }
@@ -2399,6 +2476,9 @@ function use(it: Interactable | null, key: DeskKey, note = aimedNote) {
   interact(it, key, note);
 }
 
+// The in-tray on the receptionist's kiosk fills up with paper as things come in.
+store.on('inbox', () => office.setInTray(store.inbox.items.length));
+
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   if (modalOpen() || isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2454,6 +2534,9 @@ function officeKey(e: KeyboardEvent): boolean {
       return true;
     case 'KeyN':
       goToNextWaiting();
+      return true;
+    case 'KeyI':
+      showInbox();
       return true;
     case 'KeyQ':
       // Q puts back the issue card in your hands; with nothing in them, it takes you to the elevator.
@@ -2559,7 +2642,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2718,6 +2801,8 @@ const hud = mountHud(
     { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
     { id: 'services', icon: '🌐', label: 'Services', section: 'Open', count: () => store.services.items.length, title: () => 'Web servers the workers are running', run: () => openServices() },
+    { id: 'plans', icon: '📒', label: 'To Do Next', section: 'Open', count: () => store.plans.items.filter((p) => p.status === 'todo').length, title: () => 'Your plans for this floor: hand them to the workers from here', run: () => openPlans(plansActions()) },
+    { id: 'inbox', icon: '📥', label: 'In-tray', section: 'Open', key: 'I', count: () => store.inbox.items.length, title: () => 'What came in from outside: notes, forwarded emails and files, to file or queue', run: showInbox },
     { id: 'whiteboard', icon: '📝', label: 'Whiteboard', section: 'Open', title: () => 'Draw together, live', run: () => openWhiteboard(net) },
     // Up on the top bar while a meeting is on: what's being worked through in the meeting room.
     {
