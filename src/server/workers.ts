@@ -9,6 +9,7 @@ import { workerBranches } from './worker-branches.js';
 import { codexInputPrompt } from './codex-input.js';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
+import { readPullWork } from '../shared/pull-work.js';
 import type { AgentEffort, AgentProvider, GhPull, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
 import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js';
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
@@ -291,7 +292,7 @@ export class WorkerManager {
    * Hires a worker at a desk. `meeting` seats one at the meeting room's table instead, for that meeting
    * (see meetings.ts), in the meeting's own worktree, which everyone at the table shares.
    */
-  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, workspace?: WorkspaceRequest): WorkerInfo | string {
+  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, workspace?: WorkspaceRequest, pullWork?: unknown): WorkerInfo | string {
     const selectedProvider = kind === 'agent' ? provider ?? this.defaultProvider : undefined;
     const modelError = validateWorkerModel(kind, selectedProvider, model);
     if (modelError) return modelError;
@@ -328,6 +329,7 @@ export class WorkerManager {
       if (typeof made === 'string') return made;
       wt = made;
     }
+    const assignment = kind === 'agent' && prompt?.trim() ? readPullWork(pullWork) : undefined;
     const info: WorkerInfo = {
       id,
       kind,
@@ -344,6 +346,7 @@ export class WorkerManager {
       prompt: kind === 'shell' ? undefined : prompt?.trim() || undefined,
       worktree: wt,
       workspace: ws,
+      pullWork: assignment ? { ...assignment, assignedAt: Date.now() } : undefined,
       cols: 100,
       rows: 30,
       viewers: [],
@@ -571,7 +574,7 @@ export class WorkerManager {
   }
 
   /** Types a prompt into the agent's input box and submits it; `by` is the person who sent it, if any. */
-  prompt(id: string, text: string, by?: string): string | undefined {
+  prompt(id: string, text: string, by?: string, pullWork?: unknown): string | undefined {
     const w = this.workers.get(id);
     if (!w) return 'No such worker';
     if (!w.pty) return 'Worker is not running';
@@ -583,6 +586,11 @@ export class WorkerManager {
     setTimeout(() => w.pty?.write('\r'), 120);
     w.info.activity = truncate(clean, 80);
     this.notePrompt(w, clean);
+    if (w.info.kind === 'agent' && pullWork !== undefined) {
+      const link = readPullWork(pullWork);
+      w.info.pullWork = link ? { ...link, assignedAt: Date.now() } : undefined;
+      this.persist();
+    }
     if (by) w.info.lastInput = { by, at: Date.now() };
     this.emitUpdate(w);
     return undefined;
@@ -1491,6 +1499,7 @@ process.stdin.on('end', () => {
       activity: info.activity,
       task: info.task,
       pr: info.pr,
+      pullWork: info.pullWork,
       meeting: info.meeting,
       tracker: info.kind === 'agent' ? tracker : undefined,
       usage: info.provider === 'opencode' || info.provider === 'codex' ? info.usage : undefined,
@@ -1542,6 +1551,8 @@ process.stdin.on('end', () => {
           sessionId: s.sessionId,
           activity: s.activity,
           task: validTask(s.task),
+          pullWork: s.kind !== 'shell' && readPullWork(s.pullWork) && Number.isFinite(s.pullWork?.assignedAt)
+            ? { ...readPullWork(s.pullWork)!, assignedAt: s.pullWork!.assignedAt } : undefined,
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url, state: typeof s.pr.state === 'string' ? s.pr.state : undefined } : undefined,
           usage: provider === 'opencode' || provider === 'codex' ? reportedUsage(s.usage) : (provider === 'claude' || provider === 'custom') && tracker.transcript ? trackerUsage(tracker) : undefined,
           cols: 100,

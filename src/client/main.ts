@@ -4,7 +4,7 @@ import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
-import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
+import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { modelTag } from '../shared/model';
 import type { WorkspaceRequest } from '../shared/workspaces';
@@ -1242,8 +1242,8 @@ function officeIsFull(): boolean {
   return true;
 }
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string, pullWork?: PullWork | null) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan, pullWork });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -1530,7 +1530,7 @@ function showJukebox() {
 }
 
 /** A prompt from the boards goes to a new worker at a free desk, or to one already at a desk. */
-function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string) {
+function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string, pullWork?: PullWork) {
   const desk = freeDesk();
   const awake = [...store.workers.values()].filter((w) => w.kind === 'agent' && !isAsleep(w.status));
   if (!desk && !awake.length) {
@@ -1545,8 +1545,8 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     worktreeOption: true,
     providerOption: true,
     onSubmit: (prompt, to, worktree, provider, model, effort, workspace) => {
-      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan });
-      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan);
+      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan, pullWork: pullWork ?? null });
+      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan, pullWork);
     },
   });
 }
@@ -1589,8 +1589,8 @@ function triageInbox() {
 function boardActions() {
   return {
     queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string) => net.send({ t: 'queue.add', prompt, title, issue, repo, provider, model, effort }),
-    assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
-    ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
+    assign: (prompt: string, title: string, pullWork?: PullWork) => sendToWorker(`🤖 ${title}`, { initial: prompt }, undefined, pullWork),
+    ask: (context: string, title: string, pullWork?: PullWork) => sendToWorker(`✍️ ${title}`, { context }, undefined, pullWork),
     meeting: (preset: MeetingPreset) => showMeeting(preset),
     goToDesk,
     pickUp,
