@@ -37,6 +37,7 @@ import type { WorkspaceRequest } from '../shared/workspaces.js';
 import { isWorkKind } from '../shared/work-kind.js';
 import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
 import { SideShells } from './sideshell.js';
+import { openCodeLaunchModel } from './grok-default.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
@@ -1045,6 +1046,8 @@ export class WorkerManager {
       // `--` so a prompt like "- fix login" is never parsed as a CLI option.
       if (prompt) args.push('--', prompt);
     } else if (isOpenCode) {
+      // Personal: a blank model runs the top Grok model, and the badge shows it (see grok-default.ts).
+      if (!resumeSessionId) info.model = openCodeLaunchModel(info.model, args);
       if (resumeSessionId || info.model) args = withoutOpenCodeModel(args);
       if (!resumeSessionId && info.model) args.push('--model', info.model);
       if (resumeSessionId) args.push('--session', resumeSessionId);

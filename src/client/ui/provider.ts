@@ -140,6 +140,8 @@ const MODEL_MAX = 256;
 let modelList: string[] | null = null;
 let modelListAt = 0;
 let modelRequest: Promise<string[]> | null = null;
+/** Personal: what a blank OpenCode model runs (the top Grok model), as the server reports it. */
+let modelDefault: string | null = null;
 
 function validModel(value: string): boolean {
   if (value.length === 0 || value.length > MODEL_MAX || /[\s\p{Cc}\p{Cf}]/u.test(value)) return false;
@@ -152,8 +154,9 @@ function fetchOpenCodeModels(): Promise<string[]> {
   if (modelRequest) return modelRequest;
   modelRequest = fetch('/api/agents/opencode/models', { credentials: 'same-origin', cache: 'no-store' })
     .then(async (res) => {
+      const body = (await res.json().catch(() => ({}))) as { models?: unknown; default?: unknown };
+      if (typeof body.default === 'string' && validModel(body.default)) modelDefault = body.default;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { models?: unknown };
       const models = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === 'string' && validModel(m)) : [];
       modelList = [...new Set(models)];
       modelListAt = Date.now();
@@ -182,7 +185,7 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
     type: 'text',
     id: `${id}-model`,
     list: `${id}-models`,
-    placeholder: 'Default (OpenCode settings)',
+    placeholder: `Default: ${modelDefault ?? 'top Grok model'}`,
     'aria-label': 'OpenCode model',
     autocomplete: 'off',
     maxlength: MODEL_MAX,
@@ -232,14 +235,19 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
     modelInput.disabled = !openCode;
     claudeChoice.classList.toggle('hidden', !claude);
     if (!openCode) return;
-    modelHint.textContent = modelList ? 'Optional provider/model override; choose a suggestion or enter one manually.' : 'Loading OpenCode models… You can enter a provider/model manually.';
+    // Personal: say which model a blank field runs (see grok-default.ts on the server).
+    const blankRuns = () => {
+      modelInput.placeholder = `Default: ${modelDefault ?? 'top Grok model'}`;
+      return `Blank runs ${modelDefault ?? 'the top Grok model'}.`;
+    };
+    modelHint.textContent = modelList ? `${blankRuns()} Optional provider/model override; choose a suggestion or enter one manually.` : `${blankRuns()} Loading OpenCode models… You can enter a provider/model manually.`;
     void fetchOpenCodeModels()
       .then((models) => {
         modelListEl.replaceChildren(...models.map((model) => h('option', { value: model })));
-        modelHint.textContent = 'Optional provider/model override; choose a suggestion or enter one manually.';
+        modelHint.textContent = `${blankRuns()} Optional provider/model override; choose a suggestion or enter one manually.`;
       })
       .catch(() => {
-        modelHint.textContent = 'Model suggestions unavailable; enter a provider/model manually if needed.';
+        modelHint.textContent = `${blankRuns()} Model suggestions unavailable; enter a provider/model manually if needed.`;
       });
   };
   setModelVisibility(select.value as AgentProvider);

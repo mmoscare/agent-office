@@ -118,13 +118,21 @@ opencode.cmd auth login --provider xai
 
 Choose the API key login method and enter your xAI API key there. Get a key from https://console.x.ai if needed. Keep the key out of chat and repository files.
 
-Then hire an **OpenCode** worker in Agent Office. Choose an `xai/...` Grok model in its model field. You can list the available IDs with:
+`opencode.cmd auth list` should then list **xAI**.
+
+Then hire an **OpenCode** worker in Agent Office, or queue a task for OpenCode, and leave its model field blank: it runs Grok's top model. The field's placeholder names it (`Default: xai/grok-4.7`), and the badge over the worker's head, its task card and its queue row show the model it launched with.
+
+**How the default is chosen.** Grok 4.7 (`xai/grok-4.7`) is xAI's flagship as of September 28, 2026; xAI's model list (https://docs.x.ai/docs/models) calls it "the most capable model we've built" and recommends it for code. The office doesn't hard-wire that: each time it reads the OpenCode model catalogue (at start-up, when a model field loads its suggestions, and at most hourly on a launch), it takes the plain `xai/grok-<version>` ID with the highest version. Fast, mini, reasoning/non-reasoning, multi-agent, `grok-build`, imagine, `-latest` and dated snapshot IDs are never picked, and versions compare as decimals because xAI released 4.20 before 4.3. A new plain Grok release is picked up without a code change. When the catalogue can't be read, the fixed `xai/grok-4.7` is used. The rule and that fallback live in `src/server/grok-default.ts`.
+
+**How to override it.** Type or pick any `provider/model` in the model field for that task or hire. If the office itself runs OpenCode (`--agent opencode`), a `--model` in `--agent-args` replaces the Grok default office-wide. `/models` inside an OpenCode worker's terminal switches that session. A resumed worker carries on its OpenCode session and model; only a fresh start picks the default again. Tasks the queue agent adds with `office-queue add` have no model of their own, so they get the default when they run on OpenCode. Your global OpenCode config (`opencode.jsonc`) is never changed.
+
+You can list the available IDs with:
 
 ```powershell
 opencode.cmd models xai
 ```
 
-If the model suggestions have not refreshed yet, paste the model ID from that list into the model field. You can also select a model using `/models` inside the OpenCode worker's terminal. xAI API usage is billed through your xAI account.
+If the model suggestions have not refreshed yet, paste the model ID from that list into the model field. xAI API usage is billed through your xAI account.
 
 ## Change model or effort while working
 
@@ -134,7 +142,7 @@ Yes: click inside that worker's terminal, then type the command and press Enter.
 | --- | --- |
 | Claude Code | `/model` to choose a model. `/effort` to choose effort. |
 | Codex | `/model` to choose a model and its available reasoning effort. `/status` to check the current setup. |
-| Grok through OpenCode | `/models` to choose the model. Reasoning controls depend on the model and OpenCode's supported variants. |
+| Grok through OpenCode | Starts on the top Grok model (`xai/grok-4.7` today) unless the task or hire named another. `/models` to choose the model. Reasoning controls depend on the model and OpenCode's supported variants. |
 
 These controls belong to the agent program. Some choices also save defaults for future sessions. In Claude's model picker, press `s` instead of Enter if you only want to change this session.
 
@@ -146,11 +154,13 @@ Hooks are the small callbacks that tell the game whether a worker is working, wa
 
 On September 27, 2026, the server build and 17 focused tests passed. Claude, Codex, and OpenCode each returned their version and exit code 0 through Agent Office's terminal host. All seven Codex hook events reached a local test receiver through Windows shell commands, and installed Codex recognized all seven Windows overrides without configuration errors. These are startup and callback checks, not a completed AI task. OpenCode had no saved provider credentials, so a Grok request has not been tested.
 
+On September 28, 2026, with xAI logged in, a temporary office built from the Grok-default change queued an OpenCode task with a blank model. The worker launched as `opencode --model xai/grok-4.7`, its screen showed "Build · Grok 4.7 xAI", and a completed xAI reply came back (OpenCode recorded provider `xai`, model `grok-4.7`, finish `stop`). In the task queue form, the OpenCode model field read `Default: xai/grok-4.7`; a task added there with the field blank did the same, and its queue row read `OpenCode · initial: xai/grok-4.7`. That run bypassed the `opencode.cmd` start-up bug by putting OpenCode's platform binary first on PATH; the start-up fix itself is separate work.
+
 The folder picker and usage history also passed type checking, a full app build, and 13 focused tests. A temporary-office browser check covered folder browsing, adding and reusing a floor, switching to GitHub mode, saved usage and CSV export, Esc reaching the terminal, clicking X to close the view, and the Windows host starting and stopping. Desktop and Start shortcuts were verified to target the personal checkout. No real AI tasks were started for those checks.
 
 The Windows launcher fix lives mainly in `src/server/windows-command.ts`; Codex's Windows hook command is in `src/server/codex.ts`. Keep these when merging author updates unless upstream supplies equivalent fixes. Your general fork/update instructions are in [PERSONAL-WORKFLOW.md](PERSONAL-WORKFLOW.md).
 
-Local folder handling lives in `local-folders.ts` and `ui/local-floor.ts`. Saved usage is a separate `model-usage.ts` feature; it leaves the author's daily budget ledger unchanged. The launcher source stays in `personal/windows`. Keep these small additions when merging updates.
+Local folder handling lives in `local-folders.ts` and `ui/local-floor.ts`. Saved usage is a separate `model-usage.ts` feature; it leaves the author's daily budget ledger unchanged. The OpenCode Grok default is `grok-default.ts`, hooked in by one line in `workers.ts` `launch()` and the model endpoint in `server.ts`. The launcher source stays in `personal/windows`. Keep these small additions when merging updates.
 
 Multi-repository workspaces live mainly in `src/server/workspaces.ts`, `workspace-changes.ts`, and the client workspace dialogs. The author's ordinary single-repository worktree helper remains in place. Focused Git tests cover separate branches/PRs, rollback, adding repositories, resume, changes/commits and cleanup. A temporary-office browser test covers the complete flow with a fake Codex CLI; it makes no real AI requests or GitHub writes.
 
