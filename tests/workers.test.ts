@@ -349,7 +349,7 @@ test('OpenCode model overrides configured model flags on first launch and is omi
   if (typeof worker === 'string') return;
   const first = await waitFor(() => f.read(), (records) => records.some((r) => r.kind === 'opencode'));
   const firstInvocation = first.find((r) => r.kind === 'opencode')!;
-  assert.deepEqual(firstInvocation.args, ['--keep', 'yes', '--model', 'openai/gpt-5/nested', '--prompt', 'modelled prompt']);
+  assert.deepEqual(firstInvocation.args.map(withoutWorkerHandoff), ['--keep', 'yes', '--model', 'openai/gpt-5/nested', '--prompt', 'modelled prompt']);
   assert.equal(workers.get(worker.id)?.model, 'openai/gpt-5/nested');
 
   assert.equal(workers.handleOpenCodeHook(worker.id, firstInvocation.env.hookToken!, { type: 'session', sessionId: 'oc-model', status: 'starting' }), true);
@@ -446,7 +446,7 @@ test('an explicit Claude model/effort overrides --agent-args and persists across
   const first = await waitFor(() => f.read(), (records) => records.some((r) => r.kind === 'claude'));
   const firstInvocation = first.find((r) => r.kind === 'claude')!;
   // The per-worker choice is appended after --agent-args, so it wins even though "opus" also appears.
-  assert.deepEqual(firstInvocation.args.slice(firstInvocation.args.indexOf('--model')), ['--model', 'opus', '--model', 'haiku', '--effort', 'high', '--', 'haiku task']);
+  assert.deepEqual(firstInvocation.args.slice(firstInvocation.args.indexOf('--model')).map(withoutWorkerHandoff), ['--model', 'opus', '--model', 'haiku', '--effort', 'high', '--', 'haiku task']);
 
   assert.equal(workers.handleHook(worker.id, firstInvocation.env.hookToken!, 'SessionStart', { session_id: 'claude-model-1' }), true);
   await waitFor(() => workers.get(worker.id)?.status, (status) => status === 'exited');
@@ -486,7 +486,7 @@ test('a worker hired on Fable launches with --model fable and keeps it across a 
   if (typeof worker === 'string') return;
   const records = await waitFor(() => f.read(), (rs) => rs.some((r) => r.kind === 'claude'));
   const launch = records.find((r) => r.kind === 'claude')!;
-  assert.deepEqual(launch.args.slice(launch.args.indexOf('--model')), ['--model', 'opus', '--model', 'fable', '--', 'fable task']);
+  assert.deepEqual(launch.args.slice(launch.args.indexOf('--model')).map(withoutWorkerHandoff), ['--model', 'opus', '--model', 'fable', '--', 'fable task']);
 
   workers.shutdown();
   const restored = manager(f, f.claude, [], ['--model', 'opus']);
@@ -795,7 +795,7 @@ test('the queue agent is launched without file-editing tools, and board agents g
   const [first] = await waitFor(() => launches(id), (l) => l.length === 1);
   assert.deepEqual(denied(first.args), ['Edit', 'Write', 'NotebookEdit']);
   assert.ok(first.args.indexOf('--disallowedTools') < first.args.indexOf('--'), 'the tools come before the prompt');
-  assert.ok(first.args.at(-1)!.endsWith('Fix the typo in the README'));
+  assert.ok(withoutWorkerHandoff(first.args.at(-1)!).endsWith('Fix the typo in the README'));
   assert.ok(onPath(first), 'office-queue is first on its PATH');
 
   // Woken up carrying on its session, it's still without them.
@@ -805,7 +805,7 @@ test('the queue agent is launched without file-editing tools, and board agents g
   const [, second] = await waitFor(() => launches(id), (l) => l.length === 2);
   assert.ok(second.args.includes('--resume') && second.args.includes('queue-session'));
   assert.deepEqual(denied(second.args), ['Edit', 'Write', 'NotebookEdit']);
-  assert.equal(second.args.at(-1), 'Also bump the version');
+  assert.equal(withoutWorkerHandoff(second.args.at(-1)!), 'Also bump the version');
   assert.ok(onPath(second));
 
   // The other board agents keep their tools but get the command; a desk worker gets neither.
