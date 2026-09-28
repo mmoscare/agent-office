@@ -30,6 +30,9 @@ internal static class Program {
     internal static readonly object LogLock = new object();
     internal static LauncherConfig Config;
     internal static string Url { get { return "http://localhost:" + Config.Port; } }
+    // The server binds IPv4 (0.0.0.0). Probing "localhost" tries ::1 first, which can hang on Windows
+    // long enough to exhaust the timeout every time, so the health check names the IPv4 loopback.
+    internal static string HealthUrl { get { return "http://127.0.0.1:" + Config.Port + "/api/health"; } }
 
     [STAThread]
     private static void Main(string[] args) {
@@ -67,7 +70,7 @@ internal static class Program {
 
     internal static bool Healthy() {
         try {
-            var request = (HttpWebRequest)WebRequest.Create(Url + "/api/health");
+            var request = (HttpWebRequest)WebRequest.Create(HealthUrl);
             request.Timeout = 600;
             request.Proxy = null;
             using (var response = request.GetResponse())
@@ -122,6 +125,7 @@ internal static class Program {
 
 internal sealed class OfficeContext : ApplicationContext {
     private Process server;
+    private Process terminal;
     private readonly NotifyIcon tray;
     private readonly System.Windows.Forms.Timer monitor;
     private bool stopping;
@@ -129,6 +133,7 @@ internal sealed class OfficeContext : ApplicationContext {
     internal OfficeContext() {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Open Agent Office", null, delegate { Program.OpenBrowser(); });
+        menu.Items.Add("Show server terminal", null, delegate { ShowTerminal(); });
         menu.Items.Add("Restart Agent Office", null, delegate { if (StopOffice() && !StartOffice()) ExitThread(); });
         menu.Items.Add("Stop Agent Office and exit", null, delegate { if (StopOffice()) ExitThread(); });
         tray = new NotifyIcon { Icon = new Icon(Path.Combine(Program.InstallDir, "Agent Office.ico")), Text = "Agent Office", ContextMenuStrip = menu, Visible = true };
@@ -158,7 +163,10 @@ internal sealed class OfficeContext : ApplicationContext {
             server.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Program.Log(e.Data); };
             Program.Log("--- Agent Office started " + DateTime.Now.ToString("s") + " ---");
             server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine();
-            for (int i = 0; i < 100; i++) {
+            ShowTerminal();
+            // Wait by the clock, not by attempt count: a refused probe returns instantly, a hung one takes the whole timeout.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(90);
+            while (DateTime.UtcNow < deadline) {
                 if (server.HasExited) throw new Exception("Agent Office could not start. See server.log in " + Program.InstallDir);
                 if (Program.Healthy()) { monitor.Start(); Program.OpenBrowser(); return true; }
                 Thread.Sleep(300);
@@ -168,8 +176,27 @@ internal sealed class OfficeContext : ApplicationContext {
         catch (Exception error) { StopOffice(); MessageBox.Show(error.Message, "Agent Office", MessageBoxButtons.OK, MessageBoxIcon.Error); return false; }
     }
 
+    // The server itself stays hidden (a console of its own kept it from coming up); this window follows server.log live.
+    private void ShowTerminal() {
+        if (terminal != null && !terminal.HasExited) return;
+        string log = Path.Combine(Program.InstallDir, "server.log").Replace("'", "''");
+        string script = "$Host.UI.RawUI.WindowTitle = 'Agent Office server'; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; "
+            + "Write-Host 'Live output of the Agent Office server. Closing this window does not stop the office; use the tray icon for that.' -ForegroundColor DarkGray; "
+            + "Get-Content -LiteralPath '" + log + "' -Wait -Tail 40 -Encoding UTF8";
+        try {
+            terminal = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command " + Program.Quote(script)) { UseShellExecute = true });
+        } catch (Exception error) { Program.Log("terminal window: " + error.Message); }
+    }
+
+    private void CloseTerminal() {
+        if (terminal == null) return;
+        try { if (!terminal.HasExited) terminal.Kill(); } catch { }
+        terminal.Dispose(); terminal = null;
+    }
+
     private bool StopOffice() {
         monitor.Stop(); stopping = true;
+        CloseTerminal();
         if (server != null) {
             try {
                 if (!server.HasExited) {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { FloorInfo } from '../../shared/protocol';
-import { floorPalette } from '../../shared/floors';
+import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../../shared/floors';
 import { ELEVATOR, FLOOR } from '../../shared/layout';
 import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { Interactable } from './office';
@@ -49,7 +49,8 @@ export function buildElevatorTiles() {
     ctx.fillStyle = '#2b2d42';
     ctx.textBaseline = 'middle';
     ctx.font = '800 42px Nunito, system-ui, sans-serif';
-    const start = badge ? 90 : 24;
+    // Room for a wider badge such as "B12".
+    const start = badge ? Math.max(90, 36 + ctx.measureText(badge).width) : 24;
     if (badge) ctx.fillText(badge, 22, 65);
     let name = label;
     while (name.length > 1 && ctx.measureText(name).width > canvas.width - 30 - start) name = name.slice(0, -2) + '…';
@@ -67,8 +68,12 @@ export function buildElevatorTiles() {
 
   const render = () => {
     clear();
-    const destinations = floors.map((f, i) => ({ id: f.id, name: f.name, badge: String(i + 1), color: floorPalette(f.palette).trim, cloning: !!f.cloning }));
+    // Numbered the way the elevator panel numbers them. The Back Office's floors come after the main
+    // floors and the roof, so the first page keeps the short list.
+    const destination = (f: FloorInfo) => ({ id: f.id, name: f.name, badge: floorNumber(floors, f.id), color: floorPalette(f.palette).trim, cloning: !!f.cloning });
+    const destinations = mainFloors(floors).map(destination);
     if (floors.some(f => !f.cloning)) destinations.push({ id: ROOF, name: ROOF_NAME, badge: 'R', color: '#9470e0', cloning: false });
+    destinations.push(...backOfficeFloors(floors).map(destination));
     const pages = Math.max(1, Math.ceil(destinations.length / PAGE_SIZE));
     page = Math.min(page, pages - 1);
     destinations.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).forEach((f, i) => {
@@ -88,7 +93,7 @@ export function buildElevatorTiles() {
     group,
     setFloors(next: FloorInfo[], here: string | null) {
       // Worker/people counts update often; only redraw when the directory itself changes.
-      const key = JSON.stringify([here, next.map(f => [f.id, f.name, f.palette, !!f.cloning])]);
+      const key = JSON.stringify([here, next.map(f => [f.id, f.name, f.palette, !!f.cloning, !!f.backOffice])]);
       if (key === signature) return;
       signature = key;
       if (here !== current) page = 0;

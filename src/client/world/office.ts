@@ -1145,24 +1145,25 @@ export function buildOffice(): Office {
     const collider = { minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs), top: BEANBAG_BOX.top };
     beanbags.set(def.id, { view, it, collider });
   });
-  // The board agents' kiosks, each just west of its board.
+  // The board agents' kiosks, each just west of its board (and the Receptionist's out by the whiteboard).
   for (const def of STATIONS) {
     const view = buildKiosk(def);
     group.add(view.group);
     desks.set(def.id, view);
-    // The kiosk and the agent behind it, back to the wall (they all stand by the north wall) so
-    // nobody squeezes in behind, and up over the agent's head so nobody hops on it.
+    // The kiosk and the agent behind it, up over the agent's head so nobody hops on it. One by the
+    // north wall reaches back to the wall, so nobody squeezes in behind; one out on the floor
+    // (the Receptionist's) is just itself, with room to walk all the way round.
     const corners = [-1, 1].flatMap((t) => [-KIOSK.depth / 2, KIOSK.stand + 0.35].map((sz) => deskPoint(def, (t * KIOSK.width) / 2, sz)));
     const xs = corners.map(([x]) => x);
     const zs = corners.map(([, z]) => z);
-    colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: FLOOR.minZ, maxZ: Math.max(...zs), top: 1.5, fence: true });
+    colliders.push({ minX: Math.min(...xs), maxX: Math.max(...xs), minZ: def.freestanding ? Math.min(...zs) : FLOOR.minZ, maxZ: Math.max(...zs), top: 1.5, fence: true });
     // Walk up to its front.
     const [fx, fz] = deskPoint(def, 0, -1);
     const it: Interactable = { kind: 'station', deskId: def.id, x: fx, z: fz, radius: 1.3 };
     interactables.push(it);
     view.group.userData.interact = it;
-    // The agent, its name tag and the card over its head, up against the wall.
-    fixture('north', def.x, 1.45, 1.4, 2.9);
+    // The agent, its name tag and the card over its head, up against the wall (pictures keep clear of them).
+    if (!def.freestanding) fixture('north', def.x, 1.45, 1.4, 2.9);
   }
   const setBeanbags = (out: Set<string>) => {
     const appeared: Collider[] = [];

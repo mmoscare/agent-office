@@ -14,6 +14,7 @@ import type { WorkKind } from './work-kind.js';
 import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { TimeCardState } from './timecard.js';
+import type { MailState } from './mail.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -1118,6 +1119,8 @@ export type ClientMsg =
   /** Forget the finished tasks. */
   | { t: 'queue.clear' }
   | { t: 'queue.limit'; maxWorkers: number }
+  /** Your tab went into the background (or came back): the Receptionist emails "needs you" alerts only when nobody is really here. */
+  | { t: 'presence'; away: boolean }
   /** Look through the office's branches for work without a PR again; answered with `unshipped`. */
   | { t: 'unshipped.scan' }
   /** Queue a task for a fresh worker to recover that branch's work into a PR (UnshippedItem.key). */
@@ -1246,6 +1249,8 @@ export type ServerMsg =
       sky: SkyState;
       /** Halloween or Christmas decorations, all over the building, or none. */
       theme: ThemeState;
+      /** The Receptionist's mailbox: the same on every floor. */
+      mail: MailState;
     } & FloorView)
   /** You arrived on another floor: everything on it, replacing the last one's, and where everyone is now. */
   | ({ t: 'floor.enter'; peers: PeerInfo[] } & FloorView)
@@ -1328,6 +1333,8 @@ export type ServerMsg =
   | { t: 'inbox'; state: InboxState }
   /** Your own 🗂️ Indirect Time card: on arrival, and when you ask for it. */
   | { t: 'timecard'; state: TimeCardState }
+  /** The Receptionist's mailbox changed: set up, checked, broken, fixed. */
+  | { t: 'mail'; state: MailState }
   | { t: 'meeting'; state: MeetingState }
   | { t: 'notify'; state: NotifyState }
   | { t: 'machine'; state: MachineState }

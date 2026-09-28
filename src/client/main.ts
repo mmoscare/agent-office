@@ -75,6 +75,9 @@ import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from '.
 import { openPlans } from './ui/plans';
 import { openTimeCard, todayText } from './ui/timecard';
 import { openInbox } from './ui/inbox';
+import { mountMailNag, openMailSetup } from './ui/mail';
+import { receptionistLook } from './world/receptionist';
+import { mailNeedsYou } from '../shared/mail';
 import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
@@ -155,8 +158,16 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   issues: { icon: '📌', offer: 'Ask me about issues', does: 'I file, find, triage, label and close them', example: 'File an issue: the dog walks straight through the jukebox' },
   pulls: { icon: '🔀', offer: 'Ask me about PRs', does: 'I sum up, review, comment on and merge them', example: 'Review the newest PR and tell me if it’s ready to merge' },
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
-  inbox: { icon: '📥', offer: 'Ask me to triage the tray', does: 'I file what came in on To Do Next or the queue', example: 'Go through the in-tray and file everything' },
+  inbox: { icon: '💁‍♀️', offer: 'Email me work, or ask me', does: 'I hand out what comes in, and write back', example: 'Go through the in-tray and hand everything out' },
 };
+/** What the Receptionist says over her head while she waits: until her email works, a reminder to set it up. */
+function receptionistCard(): { name: string; summary: string } {
+  const why = mailNeedsYou(store.mail);
+  if (why === 'setup') return { name: '📧 Set up my email!', summary: 'Then email me work from anywhere' };
+  if (why === 'broken') return { name: '📧 My email is stuck', summary: 'Look at it in the In-tray window (I)' };
+  if (store.mail.configured) return { name: '📧 Email me work', summary: store.mail.address ?? STATION_INFO.inbox.does };
+  return { name: STATION_INFO.inbox.offer, summary: STATION_INFO.inbox.does };
+}
 /** What everyone in the building is on, on the clipboard the queue agent carries (see Clipboard). */
 const clipboardSheet = new ClipboardSheet();
 /** The board agents waiting by their boards before anyone has asked them anything (see buildKiosk). */
@@ -166,12 +177,22 @@ const idleAgents = STATIONS.map((def) => {
   const model = new Worker(agent.name, agent.color);
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
+  if (kind === 'inbox') model.accessory(receptionistLook());
   if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
-  return { model, view };
+  return { model, view, kind };
 });
+/** The Receptionist waiting at her kiosk taps her foot, with her card saying why, until her email is set up (and working). */
+function refreshReceptionist() {
+  const her = idleAgents.find((a) => a.kind === 'inbox');
+  if (!her) return;
+  const why = mailNeedsYou(store.mail);
+  her.model.setStatus(why ? 'needs_input' : 'idle', false);
+  her.model.setTask(receptionistCard());
+}
+store.on('mail', refreshReceptionist);
 
 // Boards: each draws onto a canvas texture, redrawn whenever what it shows changes.
 function mountBoard(mesh: THREE.Mesh, texture: THREE.Texture, render: () => void, topics: Topic[]) {
@@ -1086,6 +1107,7 @@ function syncWorkers() {
       departures.vacate(w.deskId);
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
+      if (desk.def.station === 'inbox') model.accessory(receptionistLook());
       // The queue agent never goes anywhere without its clipboard.
       if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
       desk.seatAnchor.add(model.root);
@@ -2368,15 +2390,17 @@ function stationHint(deskId: string): Hint {
   if (!kind) return { k: '', parts: [] };
   const w = store.workerAtDesk(deskId);
   const info = STATION_INFO[kind];
-  // The receptionist's kiosk has the in-tray on it: how much is in it, and I to open it.
+  // The receptionist's kiosk has the in-tray on it: how much is in it, and I to open it; and how her email stands.
   const tray = kind === 'inbox' ? store.inbox.items.length : -1;
-  const trayNote = tray < 0 ? '' : tray === 0 ? 'nothing in the tray' : `${tray} in the tray`;
-  const trayKey = tray < 0 ? [] : [key('I', 'In-tray')];
+  const mailWhy = kind === 'inbox' ? mailNeedsYou(store.mail) : undefined;
+  const mailNote = kind !== 'inbox' ? '' : mailWhy === 'setup' ? '📧 no email yet' : mailWhy === 'broken' ? '📧 email stuck' : store.mail.configured ? `📧 ${store.mail.address}` : '';
+  const trayNote = tray < 0 ? '' : [tray === 0 ? 'nothing in the tray' : `${tray} in the tray`, mailNote].filter(Boolean).join(' · ');
+  const trayKey = tray < 0 ? [] : [key('I', mailWhy ? 'In-tray & email setup' : 'In-tray')];
   if (!w) {
     const m = store.machine;
     const full = officeFull(m);
     return {
-      k: `${full}|${m.workers}|${m.limit}|${tray}`,
+      k: `${full}|${m.workers}|${m.limit}|${tray}|${mailNote}`,
       parts: [
         h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
         aside(trayNote ? `${trayNote} · ${info.offer.replace(/^Ask me /, '')}` : info.offer.replace(/^Ask me /, '')),
@@ -2390,7 +2414,7 @@ function stationHint(deskId: string): Hint {
   const provider = resolvedProvider(w.provider, store.project);
   const spent = w.usage ? usageLabel(w.usage, provider) : '';
   return {
-    k: w.status + w.id + doing + spent + tray,
+    k: w.status + w.id + doing + spent + tray + mailNote,
     parts: [
       h('span.title', {}, `${info.icon} ${w.name} · ${STATUS_LABEL[w.status]}`),
       doing ? aside(doing) : trayNote ? aside(trayNote) : '',
@@ -2528,6 +2552,14 @@ function use(it: Interactable | null, key: DeskKey, note = aimedNote) {
 
 // The in-tray on the receptionist's kiosk fills up with paper as things come in.
 store.on('inbox', () => office.setInTray(store.inbox.items.length));
+
+// Until her email is set up, the Receptionist pops up now and then to say so (see ui/mail.ts).
+mountMailNag({ desktop: () => settings.notify });
+
+// Whether you're really here: a tab in the background for a while means "needs you" alerts go by email.
+const sayPresence = () => net.send({ t: 'presence', away: document.hidden });
+document.addEventListener('visibilitychange', sayPresence);
+store.on('me', sayPresence);
 
 // ---- Input ----------------------------------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
@@ -2886,6 +2918,18 @@ const hud = mountHud(
     { id: 'decor', icon: '🖼️', label: () => (hanger.active ? 'Stop hanging the picture' : 'Hang a picture'), section: 'Together', key: 'F', on: () => hanger.active, status: () => hanger.active, run: () => (hanger.active ? hanger.cancel() : startHanging()) },
     { id: 'team', icon: '👥', label: 'Invite teammates', section: 'Together', shown: () => store.invites, run: () => openTeam(net) },
     { id: 'accounts', icon: '🔑', label: 'Accounts', section: 'Together', shown: () => store.me.admin, title: () => 'Invite people, see who has an account, revoke them', run: () => openAccounts(net) },
+    // Up on the top bar by itself until the Receptionist's email is set up (or while it's broken).
+    {
+      id: 'mail',
+      icon: '📧',
+      label: () => (store.mail.configured ? 'Receptionist’s email' : 'Set up email'),
+      section: 'Office',
+      status: () => !!mailNeedsYou(store.mail),
+      chip: () => (mailNeedsYou(store.mail) === 'broken' ? 'Email trouble' : 'Set up email'),
+      tone: () => (mailNeedsYou(store.mail) ? 'danger' : undefined),
+      title: () => (store.mail.configured ? `Email the Receptionist work at ${store.mail.address}` : 'Give the Receptionist a mailbox, so you can email her work'),
+      run: () => openMailSetup(),
+    },
     { id: 'settings', icon: '⚙️', label: 'Settings', section: 'Office', run: showSettings },
     { id: 'help', icon: '❓', label: 'Controls', section: 'Office', key: 'H', run: openHelp },
     {
