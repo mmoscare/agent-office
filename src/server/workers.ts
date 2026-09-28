@@ -15,7 +15,7 @@ import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeMod
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { QUEUE_AGENT_DISALLOWED_TOOLS, stationBrief, type Checkout } from './stations.js';
-import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
+import { retoldTask, withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
 import { isBusy } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -355,7 +355,9 @@ export class WorkerManager {
     w.info.exitCode = undefined;
     const station = DESK_BY_ID.get(w.info.deskId)?.station;
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt;
+    // Any other worker with none (it never started, or its id was never reported) gets its task again
+    // rather than being told it has none. Not a board agent: its first request is long done.
+    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
