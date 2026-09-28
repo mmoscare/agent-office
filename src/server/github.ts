@@ -487,6 +487,7 @@ export class GitHub {
           additions: p.additions ?? 0,
           deletions: p.deletions ?? 0,
           checks: checksOf(p.statusCheckRollup),
+          mergeable: p.mergeable ?? 'UNKNOWN',
           body: String(p.body ?? '').slice(0, 4000),
           closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
         }));

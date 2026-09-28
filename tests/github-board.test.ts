@@ -88,6 +88,9 @@ test('PRs retain merge/closed states, check summary and closing links; open pagi
     assert.match(gql, /statusCheckRollup \{ state \}/);
     // Unshipped work matches a merged PR to its branch by the head commit.
     assert.match(gql, /\bheadRefOid\b/);
+    // Conflicts are asked of open PRs only (the board's ⚔️ Conflicts pill).
+    assert.match(gql.slice(0, gql.indexOf('pageInfo')), /\bmergeable\b/);
+    assert.doesNotMatch(gql.slice(gql.indexOf('pageInfo')), /\bmergeable\b/);
     assert.doesNotMatch(gql, /contexts|checkRuns/);
     assert.match(gql, calls ? /first:50/ : /first:100/);
     const nodes = Array.from({ length: calls ? 50 : 100 }, (_, i) => item(calls * 100 + i));
