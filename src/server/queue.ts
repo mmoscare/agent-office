@@ -35,7 +35,8 @@ export const DEFAULT_MAX_WORKERS = 3;
 const MAX_TASKS = 100;
 const PUMP_MS = 10_000;
 /** A worker in one of these states holds a slot under the worker limit. */
-const BUSY = new Set<WorkerStatus>(['starting', 'idle', 'working', 'needs_input']);
+// Stopped turns still own their queue slot until resumed or explicitly dismissed.
+const BUSY = new Set<WorkerStatus>(['starting', 'idle', 'working', 'needs_input', 'paused', 'interrupted']);
 /** A worker in one of these states is finished with its task (and can make room for the next one). */
 const FINISHED = new Set<WorkerStatus>(['done', 'exited', 'offline']);
 

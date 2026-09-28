@@ -81,8 +81,10 @@ test('approval dismissal clears needs_input even without a matching post-tool ho
   await f.screen(working);
   assert.equal(f.w.info.status, 'working');
   f.hook('Interrupt');
+  await f.screen(approval);
+  assert.equal(f.w.info.status, 'interrupted', 'stale controls cannot undo cancellation');
   await f.screen('Task interrupted\r\n› Send a message\r\n? for shortcuts');
-  assert.equal(f.w.info.status, 'done');
+  assert.equal(f.w.info.status, 'interrupted');
 });
 
 test('old stuck alerts clear, while other providers retain their status', async t => {
