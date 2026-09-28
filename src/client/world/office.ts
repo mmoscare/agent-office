@@ -29,7 +29,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1759,6 +1759,23 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   seatable(bossChair, 'boss-chair', 1.2, interactables);
   // Clicking the screen is using the chair: sit down, then play.
   screen.userData.interact = bossChair.userData.interact;
+  // The office's ledger: every cost of running it, open on click (ui/ledger.ts).
+  const book = new THREE.Group();
+  const leather = toon('#1b4332');
+  const gold = toon('#e9c46a');
+  book.add(mesh(box(0.34, 0.012, 0.46), leather, 0, 0.006, 0));
+  book.add(mesh(box(0.32, 0.05, 0.44), toon('#fdf6e3'), 0.01, 0.037, 0, false));
+  book.add(mesh(box(0.34, 0.012, 0.46), leather, 0, 0.068, 0));
+  book.add(mesh(box(0.03, 0.074, 0.46), leather, -0.17, 0.037, 0));
+  for (const bz of [-0.15, 0.15]) book.add(mesh(box(0.35, 0.076, 0.025), gold, 0, 0.037, bz, false));
+  book.add(mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 20), gold, 0.02, 0.076, 0, false));
+  // Keep it clear of the To Do Next binder on the left side of the desk.
+  book.position.set(0.8, 0.83, -0.22);
+  book.rotation.y = 0.35;
+  desk.add(book);
+  const ledger: Interactable = { kind: 'ledger', x: deskX + 0.8, z: deskZ - 0.22, y: floorY, radius: 1.3 };
+  interactables.push(ledger);
+  book.userData.interact = ledger;
   desk.position.set(deskX, floorY, deskZ);
   group.add(desk);
   colliders.push({ minX: deskX - 1.3, maxX: deskX + 1.3, minZ: deskZ - 0.6, maxZ: deskZ + 0.6, bottom: floorY, top: floorY + 0.8 });
