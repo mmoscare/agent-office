@@ -11,6 +11,7 @@ import type { DrinkId } from './rooftop.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
+import type { MailState } from './mail.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -1035,6 +1036,8 @@ export type ClientMsg =
   /** Forget the finished tasks. */
   | { t: 'queue.clear' }
   | { t: 'queue.limit'; maxWorkers: number }
+  /** Your tab went into the background (or came back): the Receptionist emails "needs you" alerts only when nobody is really here. */
+  | { t: 'presence'; away: boolean }
   /** A note into the 📥 in-tray, written here in the office. */
   | { t: 'inbox.note'; title?: string; text: string }
   /** Put a dealt-with tray item away in the tray's archive. */
@@ -1155,6 +1158,8 @@ export type ServerMsg =
       sky: SkyState;
       /** Halloween or Christmas decorations, all over the building, or none. */
       theme: ThemeState;
+      /** The Receptionist's mailbox: the same on every floor. */
+      mail: MailState;
     } & FloorView)
   /** You arrived on another floor: everything on it, replacing the last one's, and where everyone is now. */
   | ({ t: 'floor.enter'; peers: PeerInfo[] } & FloorView)
@@ -1226,6 +1231,8 @@ export type ServerMsg =
   | { t: 'plans'; state: PlansState }
   /** The floor's 📥 in-tray changed. */
   | { t: 'inbox'; state: InboxState }
+  /** The Receptionist's mailbox changed: set up, checked, broken, fixed. */
+  | { t: 'mail'; state: MailState }
   | { t: 'meeting'; state: MeetingState }
   | { t: 'notify'; state: NotifyState }
   | { t: 'machine'; state: MachineState }

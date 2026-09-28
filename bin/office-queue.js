@@ -11,7 +11,9 @@ const USAGE = `Usage:
   office-queue list                                  what's on the queue: id, status, title, worker, PR
   office-queue add --title "…" [--issue 12] <<'EOF'  add a task, its prompt on stdin (or --prompt "…");
   …the prompt…                                       prints the new task's id; --plan <id> links it to
-  EOF                                                a To Do Next item, which moves along as it runs
+  EOF                                                a To Do Next item, which moves along as it runs;
+                                                     --mail <tray item> emails that item's sender when
+                                                     it's done
   office-queue remove <id>                           take a waiting task off`;
 
 /** A mistake in how the command was called: the usage is shown with it. */
@@ -24,7 +26,7 @@ const TIMEOUT_MS = 15_000;
 
 /**
  * What the command line asks for:
- * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', title, issue?, plan?, prompt? } | { cmd: 'remove', id }.
+ * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', title, issue?, plan?, mail?, prompt? } | { cmd: 'remove', id }.
  * @param {string[]} argv the arguments after the command's name
  */
 export function parseArgs(argv) {
@@ -40,13 +42,13 @@ export function parseArgs(argv) {
     return { cmd: 'remove', id: rest[0] };
   }
   if (cmd !== 'add') throw new UsageError(`Unknown command: ${cmd}`);
-  /** @type {{ cmd: 'add', title?: string, issue?: number, plan?: string, prompt?: string }} */
+  /** @type {{ cmd: 'add', title?: string, issue?: number, plan?: string, mail?: string, prompt?: string }} */
   const out = { cmd: 'add' };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     const eq = arg.indexOf('=');
     const flag = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
-    if (flag !== '--title' && flag !== '--issue' && flag !== '--plan' && flag !== '--prompt') {
+    if (flag !== '--title' && flag !== '--issue' && flag !== '--plan' && flag !== '--mail' && flag !== '--prompt') {
       throw new UsageError(arg.startsWith('-') ? `Unknown option for add: ${flag}` : `Unexpected argument: ${arg} (quote the title, and give the prompt on stdin or with --prompt)`);
     }
     let value;
@@ -58,6 +60,9 @@ export function parseArgs(argv) {
     else if (flag === '--plan') {
       if (!value.trim()) throw new UsageError('--plan takes a To Do Next item id (see office-plans list)');
       out.plan = value.trim();
+    } else if (flag === '--mail') {
+      if (!value.trim()) throw new UsageError('--mail takes the in-tray item the email came in as (see office-inbox list)');
+      out.mail = value.trim();
     } else {
       const n = /^#?(\d+)$/.exec(value.trim());
       if (!n || Number(n[1]) < 1) throw new UsageError(`--issue takes an issue number, e.g. --issue 12 (got ${value})`);
@@ -105,7 +110,7 @@ export function buildRequest(cmd, office, prompt) {
   if (!text) {
     throw new UsageError(`The task needs a prompt: pipe it in (office-queue add --title "…" <<'EOF' … EOF) or pass --prompt "…"`);
   }
-  const body = { title: cmd.title, prompt: text, ...(cmd.issue !== undefined ? { issue: cmd.issue } : {}), ...(cmd.plan !== undefined ? { plan: cmd.plan } : {}) };
+  const body = { title: cmd.title, prompt: text, ...(cmd.issue !== undefined ? { issue: cmd.issue } : {}), ...(cmd.plan !== undefined ? { plan: cmd.plan } : {}), ...(cmd.mail !== undefined ? { mail: cmd.mail } : {}) };
   return { method: 'POST', url: url.href, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) };
 }
 
@@ -208,7 +213,8 @@ export async function main(argv, io = {}) {
     else {
       const task = res.body?.task ?? {};
       out(task.id ?? '');
-      err(`Queued “${task.title ?? cmd.title}” (${task.status ?? 'queued'}${cmd.issue !== undefined ? `, issue #${cmd.issue}` : ''}${cmd.plan !== undefined ? `, To Do Next item ${cmd.plan}` : ''}).`);
+      err(`Queued “${task.title ?? cmd.title}” (${task.status ?? 'queued'}${cmd.issue !== undefined ? `, issue #${cmd.issue}` : ''}${cmd.plan !== undefined ? `, To Do Next item ${cmd.plan}` : ''}${cmd.mail !== undefined && !res.body?.warning ? ', its sender is emailed when it’s done' : ''}).`);
+      if (res.body?.warning) err(`Note: ${res.body.warning}.`);
     }
     return 0;
   } catch (e) {

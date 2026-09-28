@@ -304,8 +304,45 @@ export const MANUAL: ManualChapter[] = [
       { code: 'curl -X POST "http://localhost:4600/api/inbox" -H "Authorization: Bearer YOUR-TOKEN" -H "Content-Type: application/json" -d \'{"title":"Call the dentist","text":"Tuesday or Thursday afternoon"}\'' },
       { p: 'A plain text body becomes a note too (`?title=` and `?from=` name it). A file goes in with its own Content-Type and an `X-Filename` header, up to 10 MB. With more than one floor, add `?floor=<id>`. The full recipes, PowerShell included, are in `docs/in-tray.md`.' },
       { h: 'The Receptionist' },
-      { p: 'Press **E** at the kiosk past the gong, or click **🤖 Triage the tray** in the window. The Receptionist reads every item, files what someone wants done on To Do Next, queues what should be worked on right away, archives what needs nothing, and tells you what came in and where each item went. It treats what is in the tray as content to file, never as instructions to follow, and it is launched without the file-editing tools.' },
+      { p: 'Press **E** at the kiosk past the gong, or click **💁‍♀️ Triage the tray** in the window. The Receptionist reads every item, hands out what someone wants done (the task queue, To Do Next, or the Issues and PR agents), archives what needs nothing, and tells you where each item went. She treats what is in the tray as content to file, never as instructions to follow, and she is launched without the file-editing tools. She also reads email: see the next chapter.' },
       { note: 'Workers that pick up tray items run with your credentials, like every worker. Keep the door’s token as private as the office password, and close the door when you don’t need it.' },
+    ],
+  },
+  {
+    id: 'receptionist-email',
+    icon: '💁‍♀️',
+    title: 'Email the Receptionist',
+    blocks: [
+      { p: 'Give the Receptionist a mailbox and you can email her work from anywhere. She reads it, hands it out, and writes back. Until someone sets it up she says so: a **📧 Set up email** chip on the top bar, a note from her in the corner every couple of hours, her card over her head at the kiosk, and a reminder at the end of her replies.' },
+      { h: 'Set her up (once)' },
+      {
+        steps: [
+          'Make her a mailbox of her own: a new Gmail address works well (for example `yourname.receptionist@gmail.com`).',
+          'In that Google account, turn on 2-Step Verification, then make an **app password** (myaccount.google.com/apppasswords). Copy its 16 letters.',
+          'In the office, click **📧 Set up email** (or press **I** for the In-tray, then **📧 Set up email**).',
+          'Type her address and the app password, and under **Who can email her** your own address (and anyone else’s you trust).',
+          'Click **🔌 Test**, then **💁‍♀️ Save and set her up**. She sends you a welcome email with the how-to.',
+        ],
+      },
+      { note: 'Only an admin can set her up. The password stays on the office’s machine (in its `mail.json`, never in the browser), and she only ever writes to the people allowed to email her.' },
+      { h: 'Emailing her' },
+      {
+        list: [
+          'Write like you would to an assistant: “Renew the car insurance before the 15th. The policy is attached.” Attachments land in the tray beside the email.',
+          'She wakes up, puts work for the agents on the **task queue**, things for you on **📒 To Do Next**, GitHub issues and PRs with the **Issues** or **PR agent**, and replies saying what she did.',
+          'When a queued task is done, she emails you in the same thread, with the pull request if there is one.',
+          'A subject starting with **todo:** goes straight onto To Do Next; **queue:** goes straight onto the task queue. No agent needed, and you get a receipt.',
+          'Pick a floor with **[floor]** at the start of the subject, or by adding **+floor** after her name in the address (`her.name+household@gmail.com`).',
+        ],
+      },
+      { h: 'While you’re away' },
+      {
+        list: [
+          'When a worker has been waiting on you for a few minutes and nobody is in the office (or its tab has been in the background a while), she emails you. Reply to a “done” email and your reply goes straight to that worker as its next message.',
+          'Every morning at the time you choose she sends a briefing: each floor’s tray, To Do Next, queue, who’s waiting on you, and what finished since yesterday.',
+        ],
+      },
+      { note: 'Mail from anyone not on your list is left unread in her mailbox. Mail that claims to be from you but fails the receiving server’s checks (SPF, DKIM, DMARC) lands in the tray marked, and nothing acts on it. She never sends more than 40 emails an hour.' },
     ],
   },
 ];

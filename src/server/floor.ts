@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, type QueueState, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import type { PlansState } from '../shared/plans.js';
+import type { MailBrief } from '../shared/mail.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -51,6 +53,12 @@ export interface FloorContext {
   peers(floor: Floor): PeerInfo[];
   /** Whether the office's in-tray door is open (see inbox.ts): one door for every floor. */
   inboxDoor(): boolean;
+  /** The Receptionist's mailbox (see mailroom.ts): it hears about finished tasks and To Do Next items, to email whoever asked. */
+  mail?: {
+    brief(): MailBrief;
+    queueChanged(floor: Floor, state: QueueState): void;
+    plansChanged(floor: Floor, state: PlansState): void;
+  };
 }
 
 /** Boards on a floor nobody is on, with nothing running, are asked GitHub about this seldom. */
@@ -176,10 +184,16 @@ export class Floor {
       },
     );
     // The 📒 To Do Next board: before the queue, which moves its items along as their tasks run.
-    this.plans = new Plans(dataDir, (state) => ctx.emit(this, { t: 'plans', state }));
+    this.plans = new Plans(dataDir, (state) => {
+      ctx.emit(this, { t: 'plans', state });
+      ctx.mail?.plansChanged(this, state);
+    });
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
-      update: (state) => ctx.emit(this, { t: 'queue', state }),
+      update: (state) => {
+        ctx.emit(this, { t: 'queue', state });
+        ctx.mail?.queueChanged(this, state);
+      },
       toast: (text, level) => ctx.toast(this, text, level),
       claimIssue: (issue, repo) => this.github.claim(issue, repo),
       refreshGitHub: () => void this.github.refresh(),
@@ -236,6 +250,8 @@ export class Floor {
 
     // On a floor that's a folder of checkouts, the board agents are told which ones.
     this.workers.checkouts = () => this.github.checkouts.map((c) => ({ repo: c.repo!, dir: c.rel! }));
+    // The Receptionist is told how her mailbox stands.
+    this.workers.stationContext = () => ({ mail: ctx.mail?.brief() });
     this.workspaceChanges = new WorkspaceChanges(def.dir, id => this.workers.get(id), {
       state: (state, ids) => ctx.changes(state, ids),
       toast: (text, level) => ctx.toast(this, text, level),

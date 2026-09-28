@@ -278,7 +278,7 @@ export function mountHud(actions: HudAction[], settings: Settings, save: () => v
     },
     true,
   );
-  for (const t of ['workers', 'peers', 'issues', 'pulls', 'services', 'queue', 'meeting', 'upgrade', 'me', 'floors'] as Topic[]) store.on(t, render);
+  for (const t of ['workers', 'peers', 'issues', 'pulls', 'services', 'queue', 'meeting', 'upgrade', 'me', 'floors', 'mail', 'inbox', 'plans'] as Topic[]) store.on(t, render);
   applyPanels();
   render();
   mountPush(render);
