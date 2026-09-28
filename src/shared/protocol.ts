@@ -2,6 +2,7 @@
 
 import type { Look } from './avatar.js';
 import type { WorkerWorkspace, WorkspaceRequest } from './workspaces.js';
+import type { RosterEntry } from './roster.js';
 import type { CabinetFrame, CabinetState, CabinetView } from './cabinet.js';
 import type { DecorPlacement, Decoration } from './decor.js';
 import type { DogState } from './dog.js';
@@ -18,6 +19,8 @@ export type WorkerStatus =
   | 'idle' // waiting for a first prompt
   | 'working' // agent is busy
   | 'needs_input' // permission prompt / question open
+  | 'paused' // stopped making progress without a completion hook
+  | 'interrupted' // provider reported a cancelled turn; terminal is still alive
   | 'done' // finished its turn
   | 'exited' // process ended (can be resumed if it had a session)
   | 'offline'; // restored from disk after a server restart; resumable
@@ -64,6 +67,13 @@ export interface PullRequestRef {
   state?: string;
 }
 
+/** Work explicitly handed to an agent from a PR, separate from its own branch's PR. */
+export interface PullWork {
+  number: number;
+  url: string;
+  action: 'comments' | 'conflicts' | 'review' | 'ask';
+}
+
 /** Live Git HEAD information for one of a worker's checkout folders. */
 export interface WorkerBranch {
   /** Set when the desk has multiple repository worktrees. */
@@ -108,6 +118,7 @@ export interface WorkerInfo {
   branches?: WorkerBranch[];
   /** The worktree branch's PR, whether opened in the office or elsewhere. */
   pr?: PullRequestRef;
+  pullWork?: PullWork & { assignedAt: number };
   /** True while the branch is being pushed and its pull request opened. */
   prOpening?: boolean;
   title?: string;
@@ -185,6 +196,8 @@ export interface UsageState {
   today: Usage;
   /** The day `today` covers, YYYY-MM-DD on the office's machine. */
   day: string;
+  /** Spend over the last 30 days, and over how many days (1-30) since the first one with any. */
+  month?: { cost: number; days: number };
   /** Daily budget in USD (--budget), when one is set. */
   budget?: number;
   /** New hires are refused for the rest of the day once the budget is spent (--budget-pause). */
@@ -319,6 +332,7 @@ export interface GhPull extends GhWhere {
   labels: { name: string; color: string }[];
   reviewDecision: string;
   headRefName: string;
+  headRefOid?: string;
   baseRefName: string;
   createdAt: string;
   updatedAt: string;
@@ -346,6 +360,8 @@ export interface QueueTask {
   repo?: string;
   /** The 📒 To Do Next item it's for, when it is: the office moves that to Progress and Finished as the task runs. */
   plan?: string;
+  /** Managed repositories to provision when this task starts (also retained for retry/restart). */
+  workspace?: WorkspaceRequest;
   title: string;
   prompt: string;
   addedBy: string;
@@ -363,6 +379,48 @@ export interface QueueTask {
   error?: string;
   /** The pull request that closes the issue, or was opened from the worker's branch. */
   pr?: { number: number; url: string; state: string; title: string };
+  /** Finished without a PR, but its branch still holds work: files not committed, commits no PR has (see server/unshipped.ts). */
+  unshipped?: { dirty: number; commits: number };
+}
+
+/** An office branch holding work that no open or merged pull request carries (see server/unshipped.ts). */
+export interface UnshippedItem {
+  /** Names it to the server, for a recovery task. */
+  key: string;
+  branch: string;
+  /** The repository's folder relative to the floor, on a floor that's a folder of several. */
+  repository?: string;
+  /** Its worktree folder relative to the floor; unset when only the branch is left. */
+  path?: string;
+  /** The branch its work should land on. */
+  base?: string;
+  workerId?: string;
+  workerName?: string;
+  /** Whether that worker is mid-turn, still at its desk, or gone home. */
+  worker: 'active' | 'idle' | 'gone';
+  taskId?: string;
+  taskTitle?: string;
+  /** Files with uncommitted changes, new ones included. */
+  dirty: number;
+  /** Commits not on the base branch (nor patch-equivalent to any there). */
+  commits: number;
+  /** Commits on no remote. */
+  unpushed: number;
+  added?: number;
+  deleted?: number;
+  /** Newest commit or changed file, ms. */
+  modifiedAt?: number;
+  /** 'unknown' when GitHub couldn't be asked (rate-limited, offline): it may have a PR after all. */
+  pr: 'none' | 'unknown';
+}
+
+export interface UnshippedState {
+  items: UnshippedItem[];
+  scannedAt: number;
+  scanning: boolean;
+  error?: string;
+  /** Why some PR statuses are unknown. */
+  prNote?: string;
 }
 
 export interface QueueState {
@@ -667,6 +725,8 @@ export interface FloorInfo {
   cloning?: boolean;
   addedBy: string;
   addedAt: number;
+  /** Filed in the basement's Back Office: grouped apart in the elevator and floor menu, an ordinary floor otherwise. */
+  backOffice?: boolean;
   /**
    * For the elevator panel: who's there and what they're up to. `workers` counts the ones hired onto
    * desks, bean bags and the meeting room's table, not the board agents at their kiosks.
@@ -676,6 +736,8 @@ export interface FloorInfo {
   /** Workers waiting on someone: input, an unread completion, or an unread failure. */
   waiting: number;
   attention: WorkerAttention[];
+  /** Everyone working there and what they're on, for the queue agent's clipboard (see shared/roster.ts). */
+  roster?: RosterEntry[];
   people: number;
 }
 
@@ -721,6 +783,8 @@ export interface FloorView {
   whiteboard: WhiteboardView;
   /** The meeting room: who's meeting about what, and the meetings before. */
   meeting: MeetingState;
+  /** Office branches with work no pull request carries (the PR board's Unshipped work column). */
+  unshipped?: UnshippedState;
   /** The 📒 To Do Next board: the floor's own to-do list. */
   plans: PlansState;
   /** The 📥 in-tray: what came in from outside. */
@@ -994,7 +1058,7 @@ export type ClientMsg =
    * With `issue`, the worker is there for that GitHub issue: it's assigned on GitHub (so it moves to In progress) and taken off the queue.
    * With `plan`, it's there for that 📒 To Do Next item, which moves to Progress (and to Finished when the worker finishes its turn).
    */
-  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number; plan?: string }
+  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number; plan?: string; pullWork?: PullWork | null }
   | { t: 'worker.workspace.add'; workerId: string; workspace: WorkspaceRequest }
   | { t: 'worker.resume'; workerId: string }
   | { t: 'worker.kill'; workerId: string; cleanup?: WorktreeCleanup }
@@ -1003,7 +1067,7 @@ export type ClientMsg =
   | { t: 'worker.attach'; workerId: string }
   | { t: 'worker.detach'; workerId: string }
   /** With `issue` (or `plan`), the prompt hands the worker that GitHub issue (or To Do Next item), which is taken as for worker.spawn. */
-  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number; plan?: string }
+  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number; plan?: string; pullWork?: PullWork | null }
   /**
    * A prompt for the agent standing by a board (`deskId` is its kiosk, see STATIONS in layout). It's
    * typed into its session, which is woken up first if it's asleep, or hired there when nobody is.
@@ -1025,6 +1089,11 @@ export type ClientMsg =
   | { t: 'side.detach'; workerId: string }
   | { t: 'side.input'; workerId: string; data: string }
   | { t: 'side.resize'; workerId: string; cols: number; rows: number }
+  /** A standalone shell owned by this browser connection; fresh replaces it in the current floor. */
+  | { t: 'console.attach'; cols: number; rows: number; fresh?: boolean }
+  | { t: 'console.detach' }
+  | { t: 'console.input'; data: string }
+  | { t: 'console.resize'; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
   | { t: 'gh.merge'; number: number; repo?: string; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
@@ -1046,6 +1115,10 @@ export type ClientMsg =
   /** Forget the finished tasks. */
   | { t: 'queue.clear' }
   | { t: 'queue.limit'; maxWorkers: number }
+  /** Look through the office's branches for work without a PR again; answered with `unshipped`. */
+  | { t: 'unshipped.scan' }
+  /** Queue a task for a fresh worker to recover that branch's work into a PR (UnshippedItem.key). */
+  | { t: 'unshipped.recover'; key: string }
   /** A note into the 📥 in-tray, written here in the office. */
   | { t: 'inbox.note'; title?: string; text: string }
   /** Put a dealt-with tray item away in the tray's archive. */
@@ -1130,7 +1203,9 @@ export type ClientMsg =
   /** The repositories that could become a floor; answered with `floor.repos`. */
   | { t: 'floor.repos'; refresh?: boolean }
   /** Clone a repository and make it a new floor; answered with `floor.added` once it's there. */
-  | { t: 'floor.add'; repo: string }
+  | { t: 'floor.add'; repo: string; backOffice?: boolean }
+  /** File a floor in the basement's Back Office (`on`), or bring it back up to the main floors. */
+  | { t: 'floor.backOffice'; floor: string; on: boolean }
   /** Dress the building up for a holiday, take the decorations down ('off'), or follow the calendar ('auto'). */
   | { t: 'theme.set'; pick: ThemePick }
   /** Where new floors are cloned from now on (admins only); '' goes back to the default. */
@@ -1187,6 +1262,7 @@ export type ServerMsg =
   | { t: 'worker.update'; worker: WorkerInfo }
   | { t: 'worker.remove'; workerId: string }
   | { t: 'worker.worktree'; workerId: string; state: WorktreeState }
+  | { t: 'unshipped'; state: UnshippedState }
   | { t: 'screen'; workerId: string; cols: number; rows: number; lines: Record<number, Run[]>; full: boolean; cursor: [number, number] }
   | { t: 'term.snapshot'; workerId: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; workerId: string; data: string }
@@ -1196,6 +1272,10 @@ export type ServerMsg =
   | { t: 'side.data'; workerId: string; data: string }
   /** The side shell couldn't start. */
   | { t: 'side.error'; workerId: string; error: string }
+  | { t: 'console.snapshot'; data: string; cols: number; rows: number; cwd: string }
+  | { t: 'console.data'; data: string }
+  | { t: 'console.exited' }
+  | { t: 'console.error'; error: string }
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */

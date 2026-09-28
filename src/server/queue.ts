@@ -1,3 +1,4 @@
+import type { WorkspaceRequest } from '../shared/workspaces.js';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -5,13 +6,15 @@ import { normalizeRepo, sameRepo } from '../shared/floors.js';
 import { ghRef, isAgentEffort, isAgentProvider, isClaudeModel, type AgentEffort, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { CHECKPOINT_NOTE } from './handoff.js';
+import { RESTART_ERROR } from '../shared/task-status.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
 export interface QueueWorkers {
   readonly defaultProvider: AgentProvider;
   list(): WorkerInfo[];
   deskOccupied(deskId: string): boolean;
-  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort): WorkerInfo | string;
+  spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort, meeting?: undefined, workspace?: WorkspaceRequest): WorkerInfo | string;
   /** Resolves with a line about what became of the worker's worktree. */
   kill(id: string): Promise<{ note?: string; error?: string }>;
 }
@@ -29,6 +32,8 @@ export interface QueueEvents {
   room?(): number;
   /** The last task on the queue just finished, done: nothing is left queued or running. */
   emptied(): void;
+  /** A task just finished, however it went: time to look at what its branch was left holding. */
+  finished?(): void;
   /** The 📒 To Do Next item a task is for got its worker: it's in progress, by that worker (see plans.ts). */
   startPlan?(plan: string, worker: { id: string; name: string }, task: string): void;
   /** That task ended, one way or another. */
@@ -39,7 +44,8 @@ export const DEFAULT_MAX_WORKERS = 3;
 const MAX_TASKS = 100;
 const PUMP_MS = 10_000;
 /** A worker in one of these states holds a slot under the worker limit. */
-const BUSY = new Set<WorkerStatus>(['starting', 'idle', 'working', 'needs_input']);
+// Stopped turns still own their queue slot until resumed or explicitly dismissed.
+const BUSY = new Set<WorkerStatus>(['starting', 'idle', 'working', 'needs_input', 'paused', 'interrupted']);
 /** A worker in one of these states is finished with its task (and can make room for the next one). */
 const FINISHED = new Set<WorkerStatus>(['done', 'exited', 'offline']);
 
@@ -82,7 +88,7 @@ export class TaskQueue {
     return this.maxWorkers;
   }
 
-  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, effort?: AgentEffort, repo?: string, plan?: string): string | undefined {
+  add(prompt: string, by: string, title?: string, issue?: number, provider: AgentProvider = this.workers.defaultProvider, model?: string, effort?: AgentEffort, repo?: string, plan?: string, workspace?: WorkspaceRequest): string | undefined {
     if (!isAgentProvider(provider) || (provider === 'custom' && this.workers.defaultProvider !== 'custom')) return 'Unknown agent provider';
     const modelError = validateWorkerModel('agent', provider, model);
     if (modelError) return modelError;
@@ -102,6 +108,7 @@ export class TaskQueue {
       issue,
       repo,
       plan: plan || undefined,
+      workspace,
       title: (title?.trim() || firstLine(clean)).slice(0, 120),
       prompt: clean,
       addedBy: by,
@@ -154,7 +161,7 @@ export class TaskQueue {
     if (t.issue !== undefined && this.tasks.some((x) => x !== t && sameIssue(x, t.issue!, t.repo) && x.status !== 'done')) return `Issue ${ghRef({ number: t.issue, repo: t.repo })} is already on the queue`;
     if (t.plan && this.tasks.some((x) => x !== t && x.plan === t.plan && x.status !== 'done')) return 'That To Do Next item is already on the queue';
     this.tasks.splice(this.tasks.indexOf(t), 1);
-    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, plan: t.plan, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
+    const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, plan: t.plan, workspace: t.workspace, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
     this.changed();
     this.pump();
@@ -203,6 +210,23 @@ export class TaskQueue {
       const pr = { number: match.number, url: match.url, state: match.isDraft ? 'DRAFT' : match.state, title: match.title };
       if (t.pr && t.pr.number === pr.number && t.pr.state === pr.state && t.pr.title === pr.title) continue;
       t.pr = pr;
+      changed = true;
+    }
+    if (changed) this.changed();
+  }
+
+  /**
+   * The office's branches holding work no PR carries, by branch (see unshipped.ts): each finished
+   * task without a PR is flagged while its branch is in there, and unflagged once it isn't.
+   */
+  onUnshipped(byBranch: Map<string, { dirty: number; commits: number }>) {
+    let changed = false;
+    for (const t of this.tasks) {
+      if (t.status !== 'done' || !t.branch) continue;
+      const u = byBranch.get(t.branch);
+      const next = u && (u.dirty || u.commits) ? { dirty: u.dirty, commits: u.commits } : undefined;
+      if (next?.dirty === t.unshipped?.dirty && next?.commits === t.unshipped?.commits) continue;
+      t.unshipped = next;
       changed = true;
     }
     if (changed) this.changed();
@@ -265,6 +289,7 @@ export class TaskQueue {
       // The worker most likely just opened the PR; go and link it.
       this.events.refreshGitHub();
     } else if (outcome === 'exited') this.events.toast(`📋 ${who} stopped before finishing ${label(t)} — requeue it from the queue board`, 'warn');
+    this.events.finished?.();
     return outcome === 'done';
   }
 
@@ -314,7 +339,7 @@ export class TaskQueue {
       if (room < 0) break;
       const desk = (room > 0 ? this.freeDesk() : undefined) ?? this.recycleDesk();
       if (!desk) break;
-      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree ? WORKTREE_NOTE : ''), this.useWorktree, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort);
+      const r = this.workers.spawn(desk, `${t.addedBy} (queue)`, t.prompt + (this.useWorktree && !t.workspace ? WORKTREE_NOTE + CHECKPOINT_NOTE : ''), this.useWorktree && !t.workspace, 'agent', t.provider ?? this.workers.defaultProvider, t.model, t.effort, undefined, t.workspace);
       changed = true;
       if (typeof r === 'string') {
         t.status = 'done';
@@ -374,6 +399,7 @@ export class TaskQueue {
           effort: provider === 'claude' && isAgentEffort(s.effort) ? s.effort : undefined,
           issue: typeof s.issue === 'number' ? s.issue : undefined,
           repo: typeof s.issue === 'number' ? normalizeRepo(s.repo) : undefined,
+          workspace: s.workspace,
           plan: typeof s.plan === 'string' && s.plan ? s.plan : undefined,
           title: s.title,
           prompt: s.prompt,
@@ -388,6 +414,7 @@ export class TaskQueue {
           outcome: s.outcome,
           error: s.error,
           pr: s.pr,
+          unshipped: s.unshipped && Number.isFinite(s.unshipped.dirty) && Number.isFinite(s.unshipped.commits) ? { dirty: s.unshipped.dirty, commits: s.unshipped.commits } : undefined,
         };
         // Whatever was running died with the old office process; its worker comes back asleep at best.
         // One whose agent never reported a session is woken with its task again (see WorkerManager.resume),
@@ -397,7 +424,7 @@ export class TaskQueue {
           t.status = 'done';
           t.outcome = 'exited';
           t.finishedAt = Date.now();
-          t.error = 'The office restarted while it was running';
+          t.error = RESTART_ERROR;
         }
         this.tasks.push(t);
       }

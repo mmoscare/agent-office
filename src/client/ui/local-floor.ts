@@ -2,7 +2,8 @@ import type { LocalFolderListing } from '../../shared/local-folders';
 import { h } from './dom';
 
 /** Kept separate from the GitHub picker so upstream's clone flow can evolve independently. */
-export function localFloorPicker(onAdded: (floor: string) => void, onBusy: (busy: boolean) => void) {
+/** `backOffice` says whether the new floor is filed in the basement's Back Office. */
+export function localFloorPicker(onAdded: (floor: string) => void, onBusy: (busy: boolean) => void, backOffice: () => boolean = () => false) {
   let disposed = false;
   let adding = false;
   let browsing: AbortController | undefined;
@@ -65,7 +66,7 @@ export function localFloorPicker(onAdded: (floor: string) => void, onBusy: (busy
     button.textContent = 'Opening…';
     error.textContent = '';
     try {
-      const response = await fetch('/api/floors/local', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir }) });
+      const response = await fetch('/api/floors/local', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dir, backOffice: backOffice() }) });
       const data = await response.json() as { floor?: string; error?: string };
       if (!response.ok || !data.floor) throw new Error(data.error ?? 'Could not open this folder');
       if (!disposed) onAdded(data.floor);
