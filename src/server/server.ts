@@ -26,6 +26,7 @@ import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
+import { PlansError } from './plans.js';
 import { Sky } from './sky.js';
 import { Themes } from './theme.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
@@ -734,7 +735,24 @@ export async function startServer(cfg: Config) {
           return send(res, 400, { error: (err as Error).message });
         }
       }
-      if (p === '/api/workspace/repositories' && req.method === 'GET') {
+      if (p === '/api/plans') {
+        const floor = floors.get(url.searchParams.get('floor') ?? '');
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        res.setHeader('cache-control', 'no-store');
+        try {
+          if (req.method === 'GET') return send(res, 200, floor.plans.read());
+          if (req.method !== 'POST') return send(res, 405, { error: 'Use GET or POST' });
+          if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+          let body: unknown;
+          try { body = JSON.parse(await readBody(req, 128 * 1024)); }
+          catch { return send(res, 400, { error: 'The plan could not be read. Keep it under 10,000 characters.' }); }
+          return send(res, 200, floor.plans.change(body));
+        } catch (error) {
+          if (error instanceof PlansError) return send(res, error.status, { error: error.message });
+          throw error;
+        }
+      }
+      if (p === '/api/workspace/repositories'  && req.method === 'GET') {
         const floor = floors.get(url.searchParams.get('floor') ?? '');
         if (!floor) return send(res, 404, { error: 'No such floor' });
         try { return send(res, 200, await workspaceRepositories(floor.dir)); }

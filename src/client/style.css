@@ -1022,3 +1022,29 @@ a.when:hover { text-decoration: underline; }
 .meeting-past summary { font-weight: 800; cursor: pointer; }
 .meeting-past ul { padding-left: 18px; margin: 6px 0 0; }
 .meeting-past li { margin: 6px 0; }
+
+
+/* The white binder on the boss's desk. */
+.plans-modal { width: min(1080px, 96vw); }
+.plans-modal header { display: flex; align-items: center; gap: 12px; }
+.plans-modal header h2 { flex: 1; }
+.plans-floor { font-weight: 800; margin: 0; }
+.plans-status { color: var(--muted); font-size: 13px; margin: 10px 0; }
+.plans-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
+.plans-add { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 18px; }
+.plans-modal textarea { width: 100%; resize: vertical; min-height: 70px; font: inherit; padding: 10px; border: 2px solid var(--ink); border-radius: 10px; box-sizing: border-box; }
+.plans-add textarea { flex: 1; }
+.plans-add .btn { white-space: nowrap; }
+.plans-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.plans-column { padding: 12px; background: #f0f2f5; border-radius: 12px; min-width: 0; }
+.plans-column[data-status=progress] { background: #fff3cf; }
+.plans-column[data-status=finished] { background: #e4f3e7; }
+.plans-column h3 { display: flex; justify-content: space-between; margin: 0 0 12px; font-size: 16px; }
+.plans-column h3 span { color: var(--muted); }
+.plans-empty { font-size: 13px; color: var(--muted); }
+.plan-card { background: white; border: 1px solid #cbd0d8; border-radius: 9px; padding: 12px; margin-bottom: 10px; }
+.plan-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 14px; }
+.plan-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-actions .btn, .plan-actions select { font-size: 12px; padding: 5px 8px; }
+.plan-actions select { border: 1px solid var(--ink); border-radius: 6px; background: white; font: inherit; max-width: 100%; }
+@media (max-width: 700px) { .plans-board { grid-template-columns: 1fr; } .plans-add { align-items: stretch; flex-direction: column; } }

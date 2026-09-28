@@ -17,6 +17,7 @@ import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { Plans } from './plans.js';
 import { MeetingRoom } from './meetings.js';
 import { Worktrees } from './worktrees.js';
 import { readProjectLogo, type ProjectLogo } from './project-logo.js';
@@ -91,6 +92,7 @@ export class Floor {
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
   readonly whiteboard: Whiteboard;
+  readonly plans: Plans;
   /** The meeting room, where workers work through a question together (see meetings.ts). */
   readonly meetings: MeetingRoom;
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
@@ -231,6 +233,7 @@ export class Floor {
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
+    this.plans = new Plans(dataDir);
     this.ready = this.workers.start();
 
     void this.github.refresh();

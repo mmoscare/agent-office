@@ -14,6 +14,7 @@ import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
+import { buildPlansBinder } from './plans-binder';
 
 export interface Collider {
   minX: number;
@@ -27,7 +28,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1708,6 +1709,13 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   plate.position.set(0, 0.5, -0.55);
   plate.rotation.y = Math.PI;
   desk.add(plate);
+  const binder = buildPlansBinder();
+  binder.position.set(-0.83, 0.83, 0.08);
+  binder.rotation.y = -0.12;
+  const plans: Interactable = { kind: 'plans', x: deskX - 0.83, y: floorY, z: deskZ + 0.08, radius: 1.8 };
+  binder.userData.interact = plans;
+  interactables.push(plans);
+  desk.add(binder);
   const bossChair = chair('#2b2d42');
   bossChair.scale.setScalar(1.2);
   bossChair.position.set(0, 0, 1.0);
