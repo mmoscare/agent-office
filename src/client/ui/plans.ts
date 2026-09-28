@@ -24,9 +24,9 @@ export function openPlans() {
   const controls = h('fieldset.plans-controls', {}, form, board);
   const el = h('div.modal.plans-modal', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'To Do Next' },
     h('header', {}, h('h2', {}, 'To Do Next'), refresh),
-    h('p.plans-floor', {}, info.name),
-    h('p.note', {}, 'Your plans for this folder or repo. Add a plan, then move it as you make progress.'),
-    status, error, controls);
+    h('div.body', {}, h('p.plans-floor', {}, info.name),
+      h('p.note', {}, 'Your plans for this folder or repo. Add a plan, then move it as you make progress.'),
+      status, error, controls));
 
   function render() {
     if (!state) return;

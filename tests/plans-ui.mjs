@@ -16,6 +16,7 @@ const floor = path.join(root, 'project');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 let host, browser;
+let hostErrors = '';
 try {
   mkdirSync(floor);
   git(floor, 'init', '-b', 'main');
@@ -33,9 +34,10 @@ try {
   const url = 'http://localhost:' + port;
   const password = randomUUID();
   host = spawn(process.execPath, [path.join(codeDir, 'personal/windows/host.mjs'), codeDir, floor, String(port)], {
-    cwd: codeDir, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'],
+    cwd: codeDir, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'],
     env: { ...process.env, AGENT_OFFICE_PASSWORD: password, AGENT_OFFICE_AGENT: process.execPath, AGENT_OFFICE_AGENT_ARGS: JSON.stringify(fixture) },
   });
+  host.stderr.on('data', data => { hostErrors = (hostErrors + data).slice(-4000); });
   let ready = false;
   for (let i = 0; i < 150; i++) {
     assert.equal(host.exitCode, null);
@@ -65,25 +67,23 @@ try {
   assert.equal((await fetch(url + '/api/plans?floor=' + floorId)).status, 401);
   assert.equal((await context.request.get(url + '/api/plans?floor=missing')).status(), 404);
   assert.equal((await context.request.post(url + '/api/plans?floor=' + floorId, { data: { revision: 0, action: 'add', text: 'Cross-origin' }, headers: { Origin: 'https://example.invalid' } })).status(), 403);
-  await page.evaluate(() => { window.requestAnimationFrame = () => 0; });
+  await page.evaluate(() => { window.__office.player.update = () => {}; window.__office.player.updateCamera = () => {}; });
   await pause(200);
   const binder = await page.evaluate(() => {
     const o = window.__office;
     const binder = o.office.group.getObjectByName('to-do-next-binder');
     const p = binder.getWorldPosition(binder.position.clone());
     o.player.pos.set(p.x, p.y - 0.83, p.z + 1.9);
-    o.player.yaw = 0;
     return { x: p.x, y: p.y, z: p.z, kind: binder.userData.interact.kind, children: binder.children.length };
   });
   assert.equal(binder.kind, 'plans');
   assert.ok(binder.children >= 7);
-  // Freeze the camera for an actual raycast click and a close-up of the binder on the desk.
+  // Hold the player still for an actual raycast click and a close-up of the binder on the desk.
   const point = await page.evaluate(() => {
     const o = window.__office;
-    o.renderer.setAnimationLoop(null);
     const b = o.office.group.getObjectByName('to-do-next-binder');
     const p = b.getWorldPosition(b.position.clone());
-    o.camera.position.set(p.x - 1.5, p.y + 2.2, p.z + 2.5);
+    o.camera.position.set(p.x - 1.5, p.y + 1.35, p.z + 2.0);
     o.camera.lookAt(p.x + .25, p.y, p.z);
     o.camera.updateMatrixWorld();
     o.renderer.render(o.scene, o.camera);
@@ -99,7 +99,7 @@ try {
   const open = async () => {
     await page.evaluate(() => document.exitPointerLock());
     await page.getByRole('button', { name: 'Menu', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'To Do Next', exact: true }).click();
+    await page.getByRole('menuitem', { name: /To Do Next/ }).click();
     await dialog.getByText('All plans saved', { exact: true }).waitFor();
   };
   const saved = () => dialog.getByText('Saved', { exact: true }).waitFor();
@@ -172,16 +172,16 @@ try {
   assert.equal(await dialog.locator('.plan-card').count(), 0);
   assert.equal(errors.length, 0, errors.join('\n'));
   await browser.close(); browser = null;
-  host.stdin.end('stop\n');
+  host.stdin.write('stop\n');
   await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Host did not stop')), 15000); host.once('exit', () => { clearTimeout(timer); resolve(); }); });
-  assert.equal(host.exitCode, 0);
+  assert.equal(host.exitCode, 0, hostErrors);
   const disk = JSON.parse(await (await import('node:fs/promises')).readFile(path.join(floor, '.agent-office/plans.json'), 'utf8'));
   assert.equal(disk.items.length, 3);
   console.log('PASS: desk binder click, add/edit/move/remove, reload persistence, failed-save draft recovery, stale-write protection, floor isolation, mobile layout, auth/origin checks, clean browser and graceful host stop.');
 } finally {
   if (browser) await browser.close();
   if (host && host.exitCode === null) {
-    host.stdin.end('stop\n');
+    host.stdin.write('stop\n');
     for (let i = 0; i < 100 && host.exitCode === null; i++) await pause(100);
     if (host.exitCode === null) host.kill();
   }
