@@ -15,7 +15,7 @@ import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeMod
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
-import { retoldTask, withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
+import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
 import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -119,6 +119,10 @@ interface Worker {
   namedAt: number;
   /** Bumped by /clear: a new conversation, so a new task. */
   taskEpoch: number;
+  /** Current provider/local turn; cancelled-turn completions are ignored after a new prompt. */
+  turnId?: string;
+  turnSeq: number;
+  cancelledTurns: Set<string>;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -718,6 +722,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         w.bootBlocked = false;
         w.info.action = undefined;
+        beginTurn(w, hookTurnId(payload?.turn_id));
         if (typeof payload?.prompt === 'string') {
           w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
           this.notePrompt(w, payload.prompt);
@@ -738,6 +743,7 @@ export class WorkerManager {
       case 'PostToolUse':
       case 'PostToolUseFailure':
         if (payload?.is_interrupt && !payload?.agent_id && !payload?.agent_type) {
+          cancelTurn(w, hookTurnId(payload?.turn_id));
           this.setStatus(w, 'interrupted');
           break;
         }
@@ -755,11 +761,11 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          if (w.info.status === 'working') this.setStatus(w, 'done');
+          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         }
         break;
       case 'Stop':
-        if (w.info.status !== 'interrupted') this.setStatus(w, 'done');
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         break;
     }
     return true;
@@ -800,6 +806,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         clearInput();
         w.info.action = undefined;
+        beginTurn(w, report.turnId);
         if (report.prompt) {
           w.info.activity = truncate(withoutWorkerHandoff(report.prompt), 80) || undefined;
           this.notePrompt(w, report.prompt);
@@ -807,6 +814,7 @@ export class WorkerManager {
         this.setStatus(w, 'working');
         break;
       case 'PreToolUse':
+        if (isCancelledTurn(w, report.turnId)) break;
         if (!w.codexInput) {
           w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
           w.info.action = toolAction(report.tool);
@@ -816,18 +824,20 @@ export class WorkerManager {
       case 'PermissionRequest':
         // A hook can be auto-approved before a human sees anything. The rendered
         // question/approval controls, checked below, are what warrant an alert.
+        if (isCancelledTurn(w, report.turnId)) break;
         busy();
         break;
       case 'PostToolUse':
         // A cancelled tool can finish reporting after the turn's Interrupt hook.
-        if (!isStopped(w.info.status) && w.info.status !== 'done') busy();
+        if (!isCancelledTurn(w, report.turnId) && !isStopped(w.info.status) && w.info.status !== 'done') busy();
         break;
       case 'Stop':
         clearInput();
-        if (w.info.status !== 'interrupted') this.setStatus(w, 'done');
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, report.turnId)) this.setStatus(w, 'done');
         break;
       case 'Interrupt':
         clearInput();
+        cancelTurn(w, report.turnId);
         this.setStatus(w, 'interrupted');
         break;
     }
@@ -866,6 +876,7 @@ export class WorkerManager {
     }
     if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
+    if (payload.prompt || payload.type === 'prompt') beginTurn(w, payload.turnId);
     if (payload.prompt) {
       w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
       w.info.action = undefined;
@@ -876,10 +887,13 @@ export class WorkerManager {
     } else if (payload.detail) {
       w.info.activity = truncate(payload.detail, 80);
     }
-    if (payload.status === 'interrupted') this.setStatus(w, 'interrupted');
+    if (payload.status === 'interrupted') {
+      cancelTurn(w, payload.turnId);
+      this.setStatus(w, 'interrupted');
+    }
     else if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
     else if (payload.status === 'working') this.setStatus(w, 'working');
-    else if (payload.status === 'done' && w.pty && !isStopped(w.info.status)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
+    else if (payload.status === 'done' && w.pty && !isStopped(w.info.status) && !isCancelledTurn(w, payload.turnId)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
     return true;
@@ -935,6 +949,8 @@ export class WorkerManager {
 
   private clearTask(w: Worker) {
     w.taskEpoch++;
+    w.turnId = undefined;
+    w.cancelledTurns.clear();
     w.prompts = [];
     w.tools = [];
     w.toolsSinceNamed = 0;
@@ -1595,6 +1611,8 @@ function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBy
     toolsSinceNamed: 0,
     namedAt: 0,
     taskEpoch: 0,
+    turnSeq: 0,
+    cancelledTurns: new Set(),
     tracker,
   };
 }
@@ -1630,6 +1648,37 @@ function validTask(t: unknown): WorkerTask | undefined {
   return typeof v?.name === 'string' && typeof v.summary === 'string' ? { name: v.name, summary: v.summary } : undefined;
 }
 
+const MAX_CANCELLED_TURNS = 16;
+
+function hookTurnId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text && text.length <= 160 ? text : undefined;
+}
+
+function beginTurn(w: Worker, turnId?: string) {
+  w.turnSeq = (w.turnSeq || 0) + 1;
+  w.cancelledTurns ??= new Set();
+  w.turnId = turnId || `t${w.turnSeq}`;
+}
+
+function cancelTurn(w: Worker, turnId?: string) {
+  w.cancelledTurns ??= new Set();
+  const id = turnId || w.turnId;
+  if (!id) return;
+  w.cancelledTurns.add(id);
+  while (w.cancelledTurns.size > MAX_CANCELLED_TURNS) {
+    const oldest = w.cancelledTurns.values().next().value;
+    if (oldest === undefined) break;
+    w.cancelledTurns.delete(oldest);
+  }
+}
+
+function isCancelledTurn(w: Worker, turnId?: string): boolean {
+  const id = turnId || w.turnId;
+  return !!id && !!w.cancelledTurns?.has(id);
+}
+
 function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
@@ -1638,7 +1687,8 @@ function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
     && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done', 'interrupted'].includes(v.status)
     && (v.prompt === undefined || typeof v.prompt === 'string')
     && (v.tool === undefined || typeof v.tool === 'string')
-    && (v.detail === undefined || typeof v.detail === 'string');
+    && (v.detail === undefined || typeof v.detail === 'string')
+    && (v.turnId === undefined || (typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 160));
 }
 
 function snapshotScreen(term: HeadlessTerminal, last: string[]) {
@@ -1799,7 +1849,7 @@ async function findOpenPr(branch: string, cwd: string, repository?: string): Pro
  * task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
  */
 function draftPr(info: WorkerInfo, commits: string[], by: string): { title: string; body: string } {
-  const task = (info.prompt ?? '').replace(/\r\n?/g, '\n').trim();
+  const task = withoutCheckpoint((info.prompt ?? '').replace(/\r\n?/g, '\n').trim());
   const firstLine = task.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
   // The issues board hands work over as: Work on GitHub issue #12: "Title".
   const issue = /\bissue #(\d+):\s*["“](.+?)["”]\.?\s*$/i.exec(firstLine);

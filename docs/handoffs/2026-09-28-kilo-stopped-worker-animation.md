@@ -46,3 +46,26 @@ Read prior handoffs at https://github.com/mmoscare/agent-office/pull/29 and http
 Implementation is complete. PR review/merge and activation of the rebuilt server remain. The Windows launcher documents that restarting stops its worker processes, so no live-office restart was performed during active work. Once workers can be interrupted safely, use the tray menu's **Restart Agent Office**, refresh the browser, and smoke-test cancellation/resumption with the actual logged-in provider. Existing OpenCode sessions may need to be restarted to load the updated plugin. This task tested provider hooks and terminal progress using fixtures, not authenticated model responses.
 
 Existing broader-suite failures remain outside this feature's scope. Do not erase the other workers' worktrees or the two pre-existing launcher edits during cleanup. The personal checkout may also receive newer remote changes from other workers; integrate those separately while preserving this feature and local customizations.
+
+## Follow-up: get PR #44 ready and merge
+
+Request: check out `office/kilo-919f`, address open review comments, merge `personal` if needed, verify, push, wait for checks, merge https://github.com/mmoscare/agent-office/pull/44.
+
+### Outcome
+
+- Merged `origin/personal` (`2e99ba7`, through PR #39) into `office/kilo-919f`. The only conflict was `src/server/workers.ts` imports; kept both `withoutCheckpoint` (ledger/checkpoint) and `isStopped`.
+- Open Codex review (P1 on Codex `Stop`): delayed `Stop` after `UserPromptSubmit` could complete the new turn. Workers now keep cancelled turn ids and ignore completion/tool-end events for those turns.
+  - Codex: `turn_id` from hooks.
+  - Claude/custom: optional `turn_id` plus a local epoch.
+  - OpenCode: plugin stamps `turnId` on prompt, abort, and idle/done.
+- Untagged Claude Stop after a new prompt still cannot be attributed (Claude Code hooks do not include a turn id today). Status-while-interrupted still holds.
+
+### Checks
+
+- `npm ci --ignore-scripts --no-audit --no-fund`: installed lockfile deps in this worktree.
+- `npm run typecheck`: PASS.
+- `node --import tsx --test tests/worker-stopped.test.ts tests/codex-input.test.ts tests/opencode.test.ts tests/queue.test.ts tests/worker-attention.test.ts tests/sideshell.test.ts tests/roster.test.ts tests/task-status.test.ts tests/codex.test.ts`: 60 passed, 0 failed.
+- `npm run build`: PASS.
+- `git diff --check`: PASS.
+
+Live-office restart and authenticated provider smoke tests were not run. No credentials were used.
