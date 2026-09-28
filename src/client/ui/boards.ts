@@ -230,6 +230,7 @@ function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick:
 
 export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions) {
   const body = h('div.body');
+  const warning = h('div.board-error', { hidden: true });
   const status = h('span.board-status');
   const refresh = h('button.btn', { title: 'Refresh from GitHub', onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
@@ -239,7 +240,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     kind === 'pulls' ? 'div.modal.board.pr-board' : 'div.modal.board',
     { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' },
     h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close),
-    kind === 'pulls' ? tally : null,
+    // GitHub trouble shows in the PR board's tally strip, and in this banner on the issues board.
+    kind === 'pulls' ? tally : warning,
     body,
   );
   if (kind === 'pulls') body.classList.add('prb-body');
@@ -268,10 +270,9 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const scrolled = [...body.querySelectorAll('.column > ul')].map((ul) => ul.scrollTop);
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
-    if (st.error && !st.items.length) {
-      body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, "The server runs `gh` in the floor's folder, or in each GitHub checkout inside it when the folder isn't one itself — make sure it is installed and authenticated (gh auth login).")));
-      return;
-    }
+    warning.hidden = !st.error;
+    if (st.error) warning.textContent = `${st.items.length ? 'Some GitHub data may be out of date' : "Couldn't load from GitHub"}: ${st.error}`;
+    if (st.error && !st.items.length) return;
     for (const col of issueColumns(store.issues.items)) {
       const ul = h('ul');
       col.items.forEach((it, i) =>
