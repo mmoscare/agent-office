@@ -15,6 +15,7 @@ import { buildBookshelf } from './bookshelf';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
+import { buildPlansBinder } from './plans-binder';
 
 export interface Collider {
   minX: number;
@@ -28,7 +29,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -62,6 +63,8 @@ export interface DeskView {
   vacancy: THREE.Group;
   /** How high the vacancy marker floats. */
   vacancyY: number;
+  /** The in-tray on the receptionist's kiosk (only that one has it): its `sheets` group holds the paper. */
+  tray?: THREE.Group;
 }
 
 export interface Office {
@@ -75,6 +78,8 @@ export interface Office {
    * just came out, in case someone is standing there.
    */
   setBeanbags(out: Set<string>): Collider[];
+  /** How full the receptionist's in-tray looks: a sheet of paper per item, up to a stack. */
+  setInTray(count: number): void;
   boardMeshes: Record<keyof typeof BOARDS, THREE.Mesh>;
   tvScreen: THREE.Mesh;
   /** The monitor on the boss's desk upstairs, where Minesweeper plays (ui/arcade.ts). */
@@ -922,7 +927,7 @@ function buildBeanbag(def: DeskDef, index: number): DeskView {
   return { def, group, laptopAnchor, seatAnchor, stage, chair: bag, vacancy, vacancyY };
 }
 
-const KIOSK_SIGN: Record<StationKind, string> = { issues: '📌 Ask me', pulls: '🔀 Ask me', queue: '📋 Ask me' };
+const KIOSK_SIGN: Record<StationKind, string> = { issues: '📌 Ask me', pulls: '🔀 Ask me', queue: '📋 Ask me', inbox: '📥 Reception' };
 
 /**
  * A board agent's kiosk: a little counter in its color with a sign on the front, and the agent standing
@@ -968,7 +973,22 @@ function buildKiosk(def: DeskDef): DeskView {
   stage.rotation.y = Math.PI;
   group.add(stage);
 
-  return { def, group, laptopAnchor, seatAnchor, stage, chair: new THREE.Group(), vacancy, vacancyY: 0 };
+  // The receptionist's in-tray on the counter: a shallow tray, with a sheet of paper per item (setInTray).
+  let tray: THREE.Group | undefined;
+  if (kind === 'inbox') {
+    tray = new THREE.Group();
+    tray.position.set(0.02, height, -0.02);
+    const rim = toon('#4a4e69');
+    tray.add(mesh(roundedBox(0.34, 0.012, 0.26, 0.004), toon('#5c6078'), 0, 0.006, 0));
+    for (const sx of [-0.165, 0.165]) tray.add(mesh(roundedBox(0.01, 0.05, 0.26, 0.003), rim, sx, 0.03, 0));
+    tray.add(mesh(roundedBox(0.34, 0.05, 0.01, 0.003), rim, 0, 0.03, 0.125));
+    const sheets = new THREE.Group();
+    sheets.name = 'sheets';
+    tray.add(sheets);
+    group.add(tray);
+  }
+
+  return { def, group, laptopAnchor, seatAnchor, stage, chair: new THREE.Group(), vacancy, vacancyY: 0, tray };
 }
 
 /** A framed board on a wall; the face gets a canvas texture (cork, chalk or whiteboard). */
@@ -1414,7 +1434,20 @@ export function buildOffice(): Office {
     phone.update(dt);
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, stack, setProjectName, setLook, setLevel, night, plants, update };
+  /** Paper in the receptionist's in-tray: one sheet per item, a little askew, up to a stack of eight. */
+  const paper = toon('#fffdf7');
+  const setInTray = (count: number) => {
+    const sheets = desks.get('station-inbox')?.tray?.getObjectByName('sheets');
+    if (!sheets) return;
+    sheets.clear();
+    for (let i = 0; i < Math.min(count, 8); i++) {
+      const sheet = mesh(roundedBox(0.28, 0.006, 0.2, 0.002), paper, ((i * 7) % 5 - 2) * 0.006, 0.016 + i * 0.008, ((i * 3) % 5 - 2) * 0.006, false);
+      sheet.rotation.y = ((i * 5) % 7 - 3) * 0.04;
+      sheets.add(sheet);
+    }
+  };
+
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */
@@ -1709,6 +1742,13 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   plate.position.set(0, 0.5, -0.55);
   plate.rotation.y = Math.PI;
   desk.add(plate);
+  const binder = buildPlansBinder();
+  binder.position.set(-0.83, 0.83, 0.08);
+  binder.rotation.y = -0.12;
+  const plans: Interactable = { kind: 'plans', x: deskX - 0.83, y: floorY, z: deskZ + 0.08, radius: 1.8 };
+  binder.userData.interact = plans;
+  interactables.push(plans);
+  desk.add(binder);
   const bossChair = chair('#2b2d42');
   bossChair.scale.setScalar(1.2);
   bossChair.position.set(0, 0, 1.0);

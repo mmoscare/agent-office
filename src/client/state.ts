@@ -6,8 +6,10 @@ import { newer, type WbElement } from '../shared/whiteboard';
 import type { DogState } from '../shared/dog';
 import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
+import type { PlansState } from '../shared/plans';
+import type { InboxState } from '../shared/inbox';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'plans' | 'inbox';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -157,6 +159,10 @@ class Store {
   /** The Claude plan's 5-hour and weekly limits. */
   limits: PlanLimits = { windows: [], at: 0 };
   queue: QueueState = { tasks: [], maxWorkers: 0 };
+  /** The floor's 📒 To Do Next board. */
+  plans: PlansState = { revision: 0, items: [] };
+  /** The floor's 📥 in-tray: what came in from outside. */
+  inbox: InboxState = { revision: 0, items: [], dir: '', door: false };
   /** The meeting room: the meeting at the table, and the ones before. */
   meeting: MeetingState = { current: null, past: [] };
   /** Who you're signed in as (see /api/whoami). */
@@ -234,6 +240,8 @@ class Store {
     this.issues = v.issues;
     this.pulls = v.pulls;
     this.queue = v.queue;
+    this.plans = v.plans ?? { revision: 0, items: [] };
+    this.inbox = v.inbox ?? { revision: 0, items: [], dir: '', door: false };
     this.meeting = v.meeting;
     this.decor = v.decor;
     this.services = v.services;
@@ -243,7 +251,7 @@ class Store {
     this.cabinetFrame = v.cabinet.frame;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
   }
 
   private setDog(dog: DogState | null) {
@@ -404,6 +412,14 @@ class Store {
       case 'queue':
         this.queue = msg.state;
         this.emit('queue');
+        break;
+      case 'plans':
+        this.plans = msg.state;
+        this.emit('plans');
+        break;
+      case 'inbox':
+        this.inbox = msg.state;
+        this.emit('inbox');
         break;
       case 'meeting':
         this.meeting = msg.state;

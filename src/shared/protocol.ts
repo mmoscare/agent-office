@@ -9,6 +9,8 @@ import type { EmoteId } from './emotes.js';
 import type { JukeboxState } from './jukebox.js';
 import type { DrinkId } from './rooftop.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
+import type { PlansState } from './plans.js';
+import type { InboxState } from './inbox.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -341,6 +343,8 @@ export interface QueueTask {
   issue?: number;
   /** The issue's repository, on a floor that's a folder of several (see GhWhere). */
   repo?: string;
+  /** The 📒 To Do Next item it's for, when it is: the office moves that to Progress and Finished as the task runs. */
+  plan?: string;
   title: string;
   prompt: string;
   addedBy: string;
@@ -716,6 +720,10 @@ export interface FloorView {
   whiteboard: WhiteboardView;
   /** The meeting room: who's meeting about what, and the meetings before. */
   meeting: MeetingState;
+  /** The 📒 To Do Next board: the floor's own to-do list. */
+  plans: PlansState;
+  /** The 📥 in-tray: what came in from outside. */
+  inbox: InboxState;
 }
 
 export type AccountRole = 'admin' | 'member';
@@ -981,8 +989,11 @@ export type ClientMsg =
   /** An emote (hold G, or 1–6): everyone else on your floor sees your character do it. Rate limited, see EmoteBucket. */
   | { t: 'emote'; emote: EmoteId }
   | { t: 'profile'; name: string; color: string; look: Look }
-  /** With `issue`, the worker is there for that GitHub issue: it's assigned on GitHub (so it moves to In progress) and taken off the queue. */
-  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number }
+  /**
+   * With `issue`, the worker is there for that GitHub issue: it's assigned on GitHub (so it moves to In progress) and taken off the queue.
+   * With `plan`, it's there for that 📒 To Do Next item, which moves to Progress (and to Finished when the worker finishes its turn).
+   */
+  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string; effort?: AgentEffort; issue?: number; plan?: string }
   | { t: 'worker.workspace.add'; workerId: string; workspace: WorkspaceRequest }
   | { t: 'worker.resume'; workerId: string }
   | { t: 'worker.kill'; workerId: string; cleanup?: WorktreeCleanup }
@@ -990,8 +1001,8 @@ export type ClientMsg =
   | { t: 'worker.worktree'; workerId: string }
   | { t: 'worker.attach'; workerId: string }
   | { t: 'worker.detach'; workerId: string }
-  /** With `issue`, the prompt hands the worker that GitHub issue, which is taken as for worker.spawn. */
-  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number }
+  /** With `issue` (or `plan`), the prompt hands the worker that GitHub issue (or To Do Next item), which is taken as for worker.spawn. */
+  | { t: 'worker.prompt'; workerId: string; prompt: string; issue?: number; plan?: string }
   /**
    * A prompt for the agent standing by a board (`deskId` is its kiosk, see STATIONS in layout). It's
    * typed into its session, which is woken up first if it's asleep, or hired there when nobody is.
@@ -1024,7 +1035,8 @@ export type ClientMsg =
   | { t: 'horn' }
   /** Close an issue, or a pull request without merging it; the answer comes back as gh.closed. */
   | { t: 'gh.close'; kind: 'issue' | 'pull'; number: number; repo?: string; comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }
-  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; repo?: string; provider?: AgentProvider; model?: string; effort?: AgentEffort }
+  /** With `plan`, the task is for that 📒 To Do Next item, which the office moves along as the task runs. */
+  | { t: 'queue.add'; prompt: string; title?: string; issue?: number; repo?: string; plan?: string; provider?: AgentProvider; model?: string; effort?: AgentEffort }
   | { t: 'queue.remove'; taskId: string }
   /** Move a queued task up (-1) or down (+1) the queue. */
   | { t: 'queue.move'; taskId: string; delta: number }
@@ -1033,6 +1045,14 @@ export type ClientMsg =
   /** Forget the finished tasks. */
   | { t: 'queue.clear' }
   | { t: 'queue.limit'; maxWorkers: number }
+  /** A note into the 📥 in-tray, written here in the office. */
+  | { t: 'inbox.note'; title?: string; text: string }
+  /** Put a dealt-with tray item away in the tray's archive. */
+  | { t: 'inbox.archive'; name: string }
+  /** File a tray item on the 📒 To Do Next board, and put it away. */
+  | { t: 'inbox.plan'; name: string }
+  /** Queue a tray item as a task for a fresh worker, and put it away. */
+  | { t: 'inbox.queue'; name: string; provider?: AgentProvider; model?: string; effort?: AgentEffort }
   /** Call a meeting: workers sit down round the meeting room's table and work through it in rounds. */
   | ({ t: 'meeting.start' } & MeetingRequest)
   /** Stop the meeting that's running; its workers stay at the table. */
@@ -1216,6 +1236,10 @@ export type ServerMsg =
   | { t: 'usage'; state: UsageState }
   | { t: 'limits'; state: PlanLimits }
   | { t: 'queue'; state: QueueState }
+  /** The floor's 📒 To Do Next board changed (by a person, a board agent, or a worker finishing). */
+  | { t: 'plans'; state: PlansState }
+  /** The floor's 📥 in-tray changed. */
+  | { t: 'inbox'; state: InboxState }
   | { t: 'meeting'; state: MeetingState }
   | { t: 'notify'; state: NotifyState }
   | { t: 'machine'; state: MachineState }
