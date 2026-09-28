@@ -6,8 +6,30 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   mergeOpenCodeConfigContent,
+  openCodePluginSpecifier,
+  openCodeWorkerEnv,
   writeOpenCodePlugin,
 } from '../src/server/opencode.js';
+
+test('OpenCode workers run with the office plugin, their session, and no self-update of the shared install', () => {
+  const plugin = path.join(tmpdir(), 'agent-office-opencode.mjs');
+  const env: Record<string, string> = { OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: 'x/y' }) };
+  openCodeWorkerEnv(env, plugin, 'ses_1');
+  assert.equal(env.AGENT_OFFICE_SESSION_ID, 'ses_1');
+  assert.deepEqual(JSON.parse(env.OPENCODE_CONFIG_CONTENT), { model: 'x/y', plugin: [openCodePluginSpecifier(plugin)] });
+  // A self-update reinstalls the global package that every other OpenCode worker runs from.
+  assert.equal(env.OPENCODE_DISABLE_AUTOUPDATE, '1');
+
+  const fresh: Record<string, string> = {};
+  openCodeWorkerEnv(fresh, plugin, undefined);
+  assert.equal(fresh.AGENT_OFFICE_SESSION_ID, '');
+  assert.equal(fresh.OPENCODE_DISABLE_AUTOUPDATE, '1');
+
+  // The office's own environment can still decide.
+  const chosen: Record<string, string> = { OPENCODE_DISABLE_AUTOUPDATE: '0' };
+  openCodeWorkerEnv(chosen, plugin, undefined);
+  assert.equal(chosen.OPENCODE_DISABLE_AUTOUPDATE, '0');
+});
 
 test('merges the inline OpenCode config and preserves user plugins', () => {
   const plugin = 'file:///tmp/agent-office-opencode.mjs';
@@ -53,6 +75,8 @@ test('writes a loadable plugin module that forwards root events and excludes sub
     await hooks['chat.message']({ sessionID: 'ses_root' }, { parts: [{ type: 'text', text: 'fix the thing' }] });
     await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'ses_root', status: { type: 'busy' } } } });
     assert.deepEqual(sent, [
+      // First, before any session: this OpenCode is up (see agent-start.ts).
+      { type: 'ready' },
       { type: 'session', sessionId: 'ses_existing', status: 'working' },
       { type: 'session', sessionId: 'ses_root', status: 'starting' },
       { type: 'prompt', sessionId: 'ses_root', status: 'working', turnId: '1', prompt: 'fix the thing' },
@@ -185,7 +209,7 @@ test('hydrates persisted OpenCode root and child usage without blocking plugin s
     const mod = await import(`${pathToFileURL(file).href}?hydrate=${Date.now()}`) as { default: (ctx?: unknown) => Promise<any> };
     await mod.default({ client: { session } });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.deepEqual(sent, [{ type: 'usage', sessionId: 'hydrate-root', usage: {
+    assert.deepEqual(sent, [{ type: 'ready' }, { type: 'usage', sessionId: 'hydrate-root', usage: {
       input: 12, output: 5, reasoning: 1, cacheRead: 3, cacheWrite: 1, cost: 0.5, calls: 2, costKnown: true,
     } }]);
   } finally {

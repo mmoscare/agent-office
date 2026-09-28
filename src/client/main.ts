@@ -1123,7 +1123,7 @@ function syncWorkers() {
     // Keys clack while it types, not while it reads, watches its tests or browses.
     if (deskDef) sound.setTyping(w.id, deskDef.x, deskDef.z, w.status === 'working' && (!w.action || w.action === 'edit'));
     const again = w.kind === 'shell' ? 'restart' : 'resume';
-    v.laptop.setPlaceholder(w.status === 'offline' ? `💤 ${w.name} is asleep — press R to ${again}` : w.status === 'exited' ? `${w.name} exited` : 'booting…');
+    v.laptop.setPlaceholder(w.didNotStart ? `${w.name} didn't start — press R to start again` : w.status === 'offline' ? `💤 ${w.name} is asleep — press R to ${again}` : w.status === 'exited' ? `${w.name} exited` : 'booting…');
   }
   for (const [id, v] of workerViews) {
     if (store.workers.has(id)) continue;
@@ -1287,6 +1287,8 @@ function promptAtDesk(deskId: string) {
     });
   } else if (isAsleep(w.status)) {
     toast(`${w.name} is asleep — press R to resume first`, 'warn');
+  } else if (w.didNotStart) {
+    toast(`${w.name} didn't start — press R to start it again first`, 'warn');
   } else if (w.kind === 'shell') {
     openPrompt({
       title: `🐚 Run in ${w.name}`,
@@ -1384,7 +1386,8 @@ function askStation(deskId: string) {
 }
 
 function resumeWorker(w: WorkerInfo) {
-  if (!w.sessionId && w.kind !== 'shell') toast(`${w.name} has no saved Claude session — starting a fresh one`, 'warn');
+  if (w.didNotStart) toast(`Starting ${w.name} again`, 'info');
+  else if (!w.sessionId && w.kind !== 'shell') toast(`${w.name} has no saved session — starting a fresh one${w.prompt ? ' with its task' : ''}`, 'warn');
   net.send({ t: 'worker.resume', workerId: w.id });
 }
 
@@ -1662,7 +1665,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
     if (key === 'P') return promptAtDesk(target.deskId);
     if (key === 'E') return w ? openWorkerTerminal(w.id) : hireAtDesk(target.deskId);
     if (key === 'C' && w) return openWorkerChanges(w.id);
-    if (key === 'R' && w && isAsleep(w.status)) return resumeWorker(w);
+    if (key === 'R' && w && (isAsleep(w.status) || w.didNotStart)) return resumeWorker(w);
     if (key === 'X' && w) return killWorker(w.id);
     if (key === 'O' && w) return pullRequestFor(w);
     return;
@@ -2338,7 +2341,7 @@ function deskHint(deskId: string): Hint {
       spent ? h('span.cost', { title: usageTitle(w.usage!, workerProvider) }, spent) : '',
       key('E', 'Open terminal'),
       key('C', 'Changes'),
-      isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
+      w.didNotStart ? key('R', 'Start again') : isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
       w.workspace ? key('O', 'Repositories & PRs') : w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
       key('X', 'Send home'),
     ],

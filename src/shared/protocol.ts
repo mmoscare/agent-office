@@ -123,6 +123,11 @@ export interface WorkerInfo {
   title?: string;
   sessionId?: string;
   exitCode?: number;
+  /**
+   * The agent exited, or never reported in, right after it was launched (status needs_input). Its
+   * terminal shows why; resuming it (Start again, R) launches it once more with its task.
+   */
+  didNotStart?: boolean;
   cols: number;
   rows: number;
   /** Names of people currently viewing the terminal. */

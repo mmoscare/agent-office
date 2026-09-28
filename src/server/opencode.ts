@@ -22,7 +22,25 @@ export interface OpenCodeUsageEvent {
   usage: Usage;
 }
 
-export type OpenCodeHookEvent = OpenCodeStatusEvent | OpenCodeUsageEvent;
+/** Sent once as the plugin loads: this OpenCode started, whether or not it has a session yet. */
+export interface OpenCodeReadyEvent {
+  type: 'ready';
+}
+
+export type OpenCodeHookEvent = OpenCodeStatusEvent | OpenCodeUsageEvent | OpenCodeReadyEvent;
+
+/**
+ * The environment of an OpenCode worker: the office plugin in its inline config, the session it
+ * carries on, and no self-update. OpenCode updates itself as it starts by reinstalling its global
+ * npm package; with several workers running from one install, that replaced opencode.exe under the
+ * others and left it broken. Updating stays with the owner (npm install -g opencode-ai), unless the
+ * office's own environment sets OPENCODE_DISABLE_AUTOUPDATE.
+ */
+export function openCodeWorkerEnv(env: Record<string, string>, plugin: string, sessionId: string | undefined) {
+  env.AGENT_OFFICE_SESSION_ID = sessionId ?? '';
+  env.OPENCODE_CONFIG_CONTENT = mergeOpenCodeConfigContent(env.OPENCODE_CONFIG_CONTENT, openCodePluginSpecifier(plugin));
+  if (env.OPENCODE_DISABLE_AUTOUPDATE === undefined) env.OPENCODE_DISABLE_AUTOUPDATE = '1';
+}
 
 /** Merge the per-process plugin into inline OpenCode config without touching user config files. */
 export function mergeOpenCodeConfigContent(existing: string | undefined, plugin: string): string {
@@ -277,6 +295,9 @@ export const OPENCODE_PLUGIN_SOURCE = String.raw`export default async function A
       return working();
     }
   }
+  // Up and loaded, before any session exists (OpenCode makes one with the first prompt): the office
+  // stops waiting to hear that it started.
+  void enqueue(() => send({ type: "ready" }));
   if (rootSession && client && client.session && typeof client.session.messages === "function") {
     hydrationPending = true;
     void hydrate(rootSession, usageEpoch);

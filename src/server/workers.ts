@@ -28,7 +28,8 @@ import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
 import { reportedUsage } from './reported-usage.js';
 import { configuredProvider, isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { isEffort, isModelId } from '../shared/model.js';
-import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
+import { openCodeWorkerEnv, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
+import { STARTUP_MS, couldNotLaunch, notStarted, reportsIn, watchesSilence } from './agent-start.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 import { screenSnapshot } from './screen.js';
@@ -104,6 +105,12 @@ interface Worker {
   hookToken: string;
   /** Claude never reported SessionStart: it's stuck on a trust/login/onboarding screen. */
   bootBlocked?: boolean;
+  /** This run of the agent has reported in (a hook, or OpenCode's plugin): it started. */
+  started?: boolean;
+  /** Says it didn't start if it's still silent by then (see agent-start.ts). */
+  startTimer?: NodeJS.Timeout;
+  /** How its desk looked before it was marked as not started, for when it reports in after all. */
+  stall?: { status: WorkerStatus; activity?: string };
   /** OpenCode errors keep the desk visibly actionable until a new turn starts. */
   openCodeError?: boolean;
   codexUsage: CodexUsageReader;
@@ -128,7 +135,7 @@ interface Worker {
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
   /** Its terminal in the host as of the last save, and how it was doing, to pick back up after a restart. */
-  saved?: { ptyId: string; status: WorkerStatus; acked: boolean; waitingSince?: number };
+  saved?: { ptyId: string; status: WorkerStatus; acked: boolean; waitingSince?: number; didNotStart?: boolean };
   /** Output since its scrollback was last saved to disk. */
   unsaved?: boolean;
   /** Where this run's own output starts, below the scrollback carried over from before. */
@@ -172,6 +179,8 @@ export class WorkerManager {
   private saveTimer: NodeJS.Timeout;
   /** A plain shell beside each worker, in its checkout, from the Shell tab of its terminal (see sideshell.ts). */
   private sides: SideShells;
+  /** How long a launched agent may stay silent before its desk says it didn't start (tests shorten it). */
+  startupMs = STARTUP_MS;
 
   constructor(
     private dir: string,
@@ -367,11 +376,15 @@ export class WorkerManager {
     return info;
   }
 
-  /** Starts a worker that isn't running again, carrying on its session, with `prompt` as its next message. */
+  /**
+   * Starts a worker that isn't running again, carrying on its session, with `prompt` as its next
+   * message. One that didn't start is started again, even if its silent process is still there.
+   */
   resume(id: string, prompt?: string): string | undefined {
     const w = this.workers.get(id);
     if (!w) return 'No such worker';
-    if (w.pty) return 'Worker is already running';
+    if (w.pty && !w.info.didNotStart) return 'Worker is already running';
+    this.clearNotStarted(w);
     w.info.status = 'starting';
     w.info.exitCode = undefined;
     const station = DESK_BY_ID.get(w.info.deskId)?.station;
@@ -401,10 +414,11 @@ export class WorkerManager {
       const info = this.spawn(deskId, by, clean);
       return typeof info === 'string' ? info : { info, hired: true };
     }
-    // Typed into the question it's asking, the prompt would answer it.
-    if (w.info.status === 'needs_input') return `The ${w.info.name} is waiting on an answer in its terminal`;
-    if (!w.pty) w.info.lastInput = { by, at: Date.now() };
-    const err = w.pty ? this.prompt(w.info.id, clean, by) : this.resume(w.info.id, clean);
+    // Typed into the question it's asking, the prompt would answer it. One that didn't start is asking nothing.
+    const stalled = !!w.info.didNotStart;
+    if (w.info.status === 'needs_input' && !stalled) return `The ${w.info.name} is waiting on an answer in its terminal`;
+    if (!w.pty || stalled) w.info.lastInput = { by, at: Date.now() };
+    const err = w.pty && !stalled ? this.prompt(w.info.id, clean, by) : this.resume(w.info.id, clean);
     return err ?? { info: w.info, hired: false };
   }
 
@@ -431,6 +445,7 @@ export class WorkerManager {
     this.workers.delete(id);
     this.namer.forget(id);
     clearTimeout(w.scanTimer);
+    clearTimeout(w.startTimer);
     const proc = w.pty;
     w.pty = undefined; // so the exit handler knows this worker is gone and stays quiet
     try {
@@ -707,6 +722,7 @@ export class WorkerManager {
     const w = this.workers.get(workerId);
     if (!w || !w.pty || w.info.kind !== 'agent' || (w.info.provider !== 'claude' && w.info.provider !== 'custom') || !safeEq(token, w.hookToken)) return false;
     const now = Date.now();
+    this.reportedIn(w);
     if (payload?.session_id && typeof payload.session_id === 'string' && payload.session_id !== w.info.sessionId) {
       w.info.sessionId = payload.session_id;
       this.persist();
@@ -783,6 +799,7 @@ export class WorkerManager {
   handleCodexHook(workerId: string, token: string, event: string, payload: unknown): boolean {
     const w = this.workers.get(workerId);
     if (!w || !w.pty || w.info.kind !== 'agent' || w.info.provider !== 'codex' || !safeEq(token, w.hookToken)) return false;
+    this.reportedIn(w);
     const report = normalizeCodexHook(event, payload);
     if (!report) return false;
     if (w.info.sessionId && w.info.sessionId !== report.sessionId && event !== 'SessionStart') return false;
@@ -858,6 +875,9 @@ export class WorkerManager {
   handleOpenCodeHook(workerId: string, token: string, payload: unknown): boolean {
     const w = this.workers.get(workerId);
     if (!w || !w.pty || w.info.kind !== 'agent' || w.info.provider !== 'opencode' || !safeEq(token, w.hookToken)) return false;
+    this.reportedIn(w);
+    // The plugin loaded: nothing more to it than that.
+    if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'ready') return true;
     if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'usage') {
       const report = payload as { sessionId?: unknown; usage?: unknown };
       const usage = reportedUsage(report.usage);
@@ -982,6 +1002,7 @@ export class WorkerManager {
     this.sides.killAll();
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
+      clearTimeout(w.startTimer);
       this.scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) this.saveScrollback(w);
@@ -1001,6 +1022,8 @@ export class WorkerManager {
 
   private launch(w: Worker, prompt: string | undefined, resumeSessionId: string | undefined) {
     const { info } = w;
+    this.clearNotStarted(w);
+    w.started = false;
     if (info.workspace) {
       try { this.workspaces.check(info.workspace); } catch (err) { this.startFailed(w, (err as Error).message); return; }
       if (!resumeSessionId) prompt = `${workspaceBrief(info.workspace)}\n${prompt || 'Wait for my task.'}`;
@@ -1081,10 +1104,7 @@ export class WorkerManager {
     let proc: Pty;
     try {
       if (!existsSync(cwd)) throw new Error(`working directory is gone: ${cwd}`);
-      if (isOpenCode) {
-        env.AGENT_OFFICE_SESSION_ID = resumeSessionId ?? '';
-        env.OPENCODE_CONFIG_CONTENT = mergeOpenCodeConfigContent(env.OPENCODE_CONFIG_CONTENT, openCodePluginSpecifier(this.openCodePlugin));
-      }
+      if (isOpenCode) openCodeWorkerEnv(env, this.openCodePlugin, resumeSessionId);
       if (isShell) {
         proc = this.host.spawn({ file: shell, args, ...where });
       } else if (commandPath) {
@@ -1100,6 +1120,12 @@ export class WorkerManager {
     }
     if (!isClaude && !isCodex) info.status = 'idle';
     this.follow(w, proc, term, resumeSessionId);
+    if (!isShell && watchesSilence(provider, !!prompt)) {
+      w.startTimer = setTimeout(() => {
+        if (w.pty === proc && !w.started && this.workers.get(info.id) === w) this.markNotStarted(w);
+      }, this.startupMs);
+      w.startTimer.unref();
+    }
     this.emitUpdate(w);
     this.persist();
   }
@@ -1121,6 +1147,12 @@ export class WorkerManager {
       info.status = saved.status;
       info.acked = saved.acked;
       info.waitingSince = saved.waitingSince;
+    }
+    // It ran on through the restart, so it started, unless it was already marked as not having started.
+    w.started = !(saved.didNotStart && info.status === 'needs_input');
+    if (!w.started) {
+      info.didNotStart = true;
+      w.stall = { status: info.provider === 'opencode' ? 'idle' : 'starting', activity: info.prompt ? truncate(info.prompt, 80) : undefined };
     }
     if (info.provider === 'codex') w.codexHome = codexHome(this.cwd(info), childEnv());
     this.follow(w, adopted.pty, term, undefined);
@@ -1195,10 +1227,16 @@ export class WorkerManager {
         this.launch(w, undefined, undefined);
         return;
       }
+      clearTimeout(w.startTimer);
+      // Gone before it ever reported in: it didn't start. Its desk says so, and its screen stays.
+      if (info.kind === 'agent' && reportsIn(info.provider) && !w.started && !this.closing) {
+        this.markNotStarted(w, exitCode);
+        return;
+      }
       info.exitCode = exitCode;
       info.status = 'exited';
       info.acked = exitCode === 0 || w.viewers.size > 0;
-      const hint = info.kind === 'shell' ? ' — press R to restart' : info.sessionId ? ' — press R to resume' : '';
+      const hint = info.kind === 'shell' ? ' — press R to restart' : info.sessionId ? ' — press R to resume' : info.prompt ? ' — press R to start it again with its task' : '';
       const msg = `\r\n\x1b[2m[${info.name} exited with code ${exitCode}${hint}]\x1b[0m\r\n`;
       term.write(msg);
       if (w.viewers.size) this.events.data(info.id, msg, [...w.viewers.keys()]);
@@ -1227,15 +1265,79 @@ export class WorkerManager {
   private startFailed(w: Worker, message: string) {
     const what = this.command(w.info);
     const msg = `\r\n\x1b[31mFailed to start ${what}: ${message}\x1b[0m\r\n`;
-    w.info.status = 'exited';
-    w.info.exitCode = -1;
-    w.info.acked = w.viewers.size > 0;
     w.term?.write(msg);
     if (w.viewers.size) this.events.data(w.info.id, msg, [...w.viewers.keys()]);
     w.screenDirty = true;
     w.unsaved = true;
     this.events.toast(`Could not start ${what}: ${message}`, 'error');
+    // An agent waits for a person to start it again once whatever was missing is back.
+    if (w.info.kind === 'agent') return this.markNotStarted(w, -1, couldNotLaunch(w.info.provider, message));
+    w.info.status = 'exited';
+    w.info.exitCode = -1;
+    w.info.acked = w.viewers.size > 0;
     this.emitUpdate(w);
+  }
+
+  /**
+   * The agent exited (`exitCode`), or went silent (none), before it reported in: its desk asks for a
+   * person with what went wrong, and its terminal keeps what it printed. Resuming starts it again.
+   */
+  private markNotStarted(w: Worker, exitCode?: number, activity?: string) {
+    const { info } = w;
+    w.stall ??= { status: info.status, activity: info.activity };
+    w.bootBlocked = false;
+    info.didNotStart = true;
+    if (exitCode !== undefined) info.exitCode = exitCode;
+    info.activity = activity ?? notStarted(info.provider, exitCode, '').activity;
+    if (info.status === 'needs_input') this.emitUpdate(w);
+    else this.setStatus(w, 'needs_input');
+    this.persist();
+    const term = w.term;
+    if (activity || !term) return;
+    // What it printed last may still be on its way onto the screen: read that once it's all there.
+    term.write('', () => {
+      if (w.term !== term || !info.didNotStart || this.workers.get(info.id) !== w) return;
+      const said = notStarted(info.provider, exitCode, screenText(term, term.buffer.active.type === 'normal' ? Math.max(0, w.fresh?.line ?? 0) : 0));
+      info.activity = said.activity;
+      if (said.note && !w.pty) {
+        const msg = `\r\n\x1b[33m[${said.note}]\x1b[0m\r\n`;
+        term.write(msg);
+        if (w.viewers.size) this.events.data(info.id, msg, [...w.viewers.keys()]);
+        w.screenDirty = true;
+        w.unsaved = true;
+      }
+      this.emitUpdate(w);
+      this.persist();
+    });
+  }
+
+  /** It reported in (a hook, or OpenCode's plugin), so this run started, whatever its desk said meanwhile. */
+  private reportedIn(w: Worker) {
+    if (w.started) return;
+    w.started = true;
+    clearTimeout(w.startTimer);
+    if (!w.info.didNotStart) return;
+    const was = w.stall;
+    w.info.didNotStart = undefined;
+    w.stall = undefined;
+    w.info.activity = was?.activity;
+    this.setStatus(w, was?.status ?? 'idle');
+  }
+
+  /** Before it's launched again: a silent process it left behind goes, and its desk shows its task again. */
+  private clearNotStarted(w: Worker) {
+    clearTimeout(w.startTimer);
+    if (!w.info.didNotStart) return;
+    const proc = w.pty;
+    w.pty = undefined; // so its exit handler stays quiet
+    try {
+      proc?.kill();
+    } catch {
+      // already gone
+    }
+    w.info.didNotStart = undefined;
+    w.info.activity = w.stall?.activity;
+    w.stall = undefined;
   }
 
   /** What a worker's terminal runs: the shell, the configured agent command, or another provider's CLI. */
@@ -1385,8 +1487,9 @@ export class WorkerManager {
    */
   private checkBlocked(w: Worker) {
     if (w.info.kind === 'agent' && w.info.provider === 'codex' && w.term && w.pty) {
-      // The TUI can still show its old approval controls while cancellation redraws.
-      if (isStopped(w.info.status)) return;
+      // The TUI can still show its old approval controls while cancellation redraws. One that didn't
+      // start is waiting on a person without a question on screen.
+      if (isStopped(w.info.status) || w.info.didNotStart) return;
       const prompt = codexInputPrompt(screenText(w.term));
       if (prompt) {
         w.codexInput ??= {
@@ -1533,7 +1636,7 @@ process.stdin.on('end', () => {
       codexTranscript: info.provider === 'codex' ? codexTranscript : undefined,
       // A terminal still running in the host, to pick back up after a restart. Its hooks keep the token.
       hookToken,
-      pty: pty?.id ? { id: pty.id, status: info.status, acked: info.acked, waitingSince: info.waitingSince } : undefined,
+      pty: pty?.id ? { id: pty.id, status: info.status, acked: info.acked, waitingSince: info.waitingSince, didNotStart: info.didNotStart } : undefined,
     }));
     try {
       writeFileSync(this.statePath, JSON.stringify(saved, null, 2), { mode: 0o600 });
@@ -1593,7 +1696,7 @@ process.stdin.on('end', () => {
         w.screenDirty = false;
         if (typeof s.pty?.id === 'string') {
           const status: WorkerStatus = RUNNING.has(s.pty.status) ? s.pty.status : 'idle';
-          w.saved = { ptyId: s.pty.id, status, acked: s.pty.acked !== false, waitingSince: typeof s.pty.waitingSince === 'number' ? s.pty.waitingSince : undefined };
+          w.saved = { ptyId: s.pty.id, status, acked: s.pty.acked !== false, waitingSince: typeof s.pty.waitingSince === 'number' ? s.pty.waitingSince : undefined, didNotStart: s.pty.didNotStart === true };
         }
         if (info.prompt) w.prompts = [info.prompt.replace(/\s+/g, ' ').trim()];
         this.workers.set(info.id, w);
@@ -1834,7 +1937,7 @@ function describeTool(payload: any): string {
 }
 
 function offlineBanner(info: WorkerInfo): string {
-  const hint = info.kind === 'shell' ? ' Press R to restart it.' : info.sessionId ? ' Press R to resume the session.' : '';
+  const hint = info.kind === 'shell' ? ' Press R to restart it.' : info.sessionId ? ' Press R to resume the session.' : info.prompt ? ' Press R to start it again with its task.' : '';
   return `\x1b[2m${info.name} is not running.${hint}\x1b[0m\r\n`;
 }
 

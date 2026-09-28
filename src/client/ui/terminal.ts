@@ -80,6 +80,9 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   }, '🧠 Models');
   const typed = h('span.typed', {});
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
+  // The agent didn't start: what it printed is below, and this launches it once more with its task.
+  const againBtn = h('button.btn.hidden', { type: 'button', title: "Launch the agent again in this worker's checkout, with its task (R at the desk)" }, '↻ Start again');
+  againBtn.addEventListener('click', () => net.send({ t: 'worker.resume', workerId }));
   const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
   const host = h('div.term-host');
   // An agent's window has a second tab: a plain shell in the same checkout, to look around beside
@@ -89,7 +92,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const shellTab = h('button.gh-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', title: "A shell in this worker's checkout, beside it: check the branch, git status, run the tests (Ctrl+Shift+` switches tabs)" }, '🐚 Shell');
   const tabs = info.kind === 'agent' ? h('nav.gh-tabs.term-tabs', { role: 'tablist' }, agentTab, shellTab) : null;
   const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, tabs, host, sideHost);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, againBtn, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, tabs, host, sideHost);
 
   const { term, fit } = newTerm();
 
@@ -184,7 +187,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title].filter(Boolean).join(' · ');
     branches.refresh(w, store.project?.branch);
     pill.className = `pill ${w.status}`;
-    pill.textContent = STATUS_LABEL[w.status] ?? w.status;
+    pill.textContent = w.didNotStart ? "didn't start" : STATUS_LABEL[w.status] ?? w.status;
+    againBtn.classList.toggle('hidden', !w.didNotStart);
     const workerProvider = w.kind === 'agent' ? resolvedProvider(w.provider, store.project) : undefined;
     const usageState = w.kind === 'agent' ? providerUsageState(w.provider, store.project, w.usage) : undefined;
     cost.textContent = w.kind !== 'agent' ? '' : usageState === 'tracked' && w.usage ? usageLabel(w.usage, workerProvider) : workerProvider === 'opencode' && usageState === 'waiting' ? 'waiting for metrics' : workerProvider === 'codex' && usageState === 'waiting' ? 'waiting for first report' : usageState === 'untracked' ? 'usage untracked' : '';
