@@ -486,6 +486,17 @@ button { font-family: inherit; }
 .desk-link::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); border: 1px solid var(--ink); }
 .label { padding: 1px 6px; border-radius: 999px; border: 1.5px solid var(--ink); color: var(--ink); font-size: 10px; font-weight: 800; }
 .board-status { font-size: 12px; font-weight: 700; color: var(--muted); }
+/* The PR board's Unshipped work column: work left in office branches with no PR. */
+.column.unshipped h4 { background: #ffe0b8; }
+.column.unshipped h4 > span { display: flex; align-items: center; gap: 4px; }
+.unshipped-rescan { padding: 0 6px; font-size: 11px; min-height: 0; }
+.card.unshipped-card { background: #ffe8cc; transform: none; cursor: default; }
+.card.unshipped-card:hover { transform: none; }
+.unshipped-count { color: #a4461b; }
+.unshipped-action { margin-top: 6px; display: flex; justify-content: flex-end; }
+.unshipped-note { font-size: 11px; font-weight: 700; background: #fff3c4; border: 2px solid var(--ink); border-radius: 8px; padding: 6px 8px; }
+.queue-warn { color: #a4461b; font-weight: 900; }
+
 .board-error { margin: auto; background: var(--paper); border: 3px solid var(--ink); border-radius: 14px; padding: 18px 22px; font-weight: 800; max-width: 520px; text-align: center; }
 .detail pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Menlo, monospace; background: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 10px; max-height: 45vh; overflow: auto; margin: 10px 0 0; }
 .detail .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; font-weight: 700; color: var(--muted); }
@@ -1060,37 +1071,6 @@ a.when:hover { text-decoration: underline; }
 .meeting-past ul { padding-left: 18px; margin: 6px 0 0; }
 .meeting-past li { margin: 6px 0; }
 
-/* The Office Ledger (ui/ledger.ts): a green leather book with ruled pages. */
-.modal.ledger { width: min(860px, 100%); }
-.modal.ledger header { background: #1b4332; color: #fdf6e3; }
-.modal.ledger header h2 { font-family: Georgia, 'Times New Roman', serif; letter-spacing: .02em; }
-.modal.ledger .body { background: #fdf6e3; background-image: repeating-linear-gradient(transparent 0 27px, rgba(43,45,66,.07) 27px 28px); }
-.ledger-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
-.ledger-summary .total { border: 3px solid var(--ink); border-radius: 14px; padding: 10px 14px; background: #fff; box-shadow: 0 3px 0 var(--ink); display: flex; flex-direction: column; }
-.ledger-summary .total span { font-size: 12px; font-weight: 800; text-transform: uppercase; color: var(--muted); }
-.ledger-summary .total b { font-size: 26px; font-weight: 900; font-variant-numeric: tabular-nums; }
-.ledger-summary .total small { color: var(--muted); font-weight: 700; }
-.ledger-summary p { grid-column: 1 / -1; margin: 0; font-weight: 700; font-size: 14px; }
-.ledger-summary p.muted { color: var(--muted); font-size: 13px; }
-.ledger-summary p.warn { color: var(--bad); font-size: 13px; }
-.ledger-knobs { border: 2px dashed rgba(43,45,66,.35); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; }
-.ledger-knobs h3 { margin: 0 0 8px; font-size: 14px; font-weight: 900; }
-.ledger-knobs .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; }
-.modal.ledger .ledger-knobs label { margin: 0; font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
-.ledger-knobs select, .ledger-knobs input[type=number] { font: inherit; font-size: 13px; border: 2px solid var(--ink); border-radius: 8px; padding: 4px 6px; background: #fff; min-width: 0; }
-.ledger-knobs .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; }
-.modal.ledger .ledger-knobs label.check { flex-direction: row; align-items: center; gap: 6px; }
-.ledger-lines .row { display: grid; grid-template-columns: 1fr 96px 96px; gap: 10px; align-items: baseline; padding: 6px 2px; border-bottom: 1px solid rgba(43,45,66,.12); }
-.ledger-lines .row.head { font-size: 11px; font-weight: 900; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid var(--ink); }
-.ledger-lines .row.head span:not(:first-child), .ledger-lines .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; }
-.ledger-lines .item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ledger-lines .item small { color: var(--muted); font-size: 12px; }
-.ledger-lines .group { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 15px; padding: 12px 2px 2px; color: #1b4332; }
-.ledger-lines .row.foot { border-top: 3px double var(--ink); border-bottom: 0; font-weight: 900; }
-@media (max-width: 640px) {
-  .ledger-summary { grid-template-columns: 1fr; }
-  .ledger-lines .row { grid-template-columns: 1fr 72px 72px; gap: 6px; }
-}
 
 /* The white binder on the boss's desk. */
 .plans-modal { width: min(1080px, 96vw); }
@@ -1245,6 +1225,38 @@ a.when:hover { text-decoration: underline; }
 .office-status.ok .office-toggle::after { content: 'Details ▾'; }
 .office-status[open] .office-toggle::after { content: 'Hide ▴'; }
 .office-body { max-height: 32vh; }
+
+/* The Office Ledger (ui/ledger.ts): a green leather book with ruled pages. */
+.modal.ledger { width: min(860px, 100%); }
+.modal.ledger header { background: #1b4332; color: #fdf6e3; }
+.modal.ledger header h2 { font-family: Georgia, 'Times New Roman', serif; letter-spacing: .02em; }
+.modal.ledger .body { background: #fdf6e3; background-image: repeating-linear-gradient(transparent 0 27px, rgba(43,45,66,.07) 27px 28px); }
+.ledger-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.ledger-summary .total { border: 3px solid var(--ink); border-radius: 14px; padding: 10px 14px; background: #fff; box-shadow: 0 3px 0 var(--ink); display: flex; flex-direction: column; }
+.ledger-summary .total span { font-size: 12px; font-weight: 800; text-transform: uppercase; color: var(--muted); }
+.ledger-summary .total b { font-size: 26px; font-weight: 900; font-variant-numeric: tabular-nums; }
+.ledger-summary .total small { color: var(--muted); font-weight: 700; }
+.ledger-summary p { grid-column: 1 / -1; margin: 0; font-weight: 700; font-size: 14px; }
+.ledger-summary p.muted { color: var(--muted); font-size: 13px; }
+.ledger-summary p.warn { color: var(--bad); font-size: 13px; }
+.ledger-knobs { border: 2px dashed rgba(43,45,66,.35); border-radius: 12px; padding: 10px 12px; margin-bottom: 14px; }
+.ledger-knobs h3 { margin: 0 0 8px; font-size: 14px; font-weight: 900; }
+.ledger-knobs .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 12px; }
+.modal.ledger .ledger-knobs label { margin: 0; font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+.ledger-knobs select, .ledger-knobs input[type=number] { font: inherit; font-size: 13px; border: 2px solid var(--ink); border-radius: 8px; padding: 4px 6px; background: #fff; min-width: 0; }
+.ledger-knobs .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; }
+.modal.ledger .ledger-knobs label.check { flex-direction: row; align-items: center; gap: 6px; }
+.ledger-lines .row { display: grid; grid-template-columns: 1fr 96px 96px; gap: 10px; align-items: baseline; padding: 6px 2px; border-bottom: 1px solid rgba(43,45,66,.12); }
+.ledger-lines .row.head { font-size: 11px; font-weight: 900; text-transform: uppercase; color: var(--muted); border-bottom: 2px solid var(--ink); }
+.ledger-lines .row.head span:not(:first-child), .ledger-lines .num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 800; }
+.ledger-lines .item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ledger-lines .item small { color: var(--muted); font-size: 12px; }
+.ledger-lines .group { font-family: Georgia, 'Times New Roman', serif; font-weight: 700; font-size: 15px; padding: 12px 2px 2px; color: #1b4332; }
+.ledger-lines .row.foot { border-top: 3px double var(--ink); border-bottom: 0; font-weight: 900; }
+@media (max-width: 640px) {
+  .ledger-summary { grid-template-columns: 1fr; }
+  .ledger-lines .row { grid-template-columns: 1fr 72px 72px; gap: 6px; }
+}
 
 /* Terminal window tabs: the worker's own session, and a shell beside it in its checkout */
 .modal.term .term-tabs { padding: 0 10px; }

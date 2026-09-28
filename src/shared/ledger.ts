@@ -117,25 +117,28 @@ export interface LedgerFacts {
   /** Claude Code at API rates: today, the last 30 days (over `days` of them) and all time. */
   claude: { today: number; month?: { cost: number; days: number }; total: number; calls: number };
   /** Tokens of the Codex sessions at desks now; `sessions` of them. */
-  codex: TokenCounts & { sessions: number };
-  /** OpenCode's own reported cost for the sessions at desks now. */
-  opencode: { cost: number; sessions: number };
+  codex: TokenCounts & { sessions: number; unknown?: number };
+  /** OpenCode's own reported cost for the sessions at desks now; `unknown` more report no cost. */
+  opencode: { cost: number; sessions: number; unknown?: number };
 }
 
 export interface LedgerLine {
   group: 'AI' | 'Hosting' | 'Free';
   item: string;
-  /** USD a month on a usage basis. */
-  usage: number;
-  /** USD a month on a recurring basis. */
-  recurring: number;
+  /** USD a month on a usage basis; null when the office can't tell (shown as unavailable, never guessed). */
+  usage: number | null;
+  /** USD a month on a recurring basis; null when the office can't tell. */
+  recurring: number | null;
   note: string;
 }
 
 export interface LedgerEstimate {
   lines: LedgerLine[];
+  /** Sums of the known lines only. */
   usage: number;
   recurring: number;
+  /** Lines left out of each sum because their cost is unavailable. */
+  unknown: { usage: number; recurring: number };
   /** Claude Code at API rates, per month, and the plan it's measured against. */
   claudeMonthly: number;
 }
@@ -155,8 +158,9 @@ export function claudeMonthly(c: LedgerFacts['claude']): number {
 
 export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
   const lines: LedgerLine[] = [];
-  const add = (group: LedgerLine['group'], item: string, usage: number, recurring: number, note: string) =>
-    lines.push({ group, item, usage: Math.max(0, usage), recurring: Math.max(0, recurring), note });
+  const clean = (n: number | null) => (n === null || !Number.isFinite(n) ? null : Math.max(0, n));
+  const add = (group: LedgerLine['group'], item: string, usage: number | null, recurring: number | null, note: string) =>
+    lines.push({ group, item, usage: clean(usage), recurring: clean(recurring), note });
   const hours = Math.min(24, Math.max(0, a.hoursPerDay)) * DAYS_PER_MONTH;
 
   // ---- AI
@@ -183,18 +187,25 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
     a.claudePlan === 'api' ? cards * TASK_CARD_USD : 0,
     `About ${Math.round(cards).toLocaleString('en-US')} short Haiku calls a month, one per ~${CALLS_PER_CARD} worker API calls. ${a.claudePlan === 'api' ? 'Billed to the API key.' : 'Comes out of the Claude plan.'}`,
   );
-  const codex = codexCost(f.codex, a.codexRate) * DAYS_PER_MONTH;
+  // With no Codex session at a desk there are no tokens to price: that's unknown, not free.
+  const codex = f.codex.sessions && !f.codex.unknown ? codexCost(f.codex, a.codexRate) * DAYS_PER_MONTH : null;
   const chat = CHATGPT_PLANS[a.chatgptPlan];
   add(
     'AI',
     'Codex workers',
     codex,
     chat.monthly || codex,
-    f.codex.sessions
+    f.codex.unknown
+      ? `${f.codex.unknown} Codex session${f.codex.unknown === 1 ? '' : 's'} awaiting token reports: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`
+      : f.codex.sessions
       ? `${f.codex.sessions} session${f.codex.sessions === 1 ? '' : 's'} at desks now, priced at ${CODEX_RATES[a.codexRate].label} API rates, as if every day were like today. ${a.chatgptPlan === 'none' ? 'Without a plan Codex bills an API key.' : `${chat.label} covers them.`}`
-      : `No Codex worker at a desk right now, so no tokens to price. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`,
+      : `No Codex worker at a desk right now, so no tokens to price: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`,
   );
-  if (f.opencode.sessions) {
+  const ocUnknown = f.opencode.unknown ?? 0;
+  if (ocUnknown) {
+    const n = f.opencode.sessions + ocUnknown;
+    add('AI', 'OpenCode workers', null, null, `${ocUnknown} of the ${n} OpenCode session${n === 1 ? '' : 's'} at desks now report no cost, so this is unavailable rather than guessed.`);
+  } else if (f.opencode.sessions) {
     const oc = f.opencode.cost * DAYS_PER_MONTH;
     add('AI', 'OpenCode workers', oc, oc, `What OpenCode reports for the ${f.opencode.sessions} session${f.opencode.sessions === 1 ? '' : 's'} at desks now, as if every day were like today. Billed by its provider.`);
   }
@@ -231,8 +242,9 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
   add('Free', 'Whiteboard, jukebox, pictures, the dog', 0, 0, 'Excalidraw, tunes and picture fetches all run in the office itself.');
   add('Free', 'Agent Office, Node.js, npm packages', 0, 0, 'Open source.');
 
-  const sum = (k: 'usage' | 'recurring') => lines.reduce((s, l) => s + l[k], 0);
-  return { lines, usage: sum('usage'), recurring: sum('recurring'), claudeMonthly: claude };
+  const sum = (k: 'usage' | 'recurring') => lines.reduce((s, l) => s + (l[k] ?? 0), 0);
+  const missing = (k: 'usage' | 'recurring') => lines.filter((l) => l[k] === null).length;
+  return { lines, usage: sum('usage'), recurring: sum('recurring'), unknown: { usage: missing('usage'), recurring: missing('recurring') }, claudeMonthly: claude };
 }
 
 /**
