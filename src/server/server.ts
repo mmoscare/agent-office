@@ -218,10 +218,7 @@ export async function startServer(cfg: Config) {
   );
   // Personal: blank OpenCode models default to the top Grok model in this catalogue (see grok-default.ts).
   const grok = useGrokCatalogue(openCodeModels);
-  const openCodeDefaultModel = async () => {
-    await grok.refresh();
-    return openCodeLaunchModel(undefined, configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentArgs : []);
-  };
+  const openCodeDefaultModel = () => openCodeLaunchModel(undefined, configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentArgs : []);
 
   const sendTo = (c: Client, msg: ServerMsg) => {
     if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
@@ -1168,9 +1165,12 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/agents/opencode/models' && req.method === 'GET') {
         try {
-          return send(res, 200, { models: await openCodeModels.get(), default: await openCodeDefaultModel() });
+          const models = await openCodeModels.get();
+          // The catalogue was just read, so this re-pick reuses its cache instead of running OpenCode again.
+          await grok.refresh();
+          return send(res, 200, { models, default: openCodeDefaultModel() });
         } catch {
-          return send(res, 502, { error: 'Could not load OpenCode models', default: await openCodeDefaultModel() });
+          return send(res, 502, { error: 'Could not load OpenCode models', default: openCodeDefaultModel() });
         }
       }
       if (p === '/api/image' && req.method === 'GET') {
