@@ -116,9 +116,12 @@ export interface TokenCounts {
 export interface LedgerFacts {
   /** Claude Code at API rates: today, the last 30 days (over `days` of them) and all time. */
   claude: { today: number; month?: { cost: number; days: number }; total: number; calls: number };
-  /** Tokens of the Codex sessions at desks now; `sessions` of them. */
+  /**
+   * Tokens a day of the Codex sessions at desks now: each session's total spread over the days
+   * since it began, a day at least (see server/ledger-facts.ts). `sessions` of them.
+   */
   codex: TokenCounts & { sessions: number; unknown?: number };
-  /** OpenCode's own reported cost for the sessions at desks now; `unknown` more report no cost. */
+  /** OpenCode's own reported cost a day for the sessions at desks now, the same way; `unknown` more report no cost. */
   opencode: { cost: number; sessions: number; unknown?: number };
 }
 
@@ -198,7 +201,7 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
     f.codex.unknown
       ? `${f.codex.unknown} Codex session${f.codex.unknown === 1 ? '' : 's'} awaiting token reports: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`
       : f.codex.sessions
-      ? `${f.codex.sessions} session${f.codex.sessions === 1 ? '' : 's'} at desks now, priced at ${CODEX_RATES[a.codexRate].label} API rates, as if every day were like today. ${a.chatgptPlan === 'none' ? 'Without a plan Codex bills an API key.' : `${chat.label} covers them.`}`
+      ? `${f.codex.sessions} session${f.codex.sessions === 1 ? '' : 's'} at desks now, priced at ${CODEX_RATES[a.codexRate].label} API rates. Each is spread over the days since it began (a day at least), then run out to a month. ${a.chatgptPlan === 'none' ? 'Without a plan Codex bills an API key.' : `${chat.label} covers them.`}`
       : `No Codex worker at a desk right now, so no tokens to price: usage unavailable. ${a.chatgptPlan === 'none' ? '' : `${chat.label} is the flat bill.`}`,
   );
   const ocUnknown = f.opencode.unknown ?? 0;
@@ -207,7 +210,7 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
     add('AI', 'OpenCode workers', null, null, `${ocUnknown} of the ${n} OpenCode session${n === 1 ? '' : 's'} at desks now report no cost, so this is unavailable rather than guessed.`);
   } else if (f.opencode.sessions) {
     const oc = f.opencode.cost * DAYS_PER_MONTH;
-    add('AI', 'OpenCode workers', oc, oc, `What OpenCode reports for the ${f.opencode.sessions} session${f.opencode.sessions === 1 ? '' : 's'} at desks now, as if every day were like today. Billed by its provider.`);
+    add('AI', 'OpenCode workers', oc, oc, `What OpenCode reports for the ${f.opencode.sessions} session${f.opencode.sessions === 1 ? '' : 's'} at desks now, each spread over the days since it began (a day at least), then run out to a month. Billed by its provider.`);
   }
   add('AI', 'Plan-limit meter (Claude /usage)', 0, 0, 'Reading the limits starts no conversation and costs nothing.');
 
@@ -224,7 +227,7 @@ export function estimate(a: LedgerAssumptions, f: LedgerFacts): LedgerEstimate {
     add('Hosting', 'EBS disk (gp3)', a.diskGb * AWS.gp3, a.diskGb * AWS.gp3, `${a.diskGb} GiB at ${money(AWS.gp3)} per GiB-month, running or paused.`);
     add('Hosting', 'Elastic IP (public IPv4)', AWS.ipv4Hourly * HOURS_PER_MONTH, AWS.ipv4Hourly * HOURS_PER_MONTH, `${money(AWS.ipv4Hourly)}/hour for the fixed address, running or paused.`);
     const out = running ? Math.max(0, a.egressGb - AWS.freeEgressGb) * AWS.egressGb : 0;
-    add('Hosting', 'Data transfer out', out, 0, `${a.egressGb} GB a month through tunnels and voice; the first ${AWS.freeEgressGb} GB are free, then ${money(AWS.egressGb)}/GB.`);
+    add('Hosting', 'Data transfer out', out, out, `${a.egressGb} GB a month through tunnels and voice; the first ${AWS.freeEgressGb} GB are free, then ${money(AWS.egressGb)}/GB.`);
   } else if (a.hosting === 'vps') {
     add('Hosting', 'VPS', Math.min(a.vpsMonthly, (a.vpsMonthly / HOURS_PER_MONTH) * hours), a.vpsMonthly, 'Most VPS hosts bill by the hour up to a monthly cap.');
   }
