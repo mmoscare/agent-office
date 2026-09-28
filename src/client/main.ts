@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
-import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
@@ -48,6 +48,8 @@ import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
+import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
+import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -185,6 +187,31 @@ store.on('peers', () => {
 const pullsTex = new BoardTexture('pulls');
 const renderPullsBoard = () => pullsTex.render(store.pulls, store.workers);
 mountBoard(office.boardMeshes.pulls, pullsTex.texture, renderPullsBoard, ['pulls']);
+// The PR board's other side: the floor's Git repositories, flipped by the switch above it (ui/git-board.ts).
+const gitTex = new GitBoardTexture();
+onGitRepos(() => gitTex.render(gitRepos));
+gitTex.render(gitRepos);
+const pullsSwitch = new PullsWallSwitch();
+{
+  const b = BOARDS.pulls;
+  const nx = Math.sin(b.rotY);
+  const nz = Math.cos(b.rotY);
+  // Along the wall to the board's right-hand end, level with its name above it.
+  const along = b.width / 2 - 0.85;
+  pullsSwitch.mesh.position.set(b.x + Math.cos(b.rotY) * along + nx * 0.1, b.y + b.height / 2 + 0.5, b.z - Math.sin(b.rotY) * along + nz * 0.1);
+  pullsSwitch.mesh.rotation.y = b.rotY;
+  // Only by pointing at it: it isn't in the list of things you use by standing near them.
+  pullsSwitch.mesh.userData.interact = { kind: 'gitToggle', x: b.x + nx * 1.6, z: b.z + nz * 1.6, radius: 0 } satisfies Interactable;
+  office.group.add(pullsSwitch.mesh);
+}
+const showPullsWall = () => {
+  const mat = office.boardMeshes.pulls.material as THREE.MeshBasicMaterial;
+  mat.map = pullsWallMode() === 'git' ? gitTex.texture : pullsTex.texture;
+  mat.needsUpdate = true;
+  pullsSwitch.render(pullsWallMode());
+};
+onPullsWallMode(showPullsWall);
+showPullsWall();
 // PR notes name the desk they came from. Redraw when that changes, not on every worker update.
 let deskLinks = '';
 store.on('workers', () => {
@@ -1496,7 +1523,29 @@ function boardActions() {
     meeting: (preset: MeetingPreset) => showMeeting(preset),
     goToDesk,
     pickUp,
+    gitBoard: () => {
+      setPullsWallMode('git');
+      showGitBoard();
+    },
   };
+}
+
+/** The Git board's window; its "Pull requests" button flips the wall back and opens the PR board. */
+function showGitBoard() {
+  openGitBoard({
+    pulls: () => {
+      setPullsWallMode('pulls');
+      openBoard('pulls', net, boardActions());
+    },
+  });
+}
+
+/** The switch above the PR board: turns it over to Git, or back to pull requests. */
+function flipPullsWall() {
+  const next = pullsWallMode() === 'git' ? 'pulls' : 'git';
+  setPullsWallMode(next);
+  toast(next === 'git' ? '🌿 The PR board now shows the Git repositories. Press E at it to open one.' : '🔀 The board shows pull requests again');
+  if (next === 'git' && !gitRepos.list) void loadGitRepos();
 }
 
 function watchShare() {
@@ -1545,7 +1594,9 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (note && key === 'O') return openIssue(note, net, boardActions());
   if (key !== 'E') return;
   if (target.kind === 'elevator') showElevator();
+  else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
   else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
+  else if (target.kind === 'gitToggle') flipPullsWall();
   else if (target.kind === 'services') openServices();
   else if (target.kind === 'queue') showQueue();
   else if (target.kind === 'tv') watchShare();
@@ -2017,7 +2068,9 @@ function hintFor(it: Interactable): Hint {
       if (aimedNote) return { k: String(aimedNote.number), parts: [title(clip(`📌 #${aimedNote.number} ${aimedNote.title}`, 60)), key('E', 'Take it'), key('O', 'Read it')] };
       return issuesTex.hasNotes ? { k: 'notes', parts: [title('📌 Issues board'), key('E', 'Open'), aside('or point at a note to take it')] } : board('📌 Issues board');
     case 'pulls':
-      return board('🔀 Pull request board');
+      return board(pullsWallMode() === 'git' ? '🌿 Git board' : '🔀 Pull request board');
+    case 'gitToggle':
+      return { k: pullsWallMode(), parts: [title(pullsWallMode() === 'git' ? '🔀 Back to pull requests' : '🌿 Git repositories'), key('E', 'Flip the board')] };
     case 'services':
       return board('🌐 Services board');
     case 'queue': {
@@ -2499,7 +2552,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2654,6 +2707,7 @@ const hud = mountHud(
   [
     { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions()) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
+    { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
     { id: 'services', icon: '🌐', label: 'Services', section: 'Open', count: () => store.services.items.length, title: () => 'Web servers the workers are running', run: () => openServices() },
     { id: 'whiteboard', icon: '📝', label: 'Whiteboard', section: 'Open', title: () => 'Draw together, live', run: () => openWhiteboard(net) },
