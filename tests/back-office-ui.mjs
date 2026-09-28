@@ -102,6 +102,16 @@ try {
   // The header counts floors the way the elevator numbers them.
   const projectMeta = () => page.locator('#project-meta').textContent();
   assert.match(await projectMeta(), /Back Office floor B1 of 1/);
+  // The back-wall floor tiles: main floors, then the roof, then the Back Office's floors.
+  const backFloor = saved.find(d => d.name === 'back office project').id;
+  const tilesAre = expected => page.waitForFunction(expected => {
+    const ids = [];
+    window.__office.office.elevator.group.getObjectByName('elevator-floor-tiles').traverse(o => { if (o.userData.interact?.floorId) ids.push(o.userData.interact.floorId); });
+    return JSON.stringify(ids) === JSON.stringify(expected);
+  }, expected, { timeout: 5000 });
+  await tilesAre([officeFloor, '@roof', backFloor]);
+  // So does the Needs you panel.
+  assert.deepEqual(await page.locator('#attention-floors .attention-floor-number').allTextContents(), ['1', 'B1']);
 
   // On a Back Office floor, the elevator opens in the basement.
   await openElevator();
@@ -131,10 +141,12 @@ try {
   await page.waitForFunction(() => window.__office.store.floors.every(f => f.backOffice));
   assert.ok((await floors()).every(d => d.backOffice === true));
   assert.match(await elevator.innerText(), /Every floor is filed in the Back Office/);
+  await tilesAre(['@roof', officeFloor, backFloor]);
   await elevator.locator('.floor-btn.basement').click();
   await elevator.locator('.floor-row').filter({ hasText: /^B1/ }).locator('.floor-move').click();
   await page.waitForFunction(id => !window.__office.store.floors.find(f => f.id === id).backOffice, officeFloor);
   assert.equal((await floors()).find(d => d.id === officeFloor).backOffice, undefined);
+  await tilesAre([officeFloor, '@roof', backFloor]);
   await elevator.getByRole('button', { name: 'Close', exact: true }).click();
 
   // The corner floor menu keeps the Back Office in its own section, open while you're down there.
@@ -149,6 +161,18 @@ try {
   await menu.getByRole('button', { name: /Back Office/ }).click();
   assert.equal(await backItem.count(), 0, 'the section collapses');
   await page.keyboard.press('Escape');
+  // A look at the back-wall tiles: floor 1, the roof, then B1 (you are here).
+  await page.evaluate(() => {
+    const { player } = window.__office;
+    player.view = 'third';
+    player.pos.set(8.5, 0, -11.3);
+    player.camYaw = 0;
+    player.camPitch = -0.28;
+    player.camDist = 0.35;
+    player.updateCamera(true);
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.screenshot({ path: path.join(screenshotDir, 'back-office-tiles.png') });
   assert.deepEqual(errors, []);
   await browser.close(); browser = undefined;
   host.stdin.write('stop\n');
