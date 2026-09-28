@@ -14,8 +14,8 @@ import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
-import { QUEUE_AGENT_DISALLOWED_TOOLS, stationBrief, type Checkout } from './stations.js';
-import { withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
+import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
+import { retoldTask, withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
 import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -34,6 +34,7 @@ import { screenSnapshot } from './screen.js';
 import type { Capacity } from './machine.js';
 import type { WorkspaceRequest } from '../shared/workspaces.js';
 import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
+import { SideShells } from './sideshell.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
@@ -133,6 +134,8 @@ export interface WorkerEvents {
   update(info: WorkerInfo): void;
   remove(workerId: string): void;
   data(workerId: string, data: string, viewers: string[]): void;
+  /** Output of a worker's side shell (its Shell tab), for whoever has that tab open. */
+  sideData(workerId: string, data: string, viewers: string[]): void;
   screen(workerId: string, frame: { cols: number; rows: number; lines: Record<number, Run[]>; full: boolean; cursor: [number, number] }): void;
   toast(text: string, level: 'info' | 'warn' | 'error'): void;
 }
@@ -149,7 +152,7 @@ export class WorkerManager {
   checkouts: () => Checkout[] = () => [];
   private openCodePlugin: string;
   private codexHook: string;
-  /** Where the office-queue command is, for the board agents' PATH (see writeQueueCommand). */
+  /** Where the office-queue, office-plans and office-inbox commands are, for the board agents' PATH (see writeQueueCommand). */
   private queueBin: string | undefined;
   private screenTimer: NodeJS.Timeout;
   /** The office is shutting down: workers exiting now are being stopped, not failing to resume. */
@@ -162,6 +165,8 @@ export class WorkerManager {
   /** Each worker's terminal on disk, so a restart doesn't wipe it (see history.ts). */
   private scrollback: ScrollbackStore;
   private saveTimer: NodeJS.Timeout;
+  /** A plain shell beside each worker, in its checkout, from the Shell tab of its terminal (see sideshell.ts). */
+  private sides: SideShells;
 
   constructor(
     private dir: string,
@@ -194,6 +199,15 @@ export class WorkerManager {
     });
     this.host = new PtyHost(dataDir, () => this.events.toast("The workers' terminal host stopped — resuming them", 'warn'));
     this.scrollback = new ScrollbackStore(dataDir);
+    this.sides = new SideShells({
+      data: (id, data, viewers) => this.events.sideData(id, data, viewers),
+      size: (id, size) => {
+        const w = this.workers.get(id);
+        if (!w) return;
+        w.info.side = size;
+        this.emitUpdate(w);
+      },
+    });
     this.restore();
     this.scrollback.prune(new Set(this.workers.keys()));
     // A session may have ended (and written its final tally) while the office was down.
@@ -355,7 +369,9 @@ export class WorkerManager {
     w.info.exitCode = undefined;
     const station = DESK_BY_ID.get(w.info.deskId)?.station;
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt;
+    // Any other worker with none (it never started, or its id was never reported) gets its task again
+    // rather than being told it has none. Not a board agent: its first request is long done.
+    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
@@ -416,6 +432,7 @@ export class WorkerManager {
       // already gone
     }
     w.term?.dispose();
+    this.sides.kill(id);
     this.scrollback.remove(id);
     this.events.remove(id);
     this.persist();
@@ -478,6 +495,30 @@ export class WorkerManager {
     return { data, cols: w.info.cols, rows: w.info.rows };
   }
 
+  /**
+   * Opens a worker's side shell (starting it in the worker's checkout if none runs) for `clientId`:
+   * what it shows so far, or why it couldn't start.
+   */
+  attachSide(id: string, clientId: string, cols: number, rows: number): { data: string; cols: number; rows: number } | string {
+    const w = this.workers.get(id);
+    if (!w) return 'No such worker';
+    const cwd = this.cwd(w.info);
+    if (!existsSync(cwd)) return `${w.info.name}'s working directory is gone (${cwd})`;
+    return this.sides.attach(id, clientId, cwd, { ...childEnv(), AGENT_OFFICE_WORKER_ID: id }, cols || w.info.cols, rows || w.info.rows);
+  }
+
+  detachSide(id: string, clientId: string) {
+    this.sides.detach(id, clientId);
+  }
+
+  writeSide(id: string, data: string) {
+    this.sides.write(id, data);
+  }
+
+  resizeSide(id: string, cols: number, rows: number) {
+    this.sides.resize(id, cols, rows);
+  }
+
   /** Lines of every worker's terminal holding `needle` (a searchKey), newest first, at most `perWorker` each. */
   search(needle: string, perWorker: number): { hits: TerminalHit[]; more: boolean } {
     const hits: TerminalHit[] = [];
@@ -498,6 +539,7 @@ export class WorkerManager {
   }
 
   detachAll(clientId: string) {
+    this.sides.detachAll(clientId);
     for (const w of this.workers.values()) {
       if (w.viewers.delete(clientId) && this.syncViewers(w)) this.emitUpdate(w);
     }
@@ -913,6 +955,7 @@ export class WorkerManager {
     clearInterval(this.usageTimer);
     clearInterval(this.branchTimer);
     clearInterval(this.saveTimer);
+    this.sides.killAll();
     for (const w of this.workers.values()) {
       clearTimeout(w.scanTimer);
       this.scanUsage(w);
@@ -968,8 +1011,9 @@ export class WorkerManager {
       // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
       if (info.model) args.push('--model', info.model);
       if (info.effort) args.push('--effort', info.effort);
-      // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
-      if (station === 'queue') args.push('--disallowedTools', ...QUEUE_AGENT_DISALLOWED_TOOLS);
+      // The queue agent and the receptionist only ever file and queue work: without these they can't touch the checkout's files.
+      const denied = station ? stationDisallowedTools(station) : [];
+      if (denied.length) args.push('--disallowedTools', ...denied);
       if (resumeSessionId) args.push('--resume', resumeSessionId);
       // `--` so a prompt like "- fix login" is never parsed as a CLI option.
       if (prompt) args.push('--', prompt);
@@ -999,7 +1043,7 @@ export class WorkerManager {
       AGENT_OFFICE_HOOK_URL: this.hook.url,
       AGENT_OFFICE_HOOK_TOKEN: w.hookToken,
     });
-    // A board agent reaches the queue with the office-queue command, whichever agent it runs.
+    // A board agent reaches the queue, the To Do Next board and the in-tray with the office-* commands, whichever agent it runs.
     if (station && this.queueBin) {
       // Windows spells it Path.
       const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
@@ -1409,21 +1453,25 @@ process.stdin.on('end', () => {
   }
 
   /**
-   * Writes the office-queue command into the data dir's bin/, running bin/office-queue.js with the
-   * office's own node, and returns that directory. Rewritten on every start, so after an upgrade it
-   * runs the new install's script.
+   * Writes the board agents' commands (office-queue, office-plans and office-inbox) into the data
+   * dir's bin/, each running its bin/*.js with the office's own node, and returns that directory.
+   * Rewritten on every start, so after an upgrade they run the new install's scripts.
    */
   private writeQueueCommand(): string | undefined {
-    const script = queueScript();
-    if (!script) return undefined;
     const dir = path.join(this.dataDir, 'bin');
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, 'office-queue');
-    writeFileSync(file, `#!/bin/sh\n# Agent Office's task queue, for the board agents (see bin/office-queue.js).\nexec ${shq(process.execPath)} ${shq(script)} "$@"\n`, { mode: 0o700 });
-    chmodSync(file, 0o700);
-    // cmd.exe and PowerShell find it by PATHEXT; Git Bash (Claude Code's shell there) runs the sh one.
-    if (WIN) writeFileSync(`${file}.cmd`, `@"${process.execPath}" "${script}" %*\r\n`);
-    return dir;
+    let any = false;
+    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray']] as const) {
+      const script = binScript(`${name}.js`);
+      if (!script) continue;
+      if (!any) mkdirSync(dir, { recursive: true, mode: 0o700 });
+      any = true;
+      const file = path.join(dir, name);
+      writeFileSync(file, `#!/bin/sh\n# Agent Office's ${what}, for the board agents (see bin/${name}.js).\nexec ${shq(process.execPath)} ${shq(script)} "$@"\n`, { mode: 0o700 });
+      chmodSync(file, 0o700);
+      // cmd.exe and PowerShell find it by PATHEXT; Git Bash (Claude Code's shell there) runs the sh one.
+      if (WIN) writeFileSync(`${file}.cmd`, `@"${process.execPath}" "${script}" %*\r\n`);
+    }
+    return any ? dir : undefined;
   }
 
   private saveScrollback(w: Worker) {
@@ -1656,11 +1704,11 @@ function screenText(term: HeadlessTerminal, from = 0): string {
   return out.join('\n');
 }
 
-/** bin/office-queue.js in the install this office runs from (src/server under tsx, dist/server/server built). */
-function queueScript(): string | undefined {
+/** A bin/*.js script in the install this office runs from (src/server under tsx, dist/server/server built). */
+function binScript(name: string): string | undefined {
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 4; i++, dir = path.dirname(dir)) {
-    const file = path.join(dir, 'bin', 'office-queue.js');
+    const file = path.join(dir, 'bin', name);
     if (existsSync(file)) return file;
   }
   return undefined;
