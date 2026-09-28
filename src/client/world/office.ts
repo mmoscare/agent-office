@@ -42,6 +42,9 @@ export interface Interactable {
   deskId?: string;
   decorId?: string;
   seatId?: string;
+  /** A back-wall elevator shortcut; absent on the ordinary floor picker. */
+  floorId?: string;
+  elevatorPage?: -1 | 1;
   /** Which of POLES, for a fire pole. */
   pole?: number;
   /** Put away for now (a bean bag nobody needs yet): can't be used. */

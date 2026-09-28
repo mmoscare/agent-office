@@ -304,6 +304,7 @@ let roof: Rooftop | null = null;
 function theRoof(): Rooftop {
   if (!roof) {
     roof = buildRooftop(office.night, roofFloors());
+    roof.elevator.setFloors(store.floors, store.floor);
     roof.group.visible = false;
     scene.add(roof.group);
     noOutline(roof.group);
@@ -743,6 +744,13 @@ let trip: { floor: string; how: TripKind; timer: number; workerId?: string } | n
 function showElevator() {
   openElevator({ net, ride });
 }
+
+function syncElevatorTiles() {
+  office.elevator.setFloors(store.floors, store.floor);
+  roof?.elevator.setFloors(store.floors, store.floor);
+}
+store.on('floors', syncElevatorTiles);
+store.on('floor', syncElevatorTiles);
 
 /** The elevator where you are: the office's, or the one up on the roof. */
 function lift() {
@@ -1668,8 +1676,14 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (note && key === 'E') return pickUp(note);
   if (note && key === 'O') return openIssue(note, net, boardActions());
   if (key !== 'E') return;
-  if (target.kind === 'elevator') showElevator();
-  else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
+  if (target.kind === 'elevator') {
+    if (trip) return;
+    if (target.elevatorPage) lift().turnPage(target.elevatorPage);
+    else if (target.floorId) {
+      const floor = store.floors.find(f => f.id === target.floorId);
+      if (target.floorId === ROOF ? store.floors.some(f => !f.cloning) : floor && !floor.cloning) ride(target.floorId);
+    } else showElevator();
+  } else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
   else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
   else if (target.kind === 'gitToggle') flipPullsWall();
   else if (target.kind === 'manual') openManual();
@@ -2200,6 +2214,14 @@ function hintFor(it: Interactable): Hint {
     case 'ledger':
       return { k: '', parts: [title('📒 The Office Ledger'), aside('what this office costs to run'), key('E', 'Read it')] };
     case 'elevator': {
+      if (it.elevatorPage) return { k: String(it.elevatorPage), parts: [title('Floor tiles'), key('E', it.elevatorPage > 0 ? 'Next page' : 'Previous page')] };
+      if (it.floorId) {
+        const destination = store.floors.find(f => f.id === it.floorId);
+        const name = it.floorId === ROOF ? ROOF_NAME : destination?.name ?? 'Floor unavailable';
+        const here = it.floorId === store.floor;
+        const unavailable = it.floorId !== ROOF && (!destination || destination.cloning);
+        return { k: `${it.floorId}|${name}|${here}|${unavailable}`, parts: [title(name), here ? aside('You are here') : unavailable ? aside('Not ready yet') : key('E', 'Ride to this floor')] };
+      }
       const f = store.currentFloor();
       const n = store.floors.length;
       return { k: `${f?.name}|${n}`, parts: [title('🛗 Elevator'), f ? aside(`${f.name} · ${n} floor${n === 1 ? '' : 's'}`) : '', key('E', n > 1 ? 'Choose a floor' : 'Floors & projects')] };
@@ -3083,10 +3105,11 @@ function frame(ts?: number) {
     if (aim?.near) aimedNote = noteUnder(aim);
   } else {
     target = mySeat() ?? pickTarget();
-    // By the issues board, the mouse points at the note you'd take.
-    if (target?.kind === 'issues' && pointer) {
+    // The mouse selects a floor tile, or the issue note you'd take.
+    if ((target?.kind === 'issues' || target?.kind === 'elevator') && pointer) {
       const aim = aimedAt(pointer, 2.5);
-      if (aim?.near) aimedNote = noteUnder(aim);
+      if (aim?.near && aim.it.kind === 'elevator') target = aim.it;
+      if (target?.kind === 'issues' && aim?.near) aimedNote = noteUnder(aim);
     }
   }
   issuesTex.lift(aimedNote?.number ?? null);
