@@ -28,8 +28,8 @@ export interface FloorContext {
   /** To everyone on this floor. */
   emit(floor: Floor, msg: ServerMsg, droppable?: boolean): void;
   toast(floor: Floor, text: string, level?: ToastLevel): void;
-  /** A worker's terminal output, for whoever has that terminal open. */
-  termData(workerId: string, data: string, viewers: string[]): void;
+  /** A worker's terminal output (or its side shell's), for whoever has that terminal open. */
+  termData(workerId: string, data: string, viewers: string[], side?: boolean): void;
   /** What a worker changed, for whoever has its Changes window open. */
   changes(state: ChangesState, clients: string[]): void;
   /** A worker on this floor changed, or left (then just its id). */
@@ -127,6 +127,7 @@ export class Floor {
           ctx.workerChanged(this, workerId);
         },
         data: (workerId, data, viewers) => ctx.termData(workerId, data, viewers),
+        sideData: (workerId, data, viewers) => ctx.termData(workerId, data, viewers, true),
         screen: (workerId, frame) => ctx.emit(this, { t: 'screen', workerId, ...frame }, true),
         toast: (text, level) => ctx.toast(this, text, level),
       },
