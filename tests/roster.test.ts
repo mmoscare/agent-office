@@ -44,6 +44,40 @@ test('a multi-repository desk lists each of its repositories instead of the floo
   assert.equal(e.branch, undefined);
 });
 
+test('nested repositories keep their unique paths and do not merge unrelated roster groups', () => {
+  const entry = (id: string, repositories: string[]) => rosterEntry(worker(id, {
+    workspace: {
+      path: `ws/${id}`,
+      repositories: repositories.map((repository) => ({
+        repository, name: repository.split('/').at(-1)!, path: `ws/${id}/${repository}`, branch: `office/${id}`, base: 'abc',
+      })),
+    },
+  }), 'floor-repo');
+  const services = entry('services', ['services/api']);
+  const legacy = entry('legacy', ['legacy/api']);
+  const both = entry('both', ['services/api', 'legacy/api']);
+  assert.deepEqual(both.repos, ['services/api', 'legacy/api']);
+  const groups = rosterByRepo([{ roster: [services, legacy, both] }]);
+  assert.deepEqual(groups.map((g) => [g.repo, g.entries.map((e) => e.id)]), [
+    ['services/api', ['services']],
+    ['legacy/api', ['legacy']],
+    ['services/api + legacy/api', ['both']],
+  ]);
+});
+
+test('the root workspace checkout uses its name instead of a dot', () => {
+  const e = rosterEntry(worker('root', {
+    workspace: {
+      path: 'ws/root',
+      repositories: [
+        { repository: '.', name: 'app', path: 'ws/root/app', branch: 'office/root', base: 'abc' },
+        { repository: 'services/api', name: 'api', path: 'ws/root/api', branch: 'office/root', base: 'abc' },
+      ],
+    },
+  }), 'floor-repo');
+  assert.deepEqual(e.repos, ['app', 'services/api']);
+});
+
 test('board agents are marked with their station and the roster runs oldest first', () => {
   const roster = floorRoster([worker('late', { createdAt: 5 }), worker('queue', { deskId: 'station-queue', createdAt: 2 })], 'r');
   assert.deepEqual(roster.map((e) => e.id), ['queue', 'late']);

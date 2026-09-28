@@ -30,7 +30,7 @@ const clip = (text: string, max: number) => {
  * multi-repository desk's repos are named after their checkouts under the floor.
  */
 export function rosterEntry(w: WorkerInfo, floorRepo: string): RosterEntry {
-  const repos = w.workspace?.repositories.length ? w.workspace.repositories.map((r) => r.name || r.repository) : [floorRepo];
+  const repos = w.workspace?.repositories.length ? w.workspace.repositories.map((r) => r.repository === '.' ? r.name : r.repository) : [floorRepo];
   // The task's one-liner is written for exactly this; before it arrives, what it was asked.
   const doing = w.task
     ? `${w.task.name}${w.task.summary ? `: ${w.task.summary}` : ''}`

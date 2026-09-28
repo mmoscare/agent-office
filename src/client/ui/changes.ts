@@ -37,7 +37,7 @@ function pathLabel(p: string): HTMLElement {
 }
 
 /** Renders a unified diff: hunk headers, added and removed lines, with line numbers. */
-function renderDiff(text: string, truncated: boolean): HTMLElement {
+export function renderDiff(text: string, truncated: boolean): HTMLElement {
   const out = h('div.diff-lines');
   let oldN = 0;
   let newN = 0;
