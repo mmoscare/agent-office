@@ -1214,3 +1214,25 @@ a.when:hover { text-decoration: underline; }
 .office-status.ok .office-toggle::after { content: 'Details ▾'; }
 .office-status[open] .office-toggle::after { content: 'Hide ▴'; }
 .office-body { max-height: 32vh; }
+
+/* The update bar across the top after Agent Office's own code changes (ui/update-bar.ts) */
+.update-bar { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 40; width: min(860px, calc(100vw - 24px)); background: var(--paper); border: 3px solid var(--ink); border-radius: 16px; box-shadow: 0 5px 0 var(--ink); font-size: 13px; overflow: hidden; }
+.update-bar[hidden] { display: none; }
+.update-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; background: #fff1c1; border-bottom: 2px solid rgba(43,45,66,.2); }
+.update-sub { color: var(--muted); font-weight: 800; }
+.update-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.update-steps li { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px 2px 3px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; font-weight: 800; white-space: nowrap; }
+.update-steps li.done { color: #2a9d4b; border-color: #2a9d4b; }
+.update-steps li.now { background: #ffd166; }
+.update-steps li.later { opacity: .55; }
+.update-num { width: 18px; height: 18px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+.update-steps li.done .update-num { background: #2a9d4b; }
+.update-hide { padding: 3px 12px; font-size: 12px; }
+.update-now { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow: auto; }
+.update-now p { margin: 0; font-weight: 700; }
+.update-now .btn { align-self: flex-start; }
+.update-now p .btn { margin-left: 4px; }
+.update-now-title { font-size: 14px; }
+.update-warn { color: #b5651d; }
+.update-note { color: var(--muted); font-size: 12px; }
+.update-note code { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 4px; border-radius: 4px; }

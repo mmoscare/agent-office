@@ -51,6 +51,7 @@ import { issuePrompt, openBoard } from './ui/boards';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { openManual } from './ui/manual';
+import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -240,6 +241,9 @@ mountBoard(office.meetingSign, meetingSignTex.texture, () => meetingSignTex.rend
 const gallery = new Gallery();
 office.group.add(gallery.group);
 store.on('decor', () => gallery.sync(store.decor));
+
+// The bar across the top after Agent Office's own code changes on GitHub: the steps to run it (ui/update-bar.ts).
+mountUpdateBar();
 
 // The whiteboard shows what everyone's drawn on it.
 mirrorWhiteboard(office.whiteboard.show, office.whiteboard.fit.width, office.whiteboard.fit.height);
@@ -535,6 +539,8 @@ net.onMessage((msg) => {
   routeTeamMessage(msg);
   routeAccountsMessage(msg);
   routePullMessage(msg);
+  // A PR merged from here: the update bar checks straight away whether the office needs updating.
+  if (msg.t === 'gh.merged' && !msg.error) mergedJustNow();
   routeElevatorMessage(msg);
   routeWhiteboardMessage(msg, net);
   switch (msg.t) {
