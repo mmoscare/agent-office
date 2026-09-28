@@ -133,6 +133,19 @@ export interface WorkerInfo {
   meeting?: string;
   /** Its side shell's size, while one runs (the Shell tab of its terminal window). */
   side?: { cols: number; rows: number };
+  /**
+   * Uncommitted work the office saved as a WIP commit when it last went down (see wip-checkpoint.ts),
+   * one per repository. Cleared once the worker has been told about it on waking.
+   */
+  checkpoints?: WipCheckpoint[];
+}
+
+export interface WipCheckpoint {
+  hash: string;
+  branch: string;
+  at: number;
+  /** The workspace repository it's in, for a multi-repository desk. */
+  repository?: string;
 }
 
 /** Session usage. The persistent office ledger continues to cover Claude Code only. */
@@ -368,6 +381,8 @@ export interface QueueTask {
   error?: string;
   /** The pull request that closes the issue, or was opened from the worker's branch. */
   pr?: { number: number; url: string; state: string; title: string };
+  /** The WIP commit the office saved the worker's uncommitted work as, when it restarted mid-task. */
+  checkpoint?: string;
   /** Finished without a PR, but its branch still holds work: files not committed, commits no PR has (see server/unshipped.ts). */
   unshipped?: { dirty: number; commits: number };
 }

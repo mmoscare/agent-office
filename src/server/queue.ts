@@ -355,6 +355,7 @@ export class TaskQueue {
       t.branch = r.worktree?.branch;
       t.startedAt = Date.now();
       t.error = undefined;
+      t.checkpoint = undefined;
       this.lastStatus.set(r.id, r.status);
       if (t.plan) this.events.startPlan?.(t.plan, { id: r.id, name: r.name }, t.id);
       this.events.toast(`📋 ${r.name} sat down at ${DESK_BY_ID.get(desk)?.label ?? 'a desk'} to work on ${label(t)}`, 'info');
@@ -414,6 +415,7 @@ export class TaskQueue {
           error: s.error,
           pr: s.pr,
           unshipped: s.unshipped && Number.isFinite(s.unshipped.dirty) && Number.isFinite(s.unshipped.commits) ? { dirty: s.unshipped.dirty, commits: s.unshipped.commits } : undefined,
+          checkpoint: typeof s.checkpoint === 'string' && s.checkpoint ? s.checkpoint : undefined,
         };
         // Whatever was running died with the old office process; its worker comes back asleep at best.
         // One whose agent never reported a session is woken with its task again (see WorkerManager.resume),
@@ -424,6 +426,8 @@ export class TaskQueue {
           t.outcome = 'exited';
           t.finishedAt = Date.now();
           t.error = RESTART_ERROR;
+          // What it left uncommitted was saved as a WIP commit as the office went down (see WorkerManager.checkpoint).
+          t.checkpoint = worker?.checkpoints?.[0]?.hash;
         }
         this.tasks.push(t);
       }

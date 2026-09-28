@@ -9,13 +9,14 @@ import { workerBranches } from './worker-branches.js';
 import { codexInputPrompt } from './codex-input.js';
 import headless from '@xterm/headless';
 import serialize from '@xterm/addon-serialize';
-import type { AgentEffort, AgentProvider, GhPull, Run, TerminalHit, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
+import type { AgentEffort, AgentProvider, GhPull, Run, TerminalHit, WipCheckpoint, WorkerInfo, WorkerKind, WorkerStatus, WorkerTask } from '../shared/protocol.js';
 import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js';
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
-import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
+import { checkpointNotice, retoldTask, withCheckpointNotice, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
+import { CHECKPOINT_DEADLINE_MS, checkpointWorktrees, type CheckpointTarget } from './wip-checkpoint.js';
 import { isBusy } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
@@ -371,7 +372,10 @@ export class WorkerManager {
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
     // Any other worker with none (it never started, or its id was never reported) gets its task again
     // rather than being told it has none. Not a board agent: its first request is long done.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
+    const told = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
+    // Work the office committed for it as it went down: it carries on from that commit. Told once.
+    const first = withCheckpointNotice(told, checkpointNotice(w.info.checkpoints));
+    w.info.checkpoints = undefined;
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
@@ -964,6 +968,54 @@ export class WorkerManager {
     else this.host.stop();
   }
 
+  /**
+   * As the office goes down (after shutdown): commits each agent's uncommitted worktree changes as a
+   * WIP checkpoint on its branch and pushes branches with unpushed commits, all within `deadlineMs`.
+   * Only the office's own worktrees under .agent-office, never the main checkout or a board agent's.
+   * Each worker keeps the commit's hash, to be told about it when it's woken (see resume). Never throws.
+   */
+  async checkpoint(deadlineMs = CHECKPOINT_DEADLINE_MS, now = new Date()): Promise<void> {
+    const targets = new Map<string, CheckpointTarget & { owners: { w: Worker; repository?: string }[] }>();
+    const add = (w: Worker, rel: string, branch: string, repository?: string) => {
+      const abs = path.resolve(this.dir, rel);
+      if (!this.checkpointable(abs)) return;
+      const key = WIN ? abs.toLowerCase() : abs;
+      const t = targets.get(key) ?? { dir: abs, branch, owners: [] };
+      // A meeting's worktree is shared by everyone at the table: one commit, and each of them is told.
+      t.owners.push({ w, repository });
+      targets.set(key, t);
+    };
+    for (const w of this.workers.values()) {
+      const { info } = w;
+      if (info.kind !== 'agent' || DESK_BY_ID.get(info.deskId)?.station) continue;
+      // Finished and merged: whatever is left over isn't work in progress.
+      if ((info.status === 'done' || info.status === 'exited') && info.pr?.state === 'MERGED') continue;
+      if (info.worktree) add(w, info.worktree.path, info.worktree.branch);
+      for (const r of info.workspace?.repositories ?? []) add(w, r.path, r.branch, r.repository);
+    }
+    if (!targets.size) return;
+    try {
+      const list = [...targets.values()];
+      const results = await checkpointWorktrees(list, { deadlineMs, now });
+      results.forEach((r, i) => {
+        if (!r.hash) return;
+        for (const { w, repository } of list[i].owners) {
+          const saved: WipCheckpoint = { hash: r.hash, branch: r.branch, at: now.getTime(), ...(repository ? { repository } : {}) };
+          w.info.checkpoints = [...(w.info.checkpoints ?? []).filter((c) => c.repository !== repository), saved];
+        }
+      });
+    } catch (err) {
+      console.error("agent-office: couldn't save the workers' uncommitted work", err);
+    }
+    this.persist();
+  }
+
+  /** A worktree folder the office made (under .agent-office), never the floor's own checkout. */
+  private checkpointable(abs: string): boolean {
+    const rel = path.relative(path.resolve(this.dir, '.agent-office'), abs);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel) && existsSync(abs);
+  }
+
   // ---------------------------------------------------------------------------
 
   private launch(w: Worker, prompt: string | undefined, resumeSessionId: string | undefined) {
@@ -1074,6 +1126,8 @@ export class WorkerManager {
   /** Takes back a terminal the host kept running while the office was down. */
   private adopt(w: Worker, adopted: Adopted, saved: NonNullable<Worker['saved']>) {
     const { info } = w;
+    // Its session ran on through the restart: a note typed in later would arrive out of the blue.
+    info.checkpoints = undefined;
     info.cols = adopted.cols;
     info.rows = adopted.rows;
     const term = this.newTerm(w);
@@ -1492,6 +1546,7 @@ process.stdin.on('end', () => {
       task: info.task,
       pr: info.pr,
       meeting: info.meeting,
+      checkpoints: info.checkpoints,
       tracker: info.kind === 'agent' ? tracker : undefined,
       usage: info.provider === 'opencode' || info.provider === 'codex' ? info.usage : undefined,
       codexTranscript: info.provider === 'codex' ? codexTranscript : undefined,
@@ -1549,6 +1604,7 @@ process.stdin.on('end', () => {
           viewers: [],
           viewerIds: [],
           meeting: typeof s.meeting === 'string' && DESK_BY_ID.get(s.deskId)?.room ? s.meeting : undefined,
+          checkpoints: validCheckpoints(s.checkpoints),
         };
         const w = newWorker(info, tracker, typeof s.hookToken === 'string' && s.hookToken ? s.hookToken : undefined);
         if (provider === 'codex' && typeof s.codexTranscript === 'string') w.codexTranscript = s.codexTranscript;
@@ -1567,6 +1623,14 @@ process.stdin.on('end', () => {
 }
 
 // ---------------------------------------------------------------------------
+
+function validCheckpoints(v: unknown): WipCheckpoint[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const list: WipCheckpoint[] = v
+    .filter((c) => c && typeof c.hash === 'string' && /^[0-9a-f]{7,64}$/i.test(c.hash) && typeof c.branch === 'string' && c.branch)
+    .map((c) => ({ hash: c.hash, branch: c.branch, at: typeof c.at === 'number' ? c.at : 0, ...(typeof c.repository === 'string' ? { repository: c.repository } : {}) }));
+  return list.length ? list : undefined;
+}
 
 function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBytes(16).toString('hex')): Worker {
   return {

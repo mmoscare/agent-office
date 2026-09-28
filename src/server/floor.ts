@@ -305,8 +305,11 @@ export class Floor {
     };
   }
 
-  /** With `keep` (a restart), the workers' terminals keep running for the next office to pick up. */
-  shutdown(keep = false) {
+  /**
+   * With `keep` (a restart), the workers' terminals keep running for the next office to pick up.
+   * Resolves once the workers' uncommitted work is saved as WIP commits (bounded, see wip-checkpoint.ts).
+   */
+  shutdown(keep = false): Promise<void> {
     clearInterval(this.timer);
     this.dog.stop();
     this.github.stop();
@@ -318,6 +321,7 @@ export class Floor {
     this.whiteboard.flush();
     this.inbox.shutdown();
     this.workers.shutdown(keep);
+    return this.workers.checkpoint();
   }
 
   changesFor(workerId: string, repository?: string): Changes | undefined {

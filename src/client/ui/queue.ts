@@ -5,7 +5,7 @@ import { h, openModal, timeAgo, STATUS_LABEL } from './dom';
 import { confirmDialog } from './prompt';
 import { providerPicker, providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
 import { officeFull } from '../world/machine';
-import { stoppedByRestart, taskStatus, unshippedText } from '../../shared/task-status';
+import { restartText, stoppedByRestart, taskStatus, unshippedText } from '../../shared/task-status';
 
 export interface QueueActions {
   openTerminal(workerId: string): void;
@@ -21,7 +21,7 @@ function taskTitle(t: QueueTask): HTMLElement {
 }
 
 function outcome(t: QueueTask): string {
-  if (stoppedByRestart(t)) return 'stopped by restart';
+  if (stoppedByRestart(t)) return restartText(t);
   switch (t.outcome) {
     case 'done':
       return t.pr ? 'finished' : 'finished, no PR found yet';
