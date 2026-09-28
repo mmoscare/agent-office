@@ -144,9 +144,9 @@ button { font-family: inherit; }
 .attention-reason { flex: none; padding: 2px 5px; border-radius: 6px; background: #ffe4ad; font-size: 10px; font-weight: 900; }
 .attention-reason.done { background: #c9f4e7; }
 .attention-reason.error { background: #ffe0e7; }
-/* Spend: today, the budget and all time. Its panel only shows once there's something to say. */
+/* Spend: today's budget and saved provider usage history. */
 .side .spend { flex: none; }
-.spend:has(> .usage.hidden) { display: none; }
+/* Saved provider usage remains reachable even when the Claude budget has no spend. */
 .usage { font-size: 12px; font-weight: 700; display: flex; flex-direction: column; gap: 5px; }
 .usage .row { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage .row.muted { display: block; white-space: normal; overflow: visible; overflow-wrap: anywhere; }

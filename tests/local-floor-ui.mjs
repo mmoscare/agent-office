@@ -65,16 +65,25 @@ try {
   await context.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Smoke test', color: '#ff8a5b', look: {} }));
     // Use the normal third-person setting so pointer lock does not redirect automated clicks.
-    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
+    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true, hud: { spend: true, workers: true } }));
   });
   const page = await context.newPage();
+  // Keep an update notice present while exercising modal controls; it must not
+  // escape the app's stacking context and cover menus or close buttons.
+  await page.route('**/api/git/office**', route => route.fulfill({ json: { office: {
+    dir: codeDir, branch: 'personal', ahead: 0, behind: 0, dirty: 0,
+    startedAt: Date.now(), target: 'smoke-fixture', floors: [],
+    needs: { pull: false, build: true, restart: false },
+  } } }));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => window.__office?.store.floor, undefined, { timeout: 20000 });
+  await page.waitForFunction(() => document.querySelector('.update-bar:not([hidden])')?.parentElement?.id === 'app');
   const addProject = async () => {
     await page.evaluate(() => document.exitPointerLock());
-    await page.locator('#project').click();
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    await page.getByRole('menuitem', { name: /Elevator/ }).click();
     await page.getByRole('button', { name: /Add a project/ }).click();
     assert.equal(await page.getByRole('button', { name: 'Local folder', exact: true }).getAttribute('aria-pressed'), 'true');
   };
@@ -83,7 +92,7 @@ try {
   await page.locator('.folder-row').filter({ hasText: 'multi repo project' }).click();
   await page.waitForFunction(dir => document.querySelector('#local-floor-path')?.value === dir, projectDir);
   assert.equal(await page.locator('.folder-row').count(), 2);
-  const screenshotDir = path.join(codeDir, 'tmp/screenshots');
+  const screenshotDir = path.join(codeDir, '.agent-office/verification/local-floor');
   await mkdir(screenshotDir, { recursive: true });
   await page.getByRole('dialog', { name: 'Elevator', exact: true }).screenshot({ path: path.join(screenshotDir, 'local-folder-picker.png') });
   await page.getByRole('button', { name: 'Open folder', exact: true }).click();
@@ -112,9 +121,13 @@ try {
   assert.equal(await page.locator('.usage-record').count(), 1);
   await page.getByRole('combobox', { name: 'Filter usage by provider' }).selectOption('');
   await page.getByRole('dialog', { name: 'Usage and cost' }).screenshot({ path: path.join(screenshotDir, 'usage-and-cost.png') });
-  const downloadReady = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download CSV' }).click();
-  const exported = await downloadReady;
+  // The Receptionist reminder may appear while this dialog is open. It must stay
+  // inside the HUD stacking context, below the modal's controls.
+  await page.waitForFunction(() => document.querySelector('.mail-nag')?.parentElement?.id === 'hud');
+  const [exported] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download CSV' }).click(),
+  ]);
   assert.equal(exported.suggestedFilename(), 'Agent Office usage.csv');
   await page.getByRole('button', { name: 'Close usage', exact: true }).click();
   await page.evaluate(() => document.exitPointerLock());
@@ -124,7 +137,7 @@ try {
     const original = net.send.bind(net);
     window.__terminalInputs = [];
     net.send = msg => { if (msg.workerId === 'keyboard-fixture') window.__terminalInputs.push(msg); else original(msg); };
-    store.workers.set('keyboard-fixture', { id: 'keyboard-fixture', name: 'Keyboard fixture', kind: 'agent', provider: 'codex', deskId: 'desk-1', color: '#ff8a5b', status: 'idle', acked: true, createdBy: 'Test', createdAt: Date.now(), cols: 80, rows: 24, viewers: [] });
+    store.workers.set('keyboard-fixture', { id: 'keyboard-fixture', name: 'Keyboard fixture', kind: 'agent', provider: 'codex', deskId: 'desk-1', color: '#ff8a5b', status: 'idle', acked: true, createdBy: 'Test', createdAt: Date.now(), cols: 80, rows: 24, viewers: [], viewerIds: [] });
     store.emit('workers');
   });
   await page.locator('#workers li').filter({ hasText: 'Keyboard fixture' }).click();
