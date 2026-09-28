@@ -17,6 +17,8 @@ export interface FloorDef {
   palette: number;
   addedBy: string;
   addedAt: number;
+  /** Filed in the basement's Back Office list instead of the elevator's main floors. Absent means false. */
+  backOffice?: boolean;
 }
 
 /** A projects folder picked in ⚙️ Settings (or with --projects), as projects-folder.json keeps it. */
@@ -117,7 +119,7 @@ export class Building {
   }
 
   /** Register an existing workspace in place. It may contain one, several, or no Git repositories. */
-  addLocal(input: unknown, by: string): FloorDef | string {
+  addLocal(input: unknown, by: string, backOffice = false): FloorDef | string {
     let dir: string;
     try { dir = localFolder(input); }
     catch (err) { return (err as Error).message; }
@@ -126,7 +128,7 @@ export class Building {
     if (known) return known;
     if ([...this.cloning.values()].some((d) => localFolderKey(d.dir) === key)) return 'That folder is still being cloned';
     if (this.defs.length + this.cloning.size >= MAX_FLOORS) return `The building is full (${MAX_FLOORS} floors)`;
-    const def = this.newDef(path.basename(dir) || dir, originRepo(dir), dir, by);
+    const def = this.newDef(path.basename(dir) || dir, originRepo(dir), dir, by, backOffice);
     this.defs.push(def);
     const error = this.save();
     if (error) {
@@ -141,7 +143,7 @@ export class Building {
    * floor as soon as the clone begins; resolves to the finished floor, or to why there's none. A
    * checkout that's already where the clone would go is used as it is.
    */
-  async add(input: string, by: string, started: (def: FloorDef) => void): Promise<FloorDef | string> {
+  async add(input: string, by: string, started: (def: FloorDef) => void, backOffice = false): Promise<FloorDef | string> {
     const wanted = normalizeRepo(input);
     if (!wanted) return 'Pick a repository, or type it as owner/name';
     if (this.defs.some((d) => sameRepo(d.repo, wanted))) return `${wanted} already has a floor`;
@@ -161,7 +163,7 @@ export class Building {
     const [owner, name] = repo.split('/');
     const dest = path.join(this.projectsDir, owner, name);
     if (this.defs.some((d) => path.resolve(d.dir) === dest)) return `${dest} is already a floor`;
-    const def = this.newDef(name, repo, dest, by);
+    const def = this.newDef(name, repo, dest, by, backOffice);
     this.cloning.set(key, def);
     started(def);
     try {
@@ -172,6 +174,23 @@ export class Building {
     }
     this.defs.push(def);
     this.save();
+    return def;
+  }
+
+  /** Files a floor in the Back Office (`on`) or brings it back up to the main floors. Returns why it can't, if it can't. */
+  setBackOffice(id: string, on: boolean): FloorDef | string {
+    const def = this.defs.find((d) => d.id === id);
+    if (!def) return this.cloning.size && [...this.cloning.values()].some((d) => d.id === id) ? 'That floor is still being cloned' : 'No such floor';
+    if (!!def.backOffice === on) return def;
+    const was = def.backOffice;
+    if (on) def.backOffice = true;
+    else delete def.backOffice;
+    const error = this.save();
+    if (error) {
+      if (was) def.backOffice = was;
+      else delete def.backOffice;
+      return error;
+    }
     return def;
   }
 
@@ -188,7 +207,7 @@ export class Building {
     return repos;
   }
 
-  private newDef(name: string, repo: string | undefined, dir: string, by: string): FloorDef {
+  private newDef(name: string, repo: string | undefined, dir: string, by: string, backOffice = false): FloorDef {
     const taken = new Set([...this.defs, ...this.cloning.values()].map((d) => d.id));
     const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'floor';
     let id = base;
@@ -197,7 +216,7 @@ export class Building {
     const used = new Set([...this.defs, ...this.cloning.values()].map((d) => d.palette));
     const free = FLOOR_PALETTES.findIndex((_, i) => !used.has(i));
     const palette = free >= 0 ? free : (this.defs.length + this.cloning.size) % FLOOR_PALETTES.length;
-    return { id, name, repo, dir, palette, addedBy: by, addedAt: Date.now() };
+    return { id, name, repo, dir, palette, addedBy: by, addedAt: Date.now(), ...(backOffice ? { backOffice: true } : {}) };
   }
 
   private load() {
@@ -216,6 +235,8 @@ export class Building {
           palette: Number.isInteger(s.palette) && (s.palette as number) >= 0 ? (s.palette as number) : 0,
           addedBy: typeof s.addedBy === 'string' ? s.addedBy : '?',
           addedAt: typeof s.addedAt === 'number' ? s.addedAt : Date.now(),
+          // Older floors.json files don't have it: those floors stay on the main list.
+          ...(s.backOffice === true ? { backOffice: true } : {}),
         });
       }
     } catch (err) {

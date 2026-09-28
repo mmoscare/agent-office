@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { MergeWatch, findCheckouts } from '../src/server/github.js';
+import { GitHub, MergeWatch, findCheckouts } from '../src/server/github.js';
 import type { GhPull } from '../src/shared/protocol.js';
 
 const pull = (number: number, state: string): GhPull => ({
@@ -62,4 +62,49 @@ test('a floor that is a folder finds the GitHub checkouts in it', (t) => {
       [['me/api', 'backend'], ['me/site', 'copy-of-frontend'], ['me/nested', 'owner/nested']],
     );
   });
+});
+
+test('folder boards keep failed repositories, throttle background reads, and recover after an error', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'office-board-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const name of ['a', 'b']) {
+    const dir = path.join(root, name);
+    mkdirSync(dir);
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['remote', 'add', 'origin', `https://github.com/me/${name}`], { cwd: dir });
+  }
+  let failed = '';
+  let calls = 0;
+  const github = new GitHub(root, () => {}, () => {}, async (_args, cwd) => {
+    calls++;
+    if (failed === 'all' || path.basename(cwd) === failed) throw new Error('GitHub API rate limit reached; requests paused');
+    return JSON.stringify({ data: { repository: {
+      hasIssuesEnabled: true,
+      open: { nodes: [{ number: 1, title: 'Keep me', state: 'OPEN', createdAt: '', updatedAt: '',
+        labels: { nodes: [] }, comments: { totalCount: 123 },
+        commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] },
+      }], pageInfo: { hasNextPage: false } },
+    } } });
+  });
+  await github.refresh();
+  assert.equal(github.issues.items.length, 2);
+  assert.equal(github.issues.items[0].comments, 123);
+  assert.equal(github.pulls.items[0].checks, 'pending');
+  assert.equal(github.pulls.items[0].repoDir, 'a');
+  const initialCalls = calls;
+  await github.refresh(false);
+  assert.equal(calls, initialCalls, 'background refresh on a folder floor respects the five minute interval');
+  failed = 'b';
+  await github.refresh();
+  assert.equal(github.pulls.items.length, 2, 'partial failure retains the last data for b');
+  assert.match(github.pulls.error!, /me\/b:.*rate limit/);
+  const fetchedAt = github.pulls.fetchedAt;
+  failed = 'all';
+  await github.refresh();
+  assert.equal(github.pulls.items.length, 2);
+  assert.equal(github.pulls.fetchedAt, fetchedAt, 'a failed refresh is not reported as newly fetched data');
+  assert.equal(github.pulls.loading, false);
+  failed = '';
+  await github.refresh();
+  assert.equal(github.pulls.error, undefined);
 });

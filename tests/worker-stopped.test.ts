@@ -13,6 +13,7 @@ function fixture(provider: AgentProvider) {
   const w: any = {
     info: { id: 'worker', kind: 'agent', provider, sessionId: 'root', status: 'working', action: 'test', acked: true },
     pty: { id: 'live-terminal' }, hookToken: 'token', viewers: new Map(), tracker: {}, leftNeedsInputAt: 0,
+    turnSeq: 0, cancelledTurns: new Set(),
   };
   const manager: any = Object.create(WorkerManager.prototype);
   Object.assign(manager, {
@@ -45,6 +46,41 @@ test('Codex interruption survives late completion, tool results and child hooks 
   assert.equal(f.w.info.status, 'working');
   f.hook('Stop');
   assert.equal(f.w.info.status, 'done');
+});
+
+test('a delayed Stop from an interrupted turn cannot complete a newer prompt', () => {
+  const codex = fixture('codex');
+  codex.hook('UserPromptSubmit', { prompt: 'first', turn_id: 'turn-1' });
+  codex.hook('Interrupt', { turn_id: 'turn-1' });
+  codex.hook('UserPromptSubmit', { prompt: 'second', turn_id: 'turn-2' });
+  assert.equal(codex.w.info.status, 'working');
+  codex.hook('PostToolUse', { turn_id: 'turn-1' });
+  codex.hook('Stop', { turn_id: 'turn-1' });
+  assert.equal(codex.w.info.status, 'working', 'stale Stop must not complete the new turn');
+  assert.ok(!codex.updates.includes('done'));
+  codex.hook('Stop', { turn_id: 'turn-2' });
+  assert.equal(codex.w.info.status, 'done');
+
+  const claude = fixture('claude');
+  claude.hook('UserPromptSubmit', { prompt: 'first', turn_id: 'turn-1' });
+  claude.hook('PostToolUseFailure', { is_interrupt: true, turn_id: 'turn-1' });
+  claude.hook('UserPromptSubmit', { prompt: 'second', turn_id: 'turn-2' });
+  claude.hook('Stop', { turn_id: 'turn-1' });
+  claude.hook('Notification', { notification_type: 'idle_prompt', turn_id: 'turn-1' });
+  assert.equal(claude.w.info.status, 'working');
+  assert.ok(!claude.updates.includes('done'));
+  claude.hook('Stop', { turn_id: 'turn-2' });
+  assert.equal(claude.w.info.status, 'done');
+
+  const grok = fixture('opencode');
+  grok.openCode('working', 'prompt', { prompt: 'first', turnId: '1' });
+  grok.openCode('interrupted', 'error', { turnId: '1' });
+  grok.openCode('working', 'prompt', { prompt: 'second', turnId: '2' });
+  grok.openCode('done', 'session', { turnId: '1' });
+  assert.equal(grok.w.info.status, 'working');
+  assert.ok(!grok.updates.includes('done'));
+  grok.openCode('done', 'session', { turnId: '2' });
+  assert.equal(grok.w.info.status, 'done');
 });
 
 test('Claude progress idle pauses a turn; only Stop marks it complete in either event order', () => {

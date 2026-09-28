@@ -123,13 +123,15 @@ export function formatQueue(view) {
   const limit = typeof view?.maxWorkers === 'number' ? ` · up to ${view.maxWorkers} at a time` : '';
   if (!tasks.length) return `The queue is empty${limit}.`;
   const lines = [`${tasks.length} task${tasks.length === 1 ? '' : 's'}${limit}`];
-  const status = (t) => (t.status === 'done' && t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : String(t.status ?? '?'));
+  // `state` is the office's honest word on a finished task ("done — no PR (unshipped work)", "stopped by restart").
+  const status = (t) => (typeof t.state === 'string' && t.state ? t.state : t.status === 'done' && t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : String(t.status ?? '?'));
   const width = Math.max(...tasks.map((t) => status(t).length));
   for (const t of tasks) {
     const parts = [`${t.title ?? ''}${t.issue ? ` (issue #${t.issue})` : ''}`];
     if (t.plan) parts.push(`to-do ${t.plan}`);
     if (t.worker) parts.push(`worker ${t.worker}${t.branch ? ` on ${t.branch}` : ''}`);
     if (t.pr) parts.push(`PR #${t.pr.number}${t.pr.state ? ` ${String(t.pr.state).toLowerCase()}` : ''} ${t.pr.url}`);
+    if (t.unshipped) parts.push(`⚠ left behind: ${t.unshipped} — see Unshipped work on the PR board`);
     if (t.error) parts.push(`error: ${t.error}`);
     lines.push(`${t.id}  ${status(t).padEnd(width)}  ${parts.join(' · ')}`);
   }

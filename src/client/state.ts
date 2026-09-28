@@ -1,4 +1,4 @@
-import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, MachineState, MeetingState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, ProjectsDirState, QueueState, QueueTask, RepoChoice, ServerMsg, ServicesState, SkyState, TeamState, ThemeState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
+import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, MachineState, MeetingState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, ProjectsDirState, QueueState, QueueTask, RepoChoice, UnshippedState, ServerMsg, ServicesState, SkyState, TeamState, ThemeState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
 import type { ScreenState } from './world/laptop';
 import { randomLook, sanitizeLook, type Look } from '../shared/avatar';
 import type { Decoration } from '../shared/decor';
@@ -10,7 +10,7 @@ import type { PlansState } from '../shared/plans';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'plans' | 'inbox' | 'mail';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -113,11 +113,7 @@ export function saveSettings(s: Settings) {
   }
 }
 
-/** The worker whose worktree branch a pull request came from, if it is still at a desk. */
-export function workerForPull(workers: Iterable<WorkerInfo>, pr: { number: number; headRefName: string }): WorkerInfo | undefined {
-  for (const w of workers) if (w.pr?.number === pr.number || (w.worktree && w.worktree.branch === pr.headRefName)) return w;
-  return undefined;
-}
+export { workerForPull } from '../shared/pull-work';
 
 class Store {
   you = '';
@@ -160,6 +156,8 @@ class Store {
   /** The Claude plan's 5-hour and weekly limits. */
   limits: PlanLimits = { windows: [], at: 0 };
   queue: QueueState = { tasks: [], maxWorkers: 0 };
+  /** Office branches with work no PR carries (the PR board's Unshipped work column). */
+  unshipped: UnshippedState = { items: [], scannedAt: 0, scanning: false };
   /** The floor's 📒 To Do Next board. */
   plans: PlansState = { revision: 0, items: [] };
   /** The floor's 📥 in-tray: what came in from outside. */
@@ -243,6 +241,7 @@ class Store {
     this.issues = v.issues;
     this.pulls = v.pulls;
     this.queue = v.queue;
+    this.unshipped = v.unshipped ?? { items: [], scannedAt: 0, scanning: false };
     this.plans = v.plans ?? { revision: 0, items: [] };
     this.inbox = v.inbox ?? { revision: 0, items: [], dir: '', door: false };
     this.meeting = v.meeting;
@@ -254,7 +253,7 @@ class Store {
     this.cabinetFrame = v.cabinet.frame;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
   }
 
   private setDog(dog: DogState | null) {
@@ -416,6 +415,10 @@ class Store {
       case 'queue':
         this.queue = msg.state;
         this.emit('queue');
+        break;
+      case 'unshipped':
+        this.unshipped = msg.state;
+        this.emit('unshipped');
         break;
       case 'plans':
         this.plans = msg.state;

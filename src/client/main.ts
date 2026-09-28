@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
-import { floorPalette } from '../shared/floors';
-import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask } from '../shared/protocol';
+import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
+import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
+import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
@@ -43,6 +44,7 @@ import { DesktopNotifier, askNotifyPermission, notifyPermission, waitingOnSomeon
 import { NextUp, waitingInOrder, waitingLabel } from './nextup';
 import { $, h, clip, closeAllModals, doingNow, modalOpen, onModalChange, openModal, toast, STATUS_LABEL } from './ui/dom';
 import { openTerminal, openTerminalFor, routeTerminalMessage, type TerminalFind } from './ui/terminal';
+import { openConsole, routeConsoleMessage } from './ui/console';
 import { openSearch } from './ui/search';
 import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
@@ -81,6 +83,7 @@ import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { mountHud } from './ui/menu';
 import { openJukebox } from './ui/jukebox';
+import { openLedger } from './ui/ledger';
 import { Arcade } from './ui/arcade';
 import { Cabinet } from './ui/cabinet';
 import { trackTitle } from '../shared/jukebox';
@@ -91,6 +94,9 @@ import { whereabouts } from './ui/whereabouts';
 import { wayTo } from './walkto';
 import { MeetingBoardTexture, MeetingSignTexture, meetingStage } from './world/meeting';
 import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
+import { ClipboardSheet, clipboardProp } from './world/clipboard';
+import { currentRoster, openClipboard } from './ui/clipboard';
+import { rosterByRepo } from '../shared/roster';
 
 // ---- Renderer & scene ---------------------------------------------------------------------------
 const canvas = $('scene') as HTMLCanvasElement;
@@ -159,6 +165,8 @@ function receptionistCard(): { name: string; summary: string } {
   if (store.mail.configured) return { name: '📧 Email me work', summary: store.mail.address ?? STATION_INFO.inbox.does };
   return { name: STATION_INFO.inbox.offer, summary: STATION_INFO.inbox.does };
 }
+/** What everyone in the building is on, on the clipboard the queue agent carries (see Clipboard). */
+const clipboardSheet = new ClipboardSheet();
 /** The board agents waiting by their boards before anyone has asked them anything (see buildKiosk). */
 const idleAgents = STATIONS.map((def) => {
   const kind = def.station!;
@@ -167,6 +175,7 @@ const idleAgents = STATIONS.map((def) => {
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
   if (kind === 'inbox') model.accessory(receptionistLook());
+  if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
@@ -240,10 +249,10 @@ const showPullsWall = () => {
 };
 onPullsWallMode(showPullsWall);
 showPullsWall();
-// PR notes name the desk they came from. Redraw when that changes, not on every worker update.
+// PR notes name the desk they came from, or the agent a PR was handed to and how it's going.
 let deskLinks = '';
 store.on('workers', () => {
-  const k = JSON.stringify([...store.workers.values()].filter((w) => w.worktree).map((w) => [w.worktree!.branch, w.pr?.number, w.name, w.color, w.deskId]));
+  const k = pullBoardKey(store.workers.values());
   if (k === deskLinks) return;
   deskLinks = k;
   renderPullsBoard();
@@ -316,6 +325,7 @@ let roof: Rooftop | null = null;
 function theRoof(): Rooftop {
   if (!roof) {
     roof = buildRooftop(office.night, roofFloors());
+    roof.elevator.setFloors(store.floors, store.floor);
     roof.group.visible = false;
     scene.add(roof.group);
     noOutline(roof.group);
@@ -559,6 +569,7 @@ net.onMessage((msg) => {
   seatedAlready = false;
   sentHome.clear();
   routeTerminalMessage(msg);
+  routeConsoleMessage(msg);
   routeChangesMessage(msg);
   routeTeamMessage(msg);
   routeAccountsMessage(msg);
@@ -699,11 +710,14 @@ function renderProject() {
     office.setProjectName(store.floors.length ? 'Pick a floor' : 'Lobby');
     return;
   }
-  const n = store.floors.findIndex((f) => f.id === store.floor);
+  // The same number the elevator shows: 1…n among the main floors, B1… in the Back Office.
+  const here = store.currentFloor();
+  const no = here ? floorNumber(store.floors, here.id) : '';
+  const of = here?.backOffice ? `🗄️ Back Office floor ${no} of ${backOfficeFloors(store.floors).length}` : `🛗 floor ${no} of ${mainFloors(store.floors).length}`;
   $('project-meta').classList.remove('lobby');
   $('project-name').textContent = `🏢 ${p.name}`;
-  $('project-meta').textContent = [n >= 0 && `🛗 floor ${n + 1} of ${store.floors.length}`, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
-  office.setProjectName(p.name, p.logo, n >= 0 ? n + 1 : undefined);
+  $('project-meta').textContent = [no && of, p.branch && `⎇ ${p.branch}`, p.dir, `default: ${providerLabel(p.defaultProvider, p)}`].filter(Boolean).join(' · ');
+  office.setProjectName(p.name, p.logo, no || undefined);
 }
 store.on('floors', renderProject);
 store.on('project', renderProject);
@@ -754,6 +768,13 @@ let trip: { floor: string; how: TripKind; timer: number; workerId?: string } | n
 function showElevator() {
   openElevator({ net, ride });
 }
+
+function syncElevatorTiles() {
+  office.elevator.setFloors(store.floors, store.floor);
+  roof?.elevator.setFloors(store.floors, store.floor);
+}
+store.on('floors', syncElevatorTiles);
+store.on('floor', syncElevatorTiles);
 
 /** The elevator where you are: the office's, or the one up on the roof. */
 function lift() {
@@ -1081,6 +1102,8 @@ function syncWorkers() {
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
       if (desk.def.station === 'inbox') model.accessory(receptionistLook());
+      // The queue agent never goes anywhere without its clipboard.
+      if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
       desk.seatAnchor.add(model.root);
       // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over
       // its head and the back of its chair, so it shows from across the room.
@@ -1183,6 +1206,19 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+// ---- Clipboard ------------------------------------------------------------------------------------
+// The queue agent's clipboard lists every worker in the building by repository; walk up to it and
+// press C to read it all (see ui/clipboard.ts).
+const renderClipboard = () => clipboardSheet.render(rosterByRepo(currentRoster()));
+for (const topic of ['workers', 'floors', 'floor', 'project'] as const) store.on(topic, renderClipboard);
+renderClipboard();
+function showClipboard() {
+  openClipboard((floorId, workerId) => {
+    if (trip) return;
+    if (!floorId || floorId === store.floor) openWorkerTerminal(workerId);
+    else ride(floorId, workerId);
+  });
+}
 mountAttention((floorId, workerId) => {
   if (trip) return;
   if (floorId === store.floor) openWorkerTerminal(workerId);
@@ -1242,8 +1278,8 @@ function officeIsFull(): boolean {
   return true;
 }
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, effort?: AgentEffort, issue?: number, workspace?: WorkspaceRequest, plan?: string, pullWork?: PullWork | null) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, effort, issue, workspace, plan, pullWork });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -1530,7 +1566,7 @@ function showJukebox() {
 }
 
 /** A prompt from the boards goes to a new worker at a free desk, or to one already at a desk. */
-function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string) {
+function sendToWorker(title: string, text: { context?: string; initial?: string }, plan?: string, pullWork?: PullWork) {
   const desk = freeDesk();
   const awake = [...store.workers.values()].filter((w) => w.kind === 'agent' && !isAsleep(w.status));
   if (!desk && !awake.length) {
@@ -1545,8 +1581,8 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     worktreeOption: true,
     providerOption: true,
     onSubmit: (prompt, to, worktree, provider, model, effort, workspace) => {
-      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan });
-      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan);
+      if (to) net.send({ t: 'worker.prompt', workerId: to, prompt, plan, pullWork: pullWork ?? null });
+      else if (desk) hire(desk, prompt, worktree, provider, model, effort, undefined, workspace, plan, pullWork);
     },
   });
 }
@@ -1589,8 +1625,8 @@ function triageInbox() {
 function boardActions() {
   return {
     queue: (prompt: string, title: string, issue: number, provider?: AgentProvider, model?: string, effort?: AgentEffort, repo?: string) => net.send({ t: 'queue.add', prompt, title, issue, repo, provider, model, effort }),
-    assign: (prompt: string, title: string) => sendToWorker(`🤖 ${title}`, { initial: prompt }),
-    ask: (context: string, title: string) => sendToWorker(`✍️ ${title}`, { context }),
+    assign: (prompt: string, title: string, pullWork?: PullWork) => sendToWorker(`🤖 ${title}`, { initial: prompt }, undefined, pullWork),
+    ask: (context: string, title: string, pullWork?: PullWork) => sendToWorker(`✍️ ${title}`, { context }, undefined, pullWork),
     meeting: (preset: MeetingPreset) => showMeeting(preset),
     goToDesk,
     pickUp,
@@ -1656,6 +1692,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (target.kind === 'station' && target.deskId) {
     const w = store.workerAtDesk(target.deskId);
     if (key === 'E' || key === 'P') return askStation(target.deskId);
+    if (key === 'C' && DESK_BY_ID.get(target.deskId)?.station === 'queue') return showClipboard();
     if (key === 'O' && w) return openWorkerTerminal(w.id);
     if (key === 'X' && w) return killWorker(w.id);
     return;
@@ -1664,8 +1701,14 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   if (note && key === 'E') return pickUp(note);
   if (note && key === 'O') return openIssue(note, net, boardActions());
   if (key !== 'E') return;
-  if (target.kind === 'elevator') showElevator();
-  else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
+  if (target.kind === 'elevator') {
+    if (trip) return;
+    if (target.elevatorPage) lift().turnPage(target.elevatorPage);
+    else if (target.floorId) {
+      const floor = store.floors.find(f => f.id === target.floorId);
+      if (target.floorId === ROOF ? store.floors.some(f => !f.cloning) : floor && !floor.cloning) ride(target.floorId);
+    } else showElevator();
+  } else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
   else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
   else if (target.kind === 'gitToggle') flipPullsWall();
   else if (target.kind === 'manual') openManual();
@@ -1694,6 +1737,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   else if (target.kind === 'meeting') showMeeting();
   else if (target.kind === 'bar') showBar();
   else if (target.kind === 'dj') blowHorn();
+  else if (target.kind === 'ledger') openLedger();
 }
 
 // ---- The rooftop bar ---------------------------------------------------------------------------------
@@ -2061,7 +2105,7 @@ let phoneUntil = 0;
 /** An agent on another floor finished: the phone by the elevator rings, since you can't hear its ding from here. */
 function phoneRang(floor: string, name: string, worker: string, task?: string) {
   if (!store.floor || floor === store.floor) return;
-  toast(`📞 ${worker} on the ${name} floor finished${task ? `: ${task}` : ''} — take the elevator up`);
+  toast(`📞 ${name} floor — ${worker} finished${task ? `: ${task}` : ''} — take the elevator up`);
   office.phone.ring(PHONE_RING_SECONDS);
   // Another call while it's still ringing doesn't start the bell over the top of itself.
   const now = performance.now();
@@ -2192,7 +2236,17 @@ function hintFor(it: Interactable): Hint {
       const what = !m || !p ? 'free' : m.status === 'running' ? `${p.icon} ${p.label} · ${meetingStage(m)}` : `${p.icon} ${p.label} ${m.status === 'done' ? 'done ✅' : 'stopped ⛔'}`;
       return { k: what, parts: [title('🤝 Meeting room'), aside(clip(what, 50)), key('E', m?.status === 'running' ? 'See how it’s going' : m ? 'See it / call a meeting' : 'Call a meeting')] };
     }
+    case 'ledger':
+      return { k: '', parts: [title('📒 The Office Ledger'), aside('what this office costs to run'), key('E', 'Read it')] };
     case 'elevator': {
+      if (it.elevatorPage) return { k: String(it.elevatorPage), parts: [title('Floor tiles'), key('E', it.elevatorPage > 0 ? 'Next page' : 'Previous page')] };
+      if (it.floorId) {
+        const destination = store.floors.find(f => f.id === it.floorId);
+        const name = it.floorId === ROOF ? ROOF_NAME : destination?.name ?? 'Floor unavailable';
+        const here = it.floorId === store.floor;
+        const unavailable = it.floorId !== ROOF && (!destination || destination.cloning);
+        return { k: `${it.floorId}|${name}|${here}|${unavailable}`, parts: [title(name), here ? aside('You are here') : unavailable ? aside('Not ready yet') : key('E', 'Ride to this floor')] };
+      }
       const f = store.currentFloor();
       const n = store.floors.length;
       return { k: `${f?.name}|${n}`, parts: [title('🛗 Elevator'), f ? aside(`${f.name} · ${n} floor${n === 1 ? '' : 's'}`) : '', key('E', n > 1 ? 'Choose a floor' : 'Floors & projects')] };
@@ -2333,6 +2387,7 @@ function stationHint(deskId: string): Hint {
         h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
         aside(trayNote ? `${trayNote} · ${info.offer.replace(/^Ask me /, '')}` : info.offer.replace(/^Ask me /, '')),
         full ? h('span.cost', {}, `🚫 Office full · ${m.workers} of ${m.limit} workers`) : key('E', 'Prompt'),
+        kind === 'queue' ? key('C', 'Clipboard') : '',
         ...trayKey,
       ],
     };
@@ -2348,6 +2403,7 @@ function stationHint(deskId: string): Hint {
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       key('O', 'Terminal'),
+      kind === 'queue' ? key('C', 'Clipboard') : '',
       key('X', 'Send home'),
       ...trayKey,
     ],
@@ -2488,6 +2544,14 @@ document.addEventListener('visibilitychange', sayPresence);
 store.on('me', sayPresence);
 
 // ---- Input ----------------------------------------------------------------------------------------
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.code === 'Backquote') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!e.repeat) openConsole(net);
+  }
+}, true);
+
 window.addEventListener('keydown', (e) => {
   if (modalOpen() || isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return;
   if (relookOnKey && e.key !== 'Escape' && player.canLock) player.lock();
@@ -2650,7 +2714,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2803,6 +2867,7 @@ const waitingNow = () => waitingInOrder(store.workers.values());
 const noMedia = () => (window.isSecureContext ? undefined : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel');
 const hud = mountHud(
   [
+    { id: 'terminal', icon: '>_', label: 'Terminal', section: 'Open', key: 'Ctrl+`', status: () => true, title: () => 'Open a standalone terminal anywhere (Ctrl+`); PowerShell on Windows', run: () => openConsole(net) },
     { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions()) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
     { id: 'manual', icon: '📘', label: 'Manual', section: 'Office', title: () => 'The Office Manual: how work gets to GitHub and back, what to do after a merge, and more', run: () => openManual() },
@@ -3087,10 +3152,11 @@ function frame(ts?: number) {
     if (aim?.near) aimedNote = noteUnder(aim);
   } else {
     target = mySeat() ?? pickTarget();
-    // By the issues board, the mouse points at the note you'd take.
-    if (target?.kind === 'issues' && pointer) {
+    // The mouse selects a floor tile, or the issue note you'd take.
+    if ((target?.kind === 'issues' || target?.kind === 'elevator') && pointer) {
       const aim = aimedAt(pointer, 2.5);
-      if (aim?.near) aimedNote = noteUnder(aim);
+      if (aim?.near && aim.it.kind === 'elevator') target = aim.it;
+      if (target?.kind === 'issues' && aim?.near) aimedNote = noteUnder(aim);
     }
   }
   issuesTex.lift(aimedNote?.number ?? null);

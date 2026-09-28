@@ -6,6 +6,7 @@ import type { PlansState } from '../shared/plans.js';
 import type { MailBrief } from '../shared/mail.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
+import { floorRoster } from '../shared/roster.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
@@ -23,6 +24,7 @@ import { Plans } from './plans.js';
 import { Inbox } from './inbox.js';
 import { MeetingRoom } from './meetings.js';
 import { Worktrees } from './worktrees.js';
+import { UnshippedWatch } from './unshipped.js';
 import { readProjectLogo, type ProjectLogo } from './project-logo.js';
 import type { Ledger } from './usage.js';
 import type { Capacity } from './machine.js';
@@ -111,6 +113,8 @@ export class Floor {
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
   readonly ready: Promise<void>;
   readonly dog: Dog;
+  /** Office branches with work no PR carries, for the PR board and the queue's warnings (see unshipped.ts). */
+  readonly unshipped: UnshippedWatch;
   private timer: NodeJS.Timeout;
   /** Pull requests merging, to ring the gong for. */
   private merges = new MergeWatch();
@@ -178,6 +182,7 @@ export class Floor {
         this.queue?.onPulls(state.items);
         if (state.loading || state.error) return;
         this.workers.onPulls(state.items);
+        void this.unshipped?.scan();
         for (const p of this.merges.look(state.items)) {
           ctx.toast(this, `🎉 PR ${ghRef(p)} merged: ${p.title}`);
           this.merged(p.number, undefined, p.repo);
@@ -206,6 +211,15 @@ export class Floor {
       },
       startPlan: (plan, worker, task) => void this.plans.start(plan, worker, task),
       endPlan: (plan, outcome) => this.plans.end(plan, outcome),
+      finished: () => this.unshipped?.soon(),
+    });
+    this.unshipped = new UnshippedWatch(def.dir, {
+      workers: () => this.workers.list(),
+      tasks: () => this.queue.state().tasks,
+      board: () => this.github.pulls,
+      repoName: (repoDir) => this.github.checkouts.find((c) => path.resolve(c.dir) === path.resolve(repoDir))?.repo,
+      update: (state) => ctx.emit(this, { t: 'unshipped', state }),
+      branches: (byBranch) => this.queue.onUnshipped(byBranch),
     });
 
     // Meetings seat their own workers round the meeting room's table and run them round by round.
@@ -267,11 +281,13 @@ export class Floor {
       door: () => ctx.inboxDoor(),
     });
     this.ready = this.workers.start();
+    // Once the workers are back: tasks the last office left running show whether their work was left behind.
+    void this.ready.then(() => this.unshipped.scan(true));
 
     void this.github.refresh();
     // A floor with people on it, or work under way, keeps its boards fresh; the others check in now and then.
     this.timer = setInterval(() => {
-      if (this.active() || Date.now() - this.github.issues.fetchedAt > IDLE_REFRESH_MS) void this.github.refresh();
+      if (this.active() || Date.now() - this.github.issues.fetchedAt > IDLE_REFRESH_MS) void this.github.refresh(false);
     }, REFRESH_MS);
   }
 
@@ -282,7 +298,7 @@ export class Floor {
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */
   arrived() {
-    if (Date.now() - Math.max(this.github.issues.fetchedAt, this.github.pulls.fetchedAt) > REFRESH_MS) void this.github.refresh();
+    if (Date.now() - Math.max(this.github.issues.fetchedAt, this.github.pulls.fetchedAt) > REFRESH_MS) void this.github.refresh(false);
   }
 
   private active(): boolean {
@@ -299,7 +315,9 @@ export class Floor {
       palette: this.def.palette,
       addedBy: this.def.addedBy,
       addedAt: this.def.addedAt,
+      ...(this.def.backOffice ? { backOffice: true } : {}),
       ...summarizeWorkers(ws),
+      roster: floorRoster(ws, this.def.repo || this.def.name),
       people: this.ctx.people(this),
     };
   }
@@ -310,6 +328,7 @@ export class Floor {
     this.dog.stop();
     this.github.stop();
     this.queue.shutdown();
+    this.unshipped.stop();
     this.meetings.shutdown();
     this.changes.stop();
     this.workspaceChanges.stop();
