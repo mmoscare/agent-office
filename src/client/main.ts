@@ -2063,7 +2063,7 @@ let phoneUntil = 0;
 /** An agent on another floor finished: the phone by the elevator rings, since you can't hear its ding from here. */
 function phoneRang(floor: string, name: string, worker: string, task?: string) {
   if (!store.floor || floor === store.floor) return;
-  toast(`📞 ${worker} on the ${name} floor finished${task ? `: ${task}` : ''} — take the elevator up`);
+  toast(`📞 ${name} floor — ${worker} finished${task ? `: ${task}` : ''} — take the elevator up`);
   office.phone.ring(PHONE_RING_SECONDS);
   // Another call while it's still ringing doesn't start the bell over the top of itself.
   const now = performance.now();
