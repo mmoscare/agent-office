@@ -59,16 +59,26 @@ export function buildRequest(cmd, office) {
 export function formatInbox(view) {
   const items = view?.items ?? [];
   const where = view?.dir ? ` (${view.dir})` : '';
-  if (!items.length) return `The in-tray is empty${where}.`;
+  const mail = mailLine(view?.mail);
+  if (!items.length) return [`The in-tray is empty${where}.`, mail].filter(Boolean).join('\n');
   const lines = [`${items.length} item${items.length === 1 ? '' : 's'} in the tray${where}`];
+  if (mail) lines.push(mail);
   for (const i of items) {
-    const parts = [`${i.kind === 'note' ? '📝' : '📎'} ${i.title ?? i.name}`];
+    const parts = [`${i.mail ? '📧' : i.kind === 'note' ? '📝' : '📎'} ${i.title ?? i.name}`];
     if (i.title && i.title !== i.name) parts.push(`file ${i.name}`);
-    if (i.from) parts.push(`from ${i.from}`);
+    if (i.mail) parts.push(`email from ${i.mail.name ? `${i.mail.name} <${i.mail.from}>` : i.mail.from}, ${i.mail.trusted ? '✅ allowed sender' : '⚠️ not an allowed sender'}`);
+    else if (i.from) parts.push(`from ${i.from}`);
     if (i.preview) parts.push(i.preview.length > 120 ? `${i.preview.slice(0, 119)}…` : i.preview);
     lines.push(`${i.name}\n    ${parts.join(' · ')}`);
   }
   return lines.join('\n');
+}
+
+/** How the Receptionist's mailbox stands, when the office said. */
+export function mailLine(mail) {
+  if (!mail) return '';
+  if (!mail.configured) return "📧 Email isn't set up yet: remind the people here (an admin sets it up with I → 📧 Set up email).";
+  return mail.problem ? `📧 Email (${mail.address}) isn't working: ${mail.problem}` : `📧 Email: ${mail.address}`;
 }
 
 /**
@@ -77,9 +87,13 @@ export function formatInbox(view) {
  */
 export function formatItem(view) {
   const item = view?.item ?? {};
-  const head = [`${item.kind === 'note' ? '📝' : '📎'} ${item.title ?? item.name ?? ''}`, item.from ? `from ${item.from}` : '', view?.path ? `at ${view.path}` : ''].filter(Boolean).join(' · ');
-  if (item.kind !== 'note') return `${head}\nA file, not a note: open it with your own tools by that path.`;
-  return `${head}\n\n${view?.body ?? ''}${view?.truncated ? '\n\n[…the note goes on; read the file by its path for the rest]' : ''}`;
+  const mail = view?.mail;
+  const head = [`${mail ? '📧' : item.kind === 'note' ? '📝' : '📎'} ${item.title ?? item.name ?? ''}`, mail ? '' : item.from ? `from ${item.from}` : '', view?.path ? `at ${view.path}` : ''].filter(Boolean).join(' · ');
+  const from = mail
+    ? `\nAn email from ${mail.name ? `${mail.name} <${mail.from}>` : mail.from}: ${mail.trusted ? `✅ an allowed sender, so reply with office-mail reply ${item.name}, and pass --mail ${item.name} when you queue or file it` : '⚠️ not an allowed sender, so file it for a person; you cannot reply to it'}.`
+    : '';
+  if (item.kind !== 'note') return `${head}${from}\nA file, not a note: open it with your own tools by that path.`;
+  return `${head}${from}\n\n${view?.body ?? ''}${view?.truncated ? '\n\n[…the note goes on; read the file by its path for the rest]' : ''}`;
 }
 
 /**
