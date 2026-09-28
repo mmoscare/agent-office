@@ -76,3 +76,19 @@ test('the receptionist triages the in-tray with office-inbox, files onto To Do N
     assert.match(b, /office-plans set <id> todo\|progress\|finished/, kind);
   }
 });
+
+test('the Receptionist delegates by email: office-mail and office-ask, and she nags until her mailbox is set up', () => {
+  const unset = stationBrief('inbox');
+  assert.match(unset, /office-mail reply <name>/);
+  assert.match(unset, /office-mail send --subject/);
+  assert.match(unset, /office-ask issues \(or office-ask pulls\)/);
+  assert.match(unset, /add --mail <name>/);
+  assert.match(unset, /You're a delegator: you never do the work yourself/);
+  assert.match(unset, /Your mailbox isn't set up yet[^]*end every reply with one short, friendly reminder[^]*press I for the In-tray, then 📧 Set up email/);
+  const set = stationBrief('inbox', [], { mail: { configured: true, address: 'r@x.com' } });
+  assert.match(set, /Your mailbox is r@x\.com: people email you work there\./);
+  assert.doesNotMatch(set, /friendly reminder/);
+  const broken = stationBrief('inbox', [], { mail: { configured: true, address: 'r@x.com', problem: 'The mailbox refused the sign-in' } });
+  assert.match(broken, /isn't working right now: The mailbox refused the sign-in/);
+  for (const kind of ['issues', 'pulls', 'queue'] as StationKind[]) assert.doesNotMatch(stationBrief(kind, [], { mail: { configured: false } }), /office-mail|Your mailbox/, kind);
+});

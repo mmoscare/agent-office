@@ -15,7 +15,7 @@ import { FAILS_TO_DESPAIR, outputFailed, toolAction } from '../shared/actions.js
 import { FLAG_BOLD, FLAG_DIM, FLAG_INVERSE, RGB_FLAG, isAgentEffort, isClaudeModel } from '../shared/protocol.js';
 import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } from './worktrees.js';
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
-import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
+import { stationBrief, stationDisallowedTools, type Checkout, type StationContext } from './stations.js';
 import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
 import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
@@ -155,6 +155,8 @@ export class WorkerManager {
   readonly defaultProvider: AgentProvider;
   /** On a floor that's a folder of GitHub checkouts rather than one, which (for the board agents' brief). */
   checkouts: () => Checkout[] = () => [];
+  /** The office as it stands, for the board agents' brief (the Receptionist's mailbox). */
+  stationContext: () => StationContext = () => ({});
   private openCodePlugin: string;
   private codexHook: string;
   /** Where the office-queue, office-plans and office-inbox commands are, for the board agents' PATH (see writeQueueCommand). */
@@ -362,7 +364,7 @@ export class WorkerManager {
     this.workers.set(id, w);
     if (info.prompt) this.notePrompt(w, info.prompt);
     // A board agent is told what it's there for ahead of its first request (which is what shows).
-    this.launch(w, seat.station && info.prompt ? `${stationBrief(seat.station, this.checkouts())}\n\n${info.prompt}` : info.prompt, undefined);
+    this.launch(w, seat.station && info.prompt ? `${stationBrief(seat.station, this.checkouts(), this.stationContext())}\n\n${info.prompt}` : info.prompt, undefined);
     this.persist();
     return info;
   }
@@ -378,7 +380,7 @@ export class WorkerManager {
     // A board agent with no session to carry on starts over, so it needs telling what it's for again.
     // Any other worker with none (it never started, or its id was never reported) gets its task again
     // rather than being told it has none. Not a board agent: its first request is long done.
-    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
+    const first = prompt && station && !w.info.sessionId ? `${stationBrief(station, this.checkouts(), this.stationContext())}\n\n${prompt}` : prompt ?? (w.info.sessionId || station ? undefined : retoldTask(w.info.prompt));
     if (prompt) {
       w.info.activity = truncate(prompt, 80);
       this.notePrompt(w, prompt);
@@ -1484,7 +1486,7 @@ process.stdin.on('end', () => {
   private writeQueueCommand(): string | undefined {
     const dir = path.join(this.dataDir, 'bin');
     let any = false;
-    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray']] as const) {
+    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray'], ['office-mail', "Receptionist's mailbox"], ['office-ask', 'board agents']] as const) {
       const script = binScript(`${name}.js`);
       if (!script) continue;
       if (!any) mkdirSync(dir, { recursive: true, mode: 0o700 });

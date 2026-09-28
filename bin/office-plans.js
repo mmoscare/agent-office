@@ -10,8 +10,8 @@ import { UsageError, officeEnv, refusal, send } from './office-queue.js';
 const USAGE = `Usage:
   office-plans list                              the board: each item's id, column, text and who's on it
   office-plans add <<'EOF'                       add an item, its text on stdin (or --text "…");
-  …what someone wants done, in their words…      prints the new item's id
-  EOF
+  …what someone wants done, in their words…      prints the new item's id; --mail <tray item> emails
+  EOF                                            that item's sender when a worker finishes it
   office-plans set <id> todo|progress|finished   move an item to that column
   office-plans remove <id>                       take an item off the board`;
 
@@ -19,7 +19,7 @@ const STATUSES = ['todo', 'progress', 'finished'];
 
 /**
  * What the command line asks for:
- * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', text? } | { cmd: 'set', id, status } | { cmd: 'remove', id }.
+ * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', text?, mail? } | { cmd: 'set', id, status } | { cmd: 'remove', id }.
  * @param {string[]} argv the arguments after the command's name
  */
 export function parseArgs(argv) {
@@ -41,16 +41,22 @@ export function parseArgs(argv) {
     return { cmd: 'set', id: rest[0], status };
   }
   if (cmd !== 'add') throw new UsageError(`Unknown command: ${cmd}`);
-  /** @type {{ cmd: 'add', text?: string }} */
+  /** @type {{ cmd: 'add', text?: string, mail?: string }} */
   const out = { cmd: 'add' };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     const eq = arg.indexOf('=');
     const flag = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
-    if (flag !== '--text') throw new UsageError(arg.startsWith('-') ? `Unknown option for add: ${flag}` : `Unexpected argument: ${arg} (give the item's text on stdin or with --text)`);
-    if (flag !== arg) out.text = arg.slice(eq + 1);
-    else if (i + 1 < rest.length) out.text = rest[++i];
-    else throw new UsageError('--text needs a value');
+    if (flag !== '--text' && flag !== '--mail') throw new UsageError(arg.startsWith('-') ? `Unknown option for add: ${flag}` : `Unexpected argument: ${arg} (give the item's text on stdin or with --text)`);
+    let value;
+    if (flag !== arg) value = arg.slice(eq + 1);
+    else if (i + 1 < rest.length) value = rest[++i];
+    else throw new UsageError(`${flag} needs a value`);
+    if (flag === '--text') out.text = value;
+    else {
+      if (!value.trim()) throw new UsageError('--mail takes the in-tray item the email came in as (see office-inbox list)');
+      out.mail = value.trim();
+    }
   }
   return out;
 }
@@ -74,7 +80,7 @@ export function buildRequest(cmd, office, text) {
   if (cmd.cmd !== 'add') throw new Error(`No request for ${cmd.cmd}`);
   const clean = (cmd.text ?? text ?? '').replace(/\r\n?/g, '\n').trim();
   if (!clean) throw new UsageError(`The item needs its text: pipe it in (office-plans add <<'EOF' … EOF) or pass --text "…"`);
-  return json({ action: 'add', text: clean });
+  return json({ action: 'add', text: clean, ...(cmd.mail !== undefined ? { mail: cmd.mail } : {}) });
 }
 
 /**
@@ -144,7 +150,8 @@ export async function main(argv, io = {}) {
     else {
       const item = res.body?.item ?? {};
       out(item.id ?? '');
-      err(`Added it to To Do${item.id ? ` (${item.id})` : ''}.`);
+      err(`Added it to To Do${item.id ? ` (${item.id})` : ''}${cmd.mail !== undefined && !res.body?.warning ? '; its sender is emailed when a worker finishes it' : ''}.`);
+      if (res.body?.warning) err(`Note: ${res.body.warning}.`);
     }
     return 0;
   } catch (e) {

@@ -1205,6 +1205,11 @@ export class Worker {
     this.spot.copy(at);
   }
 
+  /** Something it always wears (the Receptionist's bun and headset mic, see receptionist.ts): it bobs and turns with it. */
+  accessory(o: THREE.Object3D) {
+    this.body.add(o);
+  }
+
   /** What its latest tool call was, to act out while it's working. */
   setAction(action: WorkerAction | undefined) {
     this.nextAction = action;

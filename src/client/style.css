@@ -1334,3 +1334,45 @@ a.when:hover { text-decoration: underline; }
 .pr-work-dot.running { animation: pr-work-pulse 1.5s ease-in-out infinite; }
 @keyframes pr-work-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .pr-work-dot.running { animation: none; } }
+
+/* The Receptionist's email: her reminder card, the setup window, and the In-tray's email line */
+.mail-nag { position: absolute; right: 16px; bottom: 16px; z-index: 30; width: min(360px, calc(100vw - 32px)); padding: 12px 14px; background: #fff7fb; border: 3px solid var(--ink); border-radius: 16px; box-shadow: var(--shadow); pointer-events: auto; animation: mail-nag-in .45s cubic-bezier(.2, 1.6, .4, 1); }
+.mail-nag p { margin: 6px 0 10px; font-size: 14px; font-weight: 700; line-height: 1.4; }
+.mail-nag-who { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.mail-nag-face { font-size: 26px; animation: mail-nag-wave 2.4s ease-in-out infinite; transform-origin: 70% 90%; }
+.mail-nag-x { margin-left: auto; border: 0; background: none; font-size: 16px; cursor: pointer; color: var(--muted); }
+.mail-nag-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mail-nag-actions .btn { font-size: 13px; padding: 5px 10px; }
+@keyframes mail-nag-in { from { transform: translateY(30px) scale(.9); opacity: 0; } }
+@keyframes mail-nag-wave { 0%, 60%, 100% { transform: rotate(0); } 70% { transform: rotate(-12deg); } 80% { transform: rotate(10deg); } 90% { transform: rotate(-6deg); } }
+.mail-setup h4 { margin: 16px 0 6px; font-size: 13px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
+.mail-status { margin: 0 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--paper-2); font-size: 13px; font-weight: 700; white-space: pre-line; overflow-wrap: anywhere; }
+.mail-tip { margin: 0 0 8px; font-size: 13px; font-weight: 600; line-height: 1.45; }
+.mail-grid { display: grid; grid-template-columns: max-content 1fr; gap: 8px 10px; align-items: center; }
+.mail-grid label { font-size: 13px; font-weight: 800; }
+.mail-grid input, .mail-grid select, .mail-setup textarea, .mail-pair input, .mail-pair select { min-width: 0; padding: 6px 9px; border: 2px solid var(--ink); border-radius: 9px; font: inherit; font-size: 14px; background: #fff; }
+.mail-setup textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.mail-pair { display: flex; gap: 6px; min-width: 0; }
+.mail-pair input[type=text] { flex: 1; }
+.mail-pair input[type=number] { width: 84px; }
+.mail-help { margin: 6px 0; font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.45; }
+.mail-help a { margin-left: 4px; font-weight: 800; }
+.mail-advanced { margin: 6px 0; }
+.mail-advanced summary { cursor: pointer; font-size: 13px; font-weight: 800; }
+.mail-advanced .mail-grid { margin-top: 8px; }
+.mail-check { display: flex; align-items: center; gap: 6px; margin: 6px 0; font-size: 14px; font-weight: 700; }
+.mail-check input[type=time] { padding: 3px 6px; border: 2px solid var(--ink); border-radius: 8px; font: inherit; }
+.mail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.mail-result { min-height: 1.2em; margin: 10px 0 0; font-size: 13px; font-weight: 800; white-space: pre-line; }
+.mail-result.warn { color: #b5651d; }
+.mail-result.err { color: var(--bad, #c0392b); }
+.btn.link { border: 0; background: none; box-shadow: none; padding: 4px 0; margin-top: 8px; font-size: 12px; text-decoration: underline; color: var(--muted); }
+.inbox-mail { margin: 0 0 12px; padding: 10px 12px; border: 3px solid var(--ink); border-radius: 14px; background: #fff7fb; }
+.inbox-mail.ok { background: #eef9f1; }
+.inbox-mail.err { background: #fff3c4; }
+.inbox-mail p { margin: 0 0 6px; font-size: 14px; }
+.inbox-mail code { font: 13px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 5px; border-radius: 4px; }
+.inbox-mail-status { font-size: 12px !important; font-weight: 700; color: var(--muted); white-space: pre-line; }
+.inbox-mail-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.inbox-mail-actions .btn { padding: 3px 10px; font-size: 13px; }
+@media (max-width: 600px) { .mail-grid { grid-template-columns: 1fr; } .mail-nag { right: 8px; bottom: 8px; } }

@@ -8,6 +8,7 @@ import { store } from '../state';
 import { h, openModal, timeAgo, toast } from './dom';
 import { confirmDialog } from './prompt';
 import { providerPicker } from './provider';
+import { mailStatusText, openMailSetup } from './mail';
 
 export interface InboxActions {
   /** Ask the Receptionist to go through the tray. */
@@ -23,7 +24,7 @@ export function openInbox(net: Net, actions: InboxActions) {
   opened = true;
   const body = h('div.body.inbox');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
-  const triage = h('button.btn.primary', { type: 'button', title: 'The Receptionist reads every item and files it on To Do Next or the task queue', onclick: () => actions.triage() }, '🤖 Triage the tray');
+  const triage = h('button.btn.primary', { type: 'button', title: 'The Receptionist reads every item and hands it out: the task queue, To Do Next, or the other agents', onclick: () => actions.triage() }, '💁‍♀️ Triage the tray');
   const el = h(
     'div.modal',
     { role: 'dialog', 'aria-label': 'In-tray', style: 'width:min(860px,100%)' },
@@ -60,19 +61,42 @@ export function openInbox(net: Net, actions: InboxActions) {
     }
   });
 
+  const mailBox = h('div.inbox-mail');
   const folder = h('p.inbox-folder');
   const doorBox = h('div.inbox-door');
   const list = h('div');
-  body.append(form, folder, doorBox, list);
+  body.append(mailBox, form, folder, doorBox, list);
   const provider = providerPicker(store.project, 'inbox-provider', 'Queue with', 'queue');
 
   const copyButton = (value: string, label = 'Copy') =>
     h('button.btn.inbox-copy', { type: 'button', title: 'Copy to the clipboard', onclick: () => void navigator.clipboard?.writeText(value).then(() => toast('Copied'), () => toast('Could not copy', 'warn')) }, label);
+
+  // Her email, first: the address to write to, or a push to set it up.
+  let checking = false;
+  const renderMail = () => {
+    const m = store.mail;
+    const settings = h('button.btn', { type: 'button', onclick: () => openMailSetup() }, m.configured ? '📧 Email settings' : '📧 Set up email');
+    const now = h('button.btn', { type: 'button', disabled: checking, onclick: async () => {
+      checking = true;
+      renderMail();
+      await fetch('/api/mail', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'check' }) }).catch(() => undefined);
+      checking = false;
+      renderMail();
+    } }, checking ? 'Checking…' : 'Check now');
+    mailBox.className = `inbox-mail ${!m.configured ? 'off' : m.status === 'error' ? 'err' : 'ok'}`;
+    mailBox.replaceChildren(
+      m.configured
+        ? h('p', {}, h('b', {}, '📧 Email me work at '), h('code', {}, m.address ?? ''), copyButton(m.address ?? ''))
+        : h('p', {}, h('b', {}, '📧 I can’t read email yet. '), 'Set up my mailbox and you can email me work from anywhere; I’ll hand it out and write back when it’s done.'),
+      h('p.inbox-mail-status', {}, mailStatusText(m)),
+      h('div.inbox-mail-actions', {}, settings, ...(m.configured ? [now] : [])),
+    );
+  };
   const fileUrl = (name: string) => `/api/inbox/file?floor=${encodeURIComponent(floor)}&name=${encodeURIComponent(name)}`;
   const size = (bytes: number) => (bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
 
   const row = (i: InboxItem): HTMLElement => {
-    const icon = i.kind === 'note' ? '📝' : '📎';
+    const icon = i.kind === 'note' ? (i.from?.endsWith(' · email') ? '📧' : '📝') : '📎';
     const meta = [i.from ? `from ${i.from}` : '', timeAgo(i.mtime), i.kind === 'file' ? size(i.size) : '', i.kind === 'note' && i.title !== i.name ? i.name : ''].filter(Boolean).join(' · ');
     const open = h('a.btn', { href: fileUrl(i.name), target: '_blank', rel: 'noopener', title: i.kind === 'note' ? 'Read the whole note' : 'Open the file' }, i.kind === 'note' ? '📖 Read' : '📎 Open');
     const plan = h('button.btn', { type: 'button', title: 'File it on the To Do Next board, and put it away', onclick: () => net.send({ t: 'inbox.plan', name: i.name }) }, '📒 To Do Next');
@@ -142,7 +166,8 @@ export function openInbox(net: Net, actions: InboxActions) {
     renderDoor();
   };
 
-  const unsubs = [store.on('inbox', render), store.on('me', render), store.on('floor', () => { if (store.floor !== floor) modal.close(); })];
+  const unsubs = [store.on('inbox', render), store.on('me', render), store.on('mail', renderMail), store.on('floor', () => { if (store.floor !== floor) modal.close(); })];
+  renderMail();
   const tick = setInterval(render, 30_000);
   const modal = openModal(el, {
     doing: '📥 at the in-tray',
