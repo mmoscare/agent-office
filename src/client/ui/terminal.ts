@@ -228,7 +228,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   let pendingFind = find;
 
   /** The Shell tab's terminal, made the first time the tab opens. */
-  let side: { term: Terminal; fit: FitAddon; ready: boolean } | null = null;
+  let side: { term: Terminal; fit: FitAddon; ready: boolean; failed?: boolean } | null = null;
   let onSide = false;
   /**
    * Sizes the side shell. It's shared too, so typing claims it for this window and just looking
@@ -253,6 +253,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const attachSide = () => {
     if (!side) return;
     side.ready = false;
+    side.failed = false;
     try {
       side.fit.fit();
     } catch {
@@ -274,6 +275,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       made.term.open(sideHost);
       made.term.attachCustomKeyEventHandler(keys);
       made.term.onData((data) => {
+        // It couldn't start (the checkout was missing, the shell wouldn't run): a key tries again.
+        if (side?.failed) return attachSide();
         if (!side?.ready) return;
         // The shell exited: a key starts a new one.
         if (!store.workers.get(workerId)?.side) return attachSide();
@@ -282,7 +285,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       });
       sideRo.observe(sideHost);
       attachSide();
-    }
+    } else if (shell && side?.failed) attachSide();
     if (shell) {
       sideSize();
       side?.term.focus();
@@ -318,9 +321,12 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
         sideSize();
       });
     } else if (msg.t === 'side.error' && msg.workerId === workerId) {
-      side?.term.write(`\r\n\x1b[31m${msg.error}\x1b[0m\r\n`);
+      if (side) side.failed = true;
+      side?.term.write(`\r\n\x1b[31m${msg.error} — press a key to try again\x1b[0m\r\n`);
       toast(msg.error, 'error');
     } else if (msg.t === 'term.data' && msg.workerId === workerId) term.write(msg.data);
+    // Reconnected: the server forgot this window's place at the side shell, so take it back.
+    else if (msg.t === 'welcome' && side) attachSide();
     else if (msg.t === 'term.typing' && msg.workerId === workerId) {
       typing.set(msg.id, Date.now() + TYPING_SHOWS_MS);
       const w = store.workers.get(workerId);
