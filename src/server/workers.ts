@@ -29,6 +29,7 @@ import { reportedUsage } from './reported-usage.js';
 import { configuredProvider, isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { isEffort, isModelId } from '../shared/model.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
+import { openCodeLaunchModel } from './grok-default.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 import { screenSnapshot } from './screen.js';
@@ -1045,6 +1046,8 @@ export class WorkerManager {
       // `--` so a prompt like "- fix login" is never parsed as a CLI option.
       if (prompt) args.push('--', prompt);
     } else if (isOpenCode) {
+      // Personal: a blank model runs the top Grok model, and the badge shows it (see grok-default.ts).
+      if (!resumeSessionId) info.model = openCodeLaunchModel(info.model, args);
       if (resumeSessionId || info.model) args = withoutOpenCodeModel(args);
       if (!resumeSessionId && info.model) args.push('--model', info.model);
       if (resumeSessionId) args.push('--session', resumeSessionId);

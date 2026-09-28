@@ -15,6 +15,7 @@ import { childEnv, resolveCommand } from './workers.js';
 import { ConsoleShells } from './console-shell.js';
 import { configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
 import { createOpenCodeModelCatalogue } from './models.js';
+import { openCodeLaunchModel, useGrokCatalogue } from './grok-default.js';
 import { Team } from './team.js';
 import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
@@ -215,6 +216,12 @@ export async function startServer(cfg: Config) {
     modelCommand.includes('/') ? path.resolve(modelCommand) : modelCommand,
     cfg.dir,
   );
+  // Personal: blank OpenCode models default to the top Grok model in this catalogue (see grok-default.ts).
+  const grok = useGrokCatalogue(openCodeModels);
+  const openCodeDefaultModel = async () => {
+    await grok.refresh();
+    return openCodeLaunchModel(undefined, configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentArgs : []);
+  };
 
   const sendTo = (c: Client, msg: ServerMsg) => {
     if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
@@ -1161,9 +1168,9 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/agents/opencode/models' && req.method === 'GET') {
         try {
-          return send(res, 200, { models: await openCodeModels.get() });
+          return send(res, 200, { models: await openCodeModels.get(), default: await openCodeDefaultModel() });
         } catch {
-          return send(res, 502, { error: 'Could not load OpenCode models' });
+          return send(res, 502, { error: 'Could not load OpenCode models', default: await openCodeDefaultModel() });
         }
       }
       if (p === '/api/image' && req.method === 'GET') {
