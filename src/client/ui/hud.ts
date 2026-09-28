@@ -9,6 +9,7 @@ import { providerLabel, providerUsageState, resolvedProvider, modelBadge } from 
 import { whereabouts } from './whereabouts';
 import { isMac } from './terminal-clipboard';
 import { DESK_BY_ID } from '../../shared/layout';
+import { WORK_KINDS } from '../../shared/work-kind';
 
 /** What the people list last showed, so it's only drawn again when something in it changed. */
 let peopleKey = '';
@@ -68,12 +69,15 @@ export function renderWorkers(onOpen: (id: string) => void) {
     const usageNote = usageState === 'untracked' ? ' · usage untracked' : usageState === 'waiting' && providerKind === 'opencode' ? ' · waiting for metrics' : usageState === 'waiting' && providerKind === 'codex' ? ' · waiting for first report' : '';
     const badge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
     const sub = [provider && `⚙️ ${provider}${badge ? ` · ${badge}` : ''}${usageNote}`, w.workspace ? `${w.workspace.repositories.length} repositories` : w.worktree && `🌿 ${w.worktree.branch}`, w.pr && `🔀 PR #${w.pr.number}`, w.activity || w.title || w.prompt].filter(Boolean).join(' · ');
+    const kind = w.kind === 'agent' && w.task?.kind ? WORK_KINDS[w.task.kind] : undefined;
     ul.append(
       h(
         'li',
-        { onclick: () => onOpen(w.id), title: `Open ${w.name}'s terminal` },
+        { onclick: () => onOpen(w.id), title: `Open ${w.name}'s terminal`, class: kind && 'has-kind', style: kind && `--kind:${kind.color}` },
         h('span.dot', { style: `background:${w.color}` }),
-        h('span.name', {}, w.name, sub ? h('span.sub', {}, sub) : null,
+        h('span.name', {}, w.name,
+          kind ? h('span.work-kind', { style: `background:${kind.color};color:${kind.ink}`, title: `Working on: ${kind.label}${w.task ? ` — ${w.task.name}` : ''}` }, `${kind.emoji} ${kind.label}`) : null,
+          sub ? h('span.sub', {}, sub) : null,
           usageState === 'tracked' && w.usage ? h('span.cost', { title: usageTitle(w.usage, providerKind) }, usageLabel(w.usage, providerKind)) : null),
         h('span.pill', { class: w.status }, STATUS_LABEL[w.status] ?? w.status),
       ),

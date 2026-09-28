@@ -179,11 +179,12 @@ function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick:
 
 export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions) {
   const body = h('div.body');
+  const warning = h('div.board-error', { hidden: true });
   const status = h('span.board-status');
   const refresh = h('button.btn', { title: 'Refresh from GitHub', onclick: () => net.send({ t: 'gh.refresh' }) }, '🔄 Refresh');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const git = kind === 'pulls' && actions.gitBoard ? h('button.btn', { title: 'Turn the board over to the Git repositories on this floor', onclick: () => { modal.close(); actions.gitBoard?.(); } }, '🌿 Git') : null;
-  const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close), body);
+  const el = h('div.modal.board', { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' }, h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close), warning, body);
 
   const render = () => {
     const st = kind === 'issues' ? store.issues : store.pulls;
@@ -192,10 +193,11 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const scrolled = [...body.querySelectorAll('.column > ul')].map((ul) => ul.scrollTop);
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
+    warning.hidden = !st.error;
+    if (st.error) warning.textContent = `${st.items.length ? 'Some GitHub data may be out of date' : "Couldn't load from GitHub"}: ${st.error}`;
     if (st.error && !st.items.length) {
       // What's on disk doesn't need GitHub: unshipped work still shows when it can't be reached.
       if (kind === 'pulls') body.append(unshippedColumn(net, actions));
-      body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, "The server runs `gh` in the floor's folder, or in each GitHub checkout inside it when the folder isn't one itself — make sure it is installed and authenticated (gh auth login).")));
       return;
     }
     if (kind === 'issues') {

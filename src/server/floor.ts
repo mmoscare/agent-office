@@ -271,7 +271,7 @@ export class Floor {
     void this.github.refresh();
     // A floor with people on it, or work under way, keeps its boards fresh; the others check in now and then.
     this.timer = setInterval(() => {
-      if (this.active() || Date.now() - this.github.issues.fetchedAt > IDLE_REFRESH_MS) void this.github.refresh();
+      if (this.active() || Date.now() - this.github.issues.fetchedAt > IDLE_REFRESH_MS) void this.github.refresh(false);
     }, REFRESH_MS);
   }
 
@@ -282,7 +282,7 @@ export class Floor {
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */
   arrived() {
-    if (Date.now() - Math.max(this.github.issues.fetchedAt, this.github.pulls.fetchedAt) > REFRESH_MS) void this.github.refresh();
+    if (Date.now() - Math.max(this.github.issues.fetchedAt, this.github.pulls.fetchedAt) > REFRESH_MS) void this.github.refresh(false);
   }
 
   private active(): boolean {

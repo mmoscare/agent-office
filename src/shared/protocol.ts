@@ -10,6 +10,7 @@ import type { EmoteId } from './emotes.js';
 import type { JukeboxState } from './jukebox.js';
 import type { DrinkId } from './rooftop.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
+import type { WorkKind } from './work-kind.js';
 import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 
@@ -56,6 +57,8 @@ export function isAgentEffort(value: unknown): value is AgentEffort {
 export interface WorkerTask {
   name: string;
   summary: string;
+  /** What sort of work it is, for colour-coding (see shared/work-kind.ts). */
+  kind?: WorkKind;
 }
 
 /** A branch's PR, including completed PRs retained for its handoff/history. */
