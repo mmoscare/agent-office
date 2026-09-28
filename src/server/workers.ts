@@ -33,6 +33,7 @@ import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 import { screenSnapshot } from './screen.js';
 import type { Capacity } from './machine.js';
 import type { WorkspaceRequest } from '../shared/workspaces.js';
+import { isWorkKind } from '../shared/work-kind.js';
 import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
@@ -842,7 +843,7 @@ export class WorkerManager {
     if (!clean || /^\/\S+$/.test(clean) || w.prompts.at(-1) === clean) return;
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
-    if (!hadTask) w.info.task = fallbackTask(clean);
+    if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
     if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
@@ -1568,7 +1569,8 @@ export function childEnv(): Record<string, string> {
 
 function validTask(t: unknown): WorkerTask | undefined {
   const v = t as Partial<WorkerTask> | undefined;
-  return typeof v?.name === 'string' && typeof v.summary === 'string' ? { name: v.name, summary: v.summary } : undefined;
+  if (typeof v?.name !== 'string' || typeof v.summary !== 'string') return undefined;
+  return isWorkKind(v.kind) ? { name: v.name, summary: v.summary, kind: v.kind } : { name: v.name, summary: v.summary };
 }
 
 function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
