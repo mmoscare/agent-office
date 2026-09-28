@@ -29,7 +29,6 @@ import { reportedUsage } from './reported-usage.js';
 import { configuredProvider, isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
 import { isEffort, isModelId } from '../shared/model.js';
 import { mergeOpenCodeConfigContent, openCodePluginSpecifier, writeOpenCodePlugin, type OpenCodeStatusEvent } from './opencode.js';
-import { openCodeLaunchModel } from './grok-default.js';
 import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 import { screenSnapshot } from './screen.js';
@@ -38,6 +37,7 @@ import type { WorkspaceRequest } from '../shared/workspaces.js';
 import { isWorkKind } from '../shared/work-kind.js';
 import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
 import { SideShells } from './sideshell.js';
+import { openCodeLaunchModel } from './grok-default.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
