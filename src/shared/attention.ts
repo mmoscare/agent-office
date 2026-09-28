@@ -5,6 +5,8 @@ import { alertDetail } from './status.js';
 /** One notification per agent. Questions stay pending until the agent moves on. */
 export function workerAttention(w: WorkerInfo): WorkerAttention | undefined {
   if (w.kind !== 'agent') return;
+  // One that didn't start is a startup error: once its terminal has been seen, it waits for Start again quietly.
+  if (w.didNotStart && w.acked) return;
   const reason = w.status === 'needs_input' ? 'needs_input'
     : w.status === 'done' && !w.acked ? 'done'
     : w.status === 'exited' && w.exitCode !== undefined && w.exitCode !== 0 && !w.acked ? 'error'

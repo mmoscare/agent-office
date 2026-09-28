@@ -508,7 +508,8 @@ export class WorkerManager {
     w.viewers.set(clientId, name);
     void this.refreshBranches(w);
     let changed = this.syncViewers(w);
-    if (!w.info.acked && w.info.status !== 'needs_input') {
+    // A question stays unread until it's answered; a failed start has been read once it's seen.
+    if (!w.info.acked && (w.info.status !== 'needs_input' || w.info.didNotStart)) {
       w.info.acked = true;
       changed = true;
     }
@@ -1289,8 +1290,10 @@ export class WorkerManager {
     info.didNotStart = true;
     if (exitCode !== undefined) info.exitCode = exitCode;
     info.activity = activity ?? notStarted(info.provider, exitCode, '').activity;
-    if (info.status === 'needs_input') this.emitUpdate(w);
-    else this.setStatus(w, 'needs_input');
+    if (info.status !== 'needs_input') this.setStatus(w, 'needs_input');
+    // Like any startup error, it's already read if someone has the terminal open (see attention.ts).
+    info.acked = w.viewers.size > 0;
+    this.emitUpdate(w);
     this.persist();
     const term = w.term;
     if (activity || !term) return;
