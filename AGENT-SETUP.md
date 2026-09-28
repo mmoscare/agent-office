@@ -41,7 +41,41 @@ It opens in place immediately and stays in your floor list. A parent folder cont
 
 The **Clone from GitHub** tab still lets you clone a repository when you want to.
 
+## One worker across frontend and backend
+
+Keep **Personal-Portfolio** as one floor. You can give a worker separate working copies of both repositories:
+
+1. Go to an **empty desk** and press **E** to hire.
+2. Click **Choose starting branch…**, or check **Work in separate git worktrees & branches**.
+3. Select **investments-frontend** and **investments-backend**.
+4. Use **Start from** beside each repository to choose its starting branch, such as `main` or `personal`. Leave **Current checkout** selected to use the branch already open in that folder.
+5. Optionally enter a **new branch name**, such as `feature/login`. This names the worker's task branch. Leave it blank for an automatic name.
+6. Give the worker its task and click **Hire & start**.
+
+One worker now starts in a workspace containing both repositories. Each has its own worktree and branch. The worker gets instructions to edit those copies and test them together. Your original folders keep their current branches and unfinished edits.
+
+Worktrees start from the selected branch's committed code. **Start from** lists local branches and remote branches already fetched to this computer; it does not download updates. Uncommitted edits and ignored files such as `.env` and `node_modules` are not copied. The worker may need to install dependencies or configure the app in its copies. The new task branch name must be new in every selected repository.
+
+The quick branch button turns on separate worktrees so it can use your chosen starting branches while keeping other agents' original folders unchanged. Leaving worktrees off works directly in each original folder on its current branch. **Add repositories** offers the same starting-branch choice for each extra repository.
+
+At that worker's desk, press **C** or **O**, or click **Changes** in its terminal. Its workspace window lists every repository:
+
+- **Changes & commits** shows and commits changes in that repository only.
+- **Push & open PR** opens a separate pull request for that repository. Commit its changes first.
+- **Review PR** opens GitHub, where you review and merge when ready. Matching PR numbers in different repos are separate PRs.
+- **Add repositories** creates another worktree for the same worker. Wait for its current task to finish first. It keeps its existing worktrees and receives updated instructions.
+
+For a conflict, tell the worker which repository and PR to fix. Ask it to merge the latest base branch into that repository's worktree, resolve the conflict, and test both apps together. Review the result before merging the PR. Conflicts are not silently resolved or merged.
+
+When sending the worker home, the app checks **all** its repositories. **Keep everything** preserves unfinished work. The other choices remove its worktrees, or both its worktrees and branches; the dialog shows uncommitted changes and unpushed commits before you choose. Small workspace instructions and any notes beside the repositories remain in `.agent-office/workspaces/`.
+
+Existing workers keep their current folders. Hire a new worker to use this setup. The task queue and board agents keep their existing behavior; use the empty-desk hire form for this workflow. After merging on GitHub, update your original local repositories when their ongoing work is saved.
+
+The workspace selection, instructions, repository branches and PR links survive an office restart. Restart **Agent Office** from its tray menu after current workers finish to load this feature, then refresh the browser.
+
 ## Terminal keys
+
+**Test changes** is available in the agent terminal, workspace window, and Changes window. Click it after the agent finishes a task. It asks that same agent to test all repositories and worktrees involved, including how they work together, fix failures caused by its changes, and report what passed, failed, or could not be checked. Results appear in the terminal. It does not commit, push, or merge. The button waits while the agent is busy or needs an answer from you.
 
 **Esc goes to the agent**, so you can cancel a response or leave its menus. Click **X** at the top right to leave the terminal view. Closing that view does not stop the agent.
 
@@ -108,5 +142,7 @@ The folder picker and usage history also passed type checking, a full app build,
 The Windows launcher fix lives mainly in `src/server/windows-command.ts`; Codex's Windows hook command is in `src/server/codex.ts`. Keep these when merging author updates unless upstream supplies equivalent fixes. Your general fork/update instructions are in [PERSONAL-WORKFLOW.md](PERSONAL-WORKFLOW.md).
 
 Local folder handling lives in `local-folders.ts` and `ui/local-floor.ts`. Saved usage is a separate `model-usage.ts` feature; it leaves the author's daily budget ledger unchanged. The launcher source stays in `personal/windows`. Keep these small additions when merging updates.
+
+Multi-repository workspaces live mainly in `src/server/workspaces.ts`, `workspace-changes.ts`, and the client workspace dialogs. The author's ordinary single-repository worktree helper remains in place. Focused Git tests cover separate branches/PRs, rollback, adding repositories, resume, changes/commits and cleanup. A temporary-office browser test covers the complete flow with a fake Codex CLI; it makes no real AI requests or GitHub writes.
 
 Official references: [Claude model and effort](https://code.claude.com/docs/en/model-config), [Codex terminal commands](https://learn.chatgpt.com/docs/developer-commands?surface=cli), [OpenCode providers](https://opencode.ai/docs/providers/), [OpenCode CLI](https://opencode.ai/docs/cli/).

@@ -32,6 +32,8 @@ import { ScrollbackStore, searchTerminal, terminalTail } from './history.js';
 import { commandLaunch, resolveWindowsCommand } from './windows-command.js';
 import { screenSnapshot } from './screen.js';
 import type { Capacity } from './machine.js';
+import type { WorkspaceRequest } from '../shared/workspaces.js';
+import { Workspaces, workspaceBrief, workspaceGitHubRepo } from './workspaces.js';
 
 type HeadlessTerminal = InstanceType<typeof headless.Terminal>;
 
@@ -140,6 +142,7 @@ export class WorkerManager {
   private statePath: string;
   private settingsPath: string;
   private trees: Worktrees;
+  private workspaces: Workspaces;
   private agentPath: string | null = null;
   readonly defaultProvider: AgentProvider;
   /** On a floor that's a folder of GitHub checkouts rather than one, which (for the board agents' brief). */
@@ -173,6 +176,7 @@ export class WorkerManager {
   ) {
     this.defaultProvider = configuredProvider(agentCmd);
     this.trees = new Worktrees(dir);
+    this.workspaces = new Workspaces(dir);
     this.statePath = path.join(dataDir, 'workers.json');
     this.settingsPath = path.join(dataDir, 'claude-hooks.json');
     this.writeHookSettings();
@@ -259,7 +263,7 @@ export class WorkerManager {
       workerId: w.info.id,
       pid: w.pty?.pid,
       agent: w.info.kind === 'agent',
-      cwd: w.info.worktree ? path.join(this.dir, w.info.worktree.path) : this.dir,
+      cwd: this.cwd(w.info),
       root: this.dir,
     }));
   }
@@ -273,7 +277,7 @@ export class WorkerManager {
    * Hires a worker at a desk. `meeting` seats one at the meeting room's table instead, for that meeting
    * (see meetings.ts), in the meeting's own worktree, which everyone at the table shares.
    */
-  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }): WorkerInfo | string {
+  spawn(deskId: string, by: string, prompt?: string, worktree = false, kind: WorkerKind = 'agent', provider?: AgentProvider, model?: string, effort?: AgentEffort, meeting?: { id: string; worktree?: WorkerInfo['worktree'] }, workspace?: WorkspaceRequest): WorkerInfo | string {
     const selectedProvider = kind === 'agent' ? provider ?? this.defaultProvider : undefined;
     const modelError = validateWorkerModel(kind, selectedProvider, model);
     if (modelError) return modelError;
@@ -281,6 +285,7 @@ export class WorkerManager {
     if (effortError) return effortError;
     const seat = DESK_BY_ID.get(deskId);
     if (!seat) return 'Unknown desk';
+    if (workspace && (kind !== 'agent' || seat.station)) return 'Repository workspaces are for regular agent desks';
     if (this.deskOccupied(deskId)) return seat.station ? `The ${STATION_AGENT[seat.station].name} is already there` : `That ${seat.beanbag ? 'bean bag' : 'desk'} is taken`;
     if (kind === 'shell' && seat.station) return 'A board agent is always an agent, not a shell';
     if (seat.station && !prompt?.trim()) return 'Tell the board agent what to do';
@@ -299,7 +304,12 @@ export class WorkerManager {
     const name = agent ? agent.name : (NAMES.find((n) => !used.has(n)) ?? `Worker ${this.workers.size + 1}`);
     const id = randomBytes(6).toString('hex');
     let wt: WorkerInfo['worktree'] = meeting?.worktree;
-    if (worktree) {
+    let ws: WorkerInfo['workspace'];
+    if (workspace) {
+      const made = this.workspaces.create(`${name.toLowerCase()}-${id}`, workspace);
+      if (typeof made === 'string') return made;
+      ws = made;
+    } else if (worktree) {
       const made = this.trees.create(`${name.toLowerCase()}-${id.slice(0, 4)}`);
       if (typeof made === 'string') return made;
       wt = made;
@@ -319,6 +329,7 @@ export class WorkerManager {
       createdAt: Date.now(),
       prompt: kind === 'shell' ? undefined : prompt?.trim() || undefined,
       worktree: wt,
+      workspace: ws,
       cols: 100,
       rows: 30,
       viewers: [],
@@ -393,6 +404,7 @@ export class WorkerManager {
   async kill(id: string, cleanup?: WorktreeCleanup): Promise<{ note?: string; error?: string }> {
     const w = this.workers.get(id);
     if (!w) return {};
+    if (w.info.prOpening) return { error: 'Wait for the pull request operation to finish before sending this worker home' };
     this.workers.delete(id);
     this.namer.forget(id);
     clearTimeout(w.scanTimer);
@@ -407,6 +419,13 @@ export class WorkerManager {
     this.scrollback.remove(id);
     this.events.remove(id);
     this.persist();
+    if (w.info.workspace) {
+      const workspace = w.info.workspace;
+      if (!cleanup) cleanup = describeWork(await this.workspaces.inspect(workspace)) ? 'keep' : 'all';
+      if (cleanup === 'keep') return { note: `Kept ${w.info.name}'s workspace at ${workspace.path}, including every repository's branch and worktree` };
+      const error = await this.workspaces.remove(workspace, cleanup);
+      return error ? { error: `Workspace cleanup stopped: ${error}. Remaining work is at ${workspace.path}` } : { note: `Removed ${w.info.name}'s repository worktrees${cleanup === 'all' ? ' and branches' : '; kept the branches'}. Workspace notes remain at ${workspace.path}` };
+    }
     const wt = w.info.worktree;
     // A meeting's worktree is everyone at the table's: the meeting tidies it away once they've all gone.
     if (!wt || w.info.meeting) return {};
@@ -424,8 +443,24 @@ export class WorkerManager {
 
   /** What a worker's worktree holds, so whoever sends it home knows what deleting it would lose. */
   inspectWorktree(id: string): Promise<WorktreeState | undefined> {
-    const wt = this.workers.get(id)?.info.worktree;
+    const info = this.workers.get(id)?.info;
+    if (info?.workspace) return this.workspaces.inspect(info.workspace);
+    const wt = info?.worktree;
     return wt ? this.trees.inspect(wt) : Promise.resolve(undefined);
+  }
+
+  addRepositories(id: string, request: WorkspaceRequest, by: string): string | undefined {
+    const w = this.workers.get(id);
+    if (!w?.info.workspace) return 'Hire a worker with repository worktrees to use this action';
+    if (isBusy(w.info.status) || w.info.prOpening) return 'Wait until the worker finishes its current task before adding repositories';
+    try { this.workspaces.check(w.info.workspace); } catch (err) { return (err as Error).message; }
+    const made = this.workspaces.add(w.info.workspace, request);
+    if (typeof made === 'string') return made;
+    w.info.workspace = made;
+    this.persist();
+    this.emitUpdate(w);
+    if (w.pty) this.prompt(id, `Repositories were added to your workspace. Re-read AGENTS.md in the workspace root before continuing. Use only the worktrees listed there; leave the original checkouts untouched.`, by);
+    return undefined;
   }
 
   attach(id: string, clientId: string, name: string): { data: string; cols: number; rows: number } | undefined {
@@ -516,11 +551,13 @@ export class WorkerManager {
    * drafted from its task. Resolves to the PR, or to a message saying why there is none. The
    * branch may already have a PR (including one merged or closed elsewhere): that one is used.
    */
-  async openPr(id: string, by: string): Promise<{ number: number; url: string; existed: boolean; dirty: boolean } | string> {
+  async openPr(id: string, by: string, repository?: string, draft?: { title: string; body: string }): Promise<{ number: number; url: string; existed: boolean; dirty: boolean } | string> {
     const w = this.workers.get(id);
     if (!w) return 'No such worker';
     const { info } = w;
-    const wt = info.worktree;
+    const repoTree = info.workspace?.repositories.find(r => r.repository === repository);
+    if (info.workspace && !repoTree) return 'Choose a repository from this worker’s workspace';
+    const wt = repoTree ?? info.worktree;
     if (!wt) return `${info.name} works in the main checkout — only workers with their own worktree can open a PR`;
     if (info.prOpening) return `${info.name}'s pull request is already being opened`;
     if (isBusy(info.status)) {
@@ -528,26 +565,45 @@ export class WorkerManager {
     }
     const cwd = path.join(this.dir, wt.path);
     if (!existsSync(cwd)) return `${info.name}'s worktree is gone (${wt.path})`;
+    if (info.workspace) {
+      try { this.workspaces.check(info.workspace, repoTree); } catch (err) { return (err as Error).message; }
+    }
     info.prOpening = true;
     this.emitUpdate(w);
     try {
       const dirty = (await run('git', ['status', '--porcelain'], cwd)) !== '';
-      const existing = info.pr ?? await findBranchPr(wt.branch, cwd);
-      if (existing) {
-        info.pr = existing;
-        this.persist();
-        return { ...existing, existed: true, dirty };
+      const origin = repoTree ? workspaceGitHubRepo(await run('git', ['remote', 'get-url', 'origin'], cwd)) : undefined;
+      if (repoTree) {
+        // One PR per repository in a workspace, found by its branch in that repository.
+        const open = await findOpenPr(wt.branch, cwd, origin);
+        if (open) {
+          // Refresh the PR's branch too when the worker made more commits after opening it.
+          await run('git', ['push', '-u', 'origin', wt.branch], cwd, 90_000);
+          repoTree.pr = open;
+          this.persist();
+          return { ...open, existed: true, dirty };
+        }
+      } else {
+        // The branch may already have a PR, including one merged or closed elsewhere: that one is used.
+        const existing = info.pr ?? await findBranchPr(wt.branch, cwd);
+        if (existing) {
+          info.pr = existing;
+          this.persist();
+          return { ...existing, existed: true, dirty };
+        }
       }
       const commits = (await run('git', ['log', '--reverse', '--format=%h %s', `${wt.base}..${wt.branch}`], cwd)).split('\n').filter(Boolean);
       if (!commits.length) return dirty ? `${info.name} hasn't committed anything yet — ask it to commit first` : `${info.name} has no commits on ${wt.branch} yet`;
       await run('git', ['push', '-u', 'origin', wt.branch], cwd, 90_000);
-      const base = await this.pushedBranch([wt.from, this.trees.currentBranch()], wt.branch);
-      const { title, body } = draftPr(info, commits, by);
-      const out = await gh(['pr', 'create', '--head', wt.branch, ...(base ? ['--base', base] : []), '--title', title, '--body', body], cwd, 60_000);
+      const sourceDir = repoTree ? path.join(this.dir, repoTree.repository) : this.dir;
+      const base = await this.pushedBranch([wt.from, new Worktrees(sourceDir).currentBranch()], wt.branch, sourceDir);
+      const { title, body } = draft ?? draftPr(info, commits, by);
+      const out = await gh(['pr', 'create', ...(origin ? ['--repo', origin] : []), '--head', wt.branch, ...(base ? ['--base', base] : []), '--title', title, '--body', body], cwd, 60_000);
       const url = out.trim().split('\n').pop() ?? '';
       const number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
       if (!number) throw new Error(`gh did not return a pull request URL (${truncate(out, 120)})`);
-      info.pr = { number, url, state: 'OPEN' };
+      if (repoTree) repoTree.pr = { number, url };
+      else info.pr = { number, url, state: 'OPEN' };
       this.persist();
       return { number, url, existed: false, dirty };
     } catch (err) {
@@ -560,11 +616,11 @@ export class WorkerManager {
   }
 
   /** The first of these branches that exists on origin, for a PR base. None: gh picks the default branch. */
-  private async pushedBranch(candidates: (string | undefined)[], not: string): Promise<string | undefined> {
+  private async pushedBranch(candidates: (string | undefined)[], not: string, cwd = this.dir): Promise<string | undefined> {
     for (const c of candidates) {
       if (!c || c === not) continue;
       try {
-        await run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${c}`], this.dir);
+        await run('git', ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${c}`], cwd);
         return c;
       } catch {
         // not on the remote (or never fetched)
@@ -869,6 +925,10 @@ export class WorkerManager {
 
   private launch(w: Worker, prompt: string | undefined, resumeSessionId: string | undefined) {
     const { info } = w;
+    if (info.workspace) {
+      try { this.workspaces.check(info.workspace); } catch (err) { this.startFailed(w, (err as Error).message); return; }
+      if (!resumeSessionId) prompt = `${workspaceBrief(info.workspace)}\n${prompt || 'Wait for my task.'}`;
+    }
     // The new terminal starts with what the last one showed (on a resume), or with what was saved
     // when the office last stopped, so earlier output is still there to scroll back to and search.
     const restarted = !w.term;
@@ -1125,6 +1185,7 @@ export class WorkerManager {
   }
 
   private cwd(info: WorkerInfo): string {
+    if (info.workspace) return path.join(this.dir, info.workspace.path);
     return info.worktree ? path.join(this.dir, info.worktree.path) : this.dir;
   }
 
@@ -1376,6 +1437,7 @@ process.stdin.on('end', () => {
       createdAt: info.createdAt,
       prompt: info.prompt,
       worktree: info.worktree,
+      workspace: info.workspace,
       title: info.title,
       sessionId: info.sessionId,
       activity: info.activity,
@@ -1427,6 +1489,7 @@ process.stdin.on('end', () => {
           createdAt: s.createdAt ?? Date.now(),
           prompt: s.prompt,
           worktree: s.worktree,
+          workspace: s.workspace,
           title: s.title,
           sessionId: s.sessionId,
           activity: s.activity,
@@ -1663,6 +1726,12 @@ function run(cmd: string, args: string[], cwd: string, timeout = 30_000): Promis
       else resolve(stdout.trim());
     });
   });
+}
+
+async function findOpenPr(branch: string, cwd: string, repository?: string): Promise<{ number: number; url: string } | undefined> {
+  const out = await gh(['pr', 'list', ...(repository ? ['--repo', repository] : []), '--head', branch, '--state', 'open', '--limit', '1', '--json', 'number,url'], cwd);
+  const found = (JSON.parse(out || '[]') as { number: number; url: string }[])[0];
+  return found ? { number: found.number, url: found.url } : undefined;
 }
 
 /**

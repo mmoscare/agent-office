@@ -2,6 +2,8 @@ import type { AgentEffort, AgentProvider, WorkerStatus } from '../../shared/prot
 import { h, openModal, STATUS_LABEL } from './dom';
 import { store } from '../state';
 import { providerPicker, type ProviderPicker } from './provider';
+import type { WorkspaceRequest } from '../../shared/workspaces';
+import { workspacePicker } from './workspace-picker';
 
 // Send a prompt about an issue or PR to a worker: a new one at a free desk, or one already sitting
 // at a desk (it lands in their input box, queued if they're busy).
@@ -28,23 +30,14 @@ export interface AskOptions {
   /** Offer the configured provider choice for a new worker. */
   providerOption?: boolean;
   /** `to` is a worker id, or null for a new worker. */
-  onSubmit(prompt: string, to: string | null, worktree: boolean, provider?: AgentProvider, model?: string, effort?: AgentEffort): void;
+  onSubmit(prompt: string, to: string | null, worktree: boolean, provider?: AgentProvider, model?: string, effort?: AgentEffort, workspace?: WorkspaceRequest): void;
 }
-
-// Shared with the hire prompt, so the choice sticks either way.
-const WT_KEY = 'agent-office.worktree';
 
 export function openAsk(opts: AskOptions) {
   let to: string | null = opts.newDesk ? null : (opts.workers[0]?.id ?? null);
   const ta = h('textarea', { rows: opts.initial ? 9 : 5, placeholder: opts.placeholder ?? 'What should the worker do?', 'aria-label': 'Prompt' }) as HTMLTextAreaElement;
   ta.value = opts.initial ?? '';
-  const wtBox = h('input', { type: 'checkbox', id: 'ask-wt' }) as HTMLInputElement;
-  try {
-    wtBox.checked = localStorage.getItem(WT_KEY) === '1';
-  } catch {
-    // storage blocked
-  }
-  const wtRow = h('label.ask-wt', { for: 'ask-wt', title: 'Isolate the new worker on its own branch so parallel workers never collide' }, wtBox, '🌿 Work in its own git worktree & branch');
+  const workspace = opts.worktreeOption ? workspacePicker('ask-wt') : null;
   const provider: ProviderPicker | null = opts.providerOption ? providerPicker(store.project, 'ask-provider') : null;
   const submit = h('button.btn.primary', { type: 'submit' });
 
@@ -52,7 +45,7 @@ export function openAsk(opts: AskOptions) {
   const pick = (id: string | null) => {
     to = id;
     for (const b of choices.children) b.classList.toggle('on', (b as HTMLElement).dataset.to === (id ?? ''));
-    wtRow.classList.toggle('hidden', !!id || !opts.worktreeOption);
+    workspace?.element.classList.toggle('hidden', !!id);
     provider?.element.classList.toggle('hidden', !!id);
     submit.textContent = id ? 'Send ✨' : 'Hire & start';
   };
@@ -75,7 +68,7 @@ export function openAsk(opts: AskOptions) {
       h('label', { style: 'margin-top:14px' }, 'Prompt'),
       ta,
       provider?.element ?? null,
-      wtRow,
+      workspace?.element ?? null,
     ),
     h('footer', {}, h('span.grow', {}, 'Enter to send · Shift+Enter for a new line'), cancel, submit),
   ) as HTMLFormElement;
@@ -91,22 +84,10 @@ export function openAsk(opts: AskOptions) {
       return;
     }
     if (!to && provider && !provider.valid()) return;
+    if (!to && workspace && !workspace.valid()) return;
     modal.close();
-    if (!to && opts.worktreeOption) {
-      try {
-        localStorage.setItem(WT_KEY, wtBox.checked ? '1' : '0');
-      } catch {
-        // storage blocked
-      }
-    }
-    opts.onSubmit(
-      opts.context ? `${opts.context}\n\n${text}` : text,
-      to,
-      !to && opts.worktreeOption && wtBox.checked,
-      !to ? provider?.value() : undefined,
-      !to ? provider?.model() : undefined,
-      !to ? provider?.effort() : undefined,
-    );
+    const choice = !to && workspace ? workspace.value() : { worktree: false };
+    opts.onSubmit(opts.context ? `${opts.context}\n\n${text}` : text, to, choice.worktree, !to ? provider?.value() : undefined, !to ? provider?.model() : undefined, !to ? provider?.effort() : undefined, choice.workspace);
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();

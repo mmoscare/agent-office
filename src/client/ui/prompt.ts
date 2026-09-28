@@ -2,6 +2,8 @@ import type { AgentEffort, AgentProvider, ServerMsg, WorktreeCleanup, WorktreeSt
 import { h, openModal } from './dom';
 import { store } from '../state';
 import { providerPicker, type ProviderPicker } from './provider';
+import type { WorkerWorkspace, WorkspaceRequest } from '../../shared/workspaces';
+import { workspacePicker } from './workspace-picker';
 
 export interface PromptOptions {
   title: string;
@@ -19,32 +21,13 @@ export interface PromptOptions {
   providerOption?: boolean;
   /** The desk being hired at, so the model/effort choice remembered here is this desk's, not the whole office's. */
   deskId?: string;
-  onSubmit(text: string, opts: { worktree: boolean; provider?: AgentProvider; model?: string; effort?: AgentEffort }): void;
-}
-
-const WT_KEY = 'agent-office.worktree';
-/** Whether the last hire asked for its own git worktree (the Ask window shares the choice). */
-export function worktreePref(): boolean {
-  try {
-    return localStorage.getItem(WT_KEY) === '1';
-  } catch {
-    return false;
-  }
+  onSubmit(text: string, opts: { worktree: boolean; workspace?: WorkspaceRequest; provider?: AgentProvider; model?: string; effort?: AgentEffort }): void;
 }
 
 export function openPrompt(opts: PromptOptions) {
   const ta = h('textarea', { rows: 7, placeholder: opts.placeholder ?? 'What should the worker work on?', 'aria-label': 'Prompt' }) as HTMLTextAreaElement;
   ta.value = opts.initial ?? '';
-  const wtBox = h('input', { type: 'checkbox', id: 'wt-toggle' }) as HTMLInputElement;
-  wtBox.checked = worktreePref();
-  const wtRow = opts.worktreeOption
-    ? h(
-        'label',
-        { for: 'wt-toggle', style: 'display:flex;gap:8px;align-items:center;margin:10px 0 0;font-weight:700;cursor:pointer', title: 'Isolate this worker on its own branch so parallel workers never collide' },
-        wtBox,
-        '🌿 Work in its own git worktree & branch',
-    )
-    : null;
+  const workspace = opts.worktreeOption ? workspacePicker('wt-toggle') : null;
   const provider: ProviderPicker | null = opts.providerOption ? providerPicker(store.project, 'prompt-provider', 'Worker provider', opts.deskId ? `desk:${opts.deskId}` : 'prompt-provider') : null;
   const submit = h('button.btn.primary', { type: 'submit' }, opts.submitLabel ?? 'Send ✨');
   const cancel = h('button.btn', { type: 'button' }, 'Cancel');
@@ -52,7 +35,7 @@ export function openPrompt(opts: PromptOptions) {
     'form.modal',
     { role: 'dialog', 'aria-label': opts.title },
     h('header', {}, h('h2', {}, opts.title)),
-    h('div.body', {}, opts.warning ? h('p.setting-note.bad', { style: 'margin:0 0 10px', role: 'alert' }, opts.warning) : null, opts.subtitle ? h('p', { style: 'margin:0 0 10px;font-weight:700;color:var(--muted)' }, opts.subtitle) : null, ta, provider?.element ?? null, wtRow),
+    h('div.body', {}, opts.warning ? h('p.setting-note.bad', { style: 'margin:0 0 10px', role: 'alert' }, opts.warning) : null, opts.subtitle ? h('p', { style: 'margin:0 0 10px;font-weight:700;color:var(--muted)' }, opts.subtitle) : null, ta, provider?.element ?? null, workspace?.element ?? null),
     h('footer', {}, h('span.grow', {}, 'Enter to send · Shift+Enter for a new line'), cancel, submit),
   ) as HTMLFormElement;
   form.noValidate = true;
@@ -66,15 +49,9 @@ export function openPrompt(opts: PromptOptions) {
       return;
     }
     if (provider && !provider.valid()) return;
+    if (workspace && !workspace.valid()) return;
     modal.close();
-    if (opts.worktreeOption) {
-      try {
-        localStorage.setItem(WT_KEY, wtBox.checked ? '1' : '0');
-      } catch {
-        // storage blocked
-      }
-    }
-    opts.onSubmit(text, { worktree: !!opts.worktreeOption && wtBox.checked, provider: provider?.value(), model: provider?.model(), effort: provider?.effort() });
+    opts.onSubmit(text, { ...(workspace?.value() ?? { worktree: false }), provider: provider?.value(), model: provider?.model(), effort: provider?.effort() });
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -110,7 +87,8 @@ export interface SendHomeOptions {
   name: string;
   /** The desk's label. */
   where: string;
-  worktree: { path: string; branch: string };
+  worktree?: { path: string; branch: string };
+  workspace?: WorkerWorkspace;
   /** Asks the office what the worktree holds; the answer comes back through routeWorktreeMessage. */
   ask(): void;
   onConfirm(cleanup: WorktreeCleanup): void;
@@ -148,11 +126,11 @@ const CLEANUP_LABEL: Record<WorktreeCleanup, string> = {
  * Opens on "keep" while the office checks the worktree, then suggests deleting when nothing would be lost.
  */
 export function sendHomeDialog(opts: SendHomeOptions) {
-  const { branch, path } = opts.worktree;
+  const { branch, path } = opts.worktree ?? { branch: opts.workspace!.repositories.map(r => `${r.name}: ${r.branch}`).join(', '), path: opts.workspace!.path };
   const choices: [WorktreeCleanup, string, string][] = [
-    ['all', 'Delete the worktree and its branch', `Removes ${path} and ${branch}.`],
-    ['worktree', 'Delete the worktree, keep the branch', `${branch} stays for a pull request or a later checkout.`],
-    ['keep', 'Keep both', 'Leaves everything as it is; agent-office prune tidies up later.'],
+    ['all', opts.workspace ? 'Delete all its repository worktrees and branches' : 'Delete the worktree and its branch', `Removes the worktree(s) at ${path} and ${branch}.`],
+    ['worktree', opts.workspace ? 'Delete all its worktrees, keep the branches' : 'Delete the worktree, keep the branch', `${branch} stays for a pull request or a later checkout.`],
+    ['keep', 'Keep everything', opts.workspace ? `Leaves all worktrees, branches and notes at ${path}.` : 'Leaves everything as it is; agent-office prune tidies up later.'],
   ];
   const radios = new Map<WorktreeCleanup, HTMLInputElement>();
   let touched = false;
@@ -188,7 +166,7 @@ export function sendHomeDialog(opts: SendHomeOptions) {
     h(
       'div.body',
       {},
-      h('p', { style: 'margin:0 0 12px;font-weight:700' }, `This stops the session at ${opts.where} for everyone and frees the desk. ${opts.name} worked in its own worktree on 🌿 ${branch}:`),
+      h('p', { style: 'margin:0 0 12px;font-weight:700' }, `This stops the session at ${opts.where} for everyone and frees the desk. ${opts.name} worked on ${branch}:`),
       list,
       status,
     ),
@@ -206,6 +184,7 @@ export function sendHomeDialog(opts: SendHomeOptions) {
   void inspectWorktree(opts.workerId, opts.ask).then((s) => {
     if (!form.isConnected) return;
     const lines: string[] = [];
+    if (s.repositories) for (const r of s.repositories) lines.push(`${r.repository}: ${r.error ?? `${r.dirty} uncommitted changes, ${r.unpushed} unpushed commits`}`);
     let risky = false;
     if (s.error) {
       lines.push(`Couldn't check the worktree: ${s.error}.`);

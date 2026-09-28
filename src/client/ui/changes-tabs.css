@@ -1,0 +1,6 @@
+.changes-repository-tabs { display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto; flex-shrink: 0; border-bottom: 3px solid var(--ink); background: var(--paper-2); }
+.changes-repository-tabs[hidden] { display: none; }
+.changes-repository-tabs .btn { display: flex; gap: 8px; align-items: center; flex-shrink: 0; white-space: nowrap; font-size: 13px; }
+.changes-repository-tabs [aria-selected="true"] { background: var(--accent); }
+.changes-repository-tabs .btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.changes-repository-tabs .repository-count { padding: 1px 6px; border-radius: 8px; background: #fff9; font-size: 11px; }

@@ -39,23 +39,9 @@ try {
   await new Promise(resolve => socket.close(resolve));
   const url = 'http://localhost:' + port;
   const password = randomUUID();
-  // Give this test's server a private shutdown channel on Windows as well as Unix.
-  const hostFile = path.join(root, 'host.mjs');
-  writeFileSync(hostFile, [
-    "import { pathToFileURL } from 'node:url';",
-    "import { createInterface } from 'node:readline';",
-    "const [cli, project, port] = process.argv.slice(2);",
-    "process.argv = [process.execPath, cli, project, '--port', port];",
-    "await import(pathToFileURL(cli).href);",
-    "const input = createInterface({ input: process.stdin });",
-    "let stopping = false;",
-    "const stop = () => { if (!stopping) { stopping = true; process.emit('SIGINT', 'SIGINT'); } };",
-    "input.on('line', line => { if (line === 'stop') stop(); });",
-    "input.on('close', stop);",
-  ].join('\n'));
-  host = spawn(process.execPath, [hostFile, path.join(codeDir, 'dist/server/server/cli.js'), floor, String(port)], {
+  host = spawn(process.execPath, [path.join(codeDir, 'personal/windows/host.mjs'), codeDir, floor, String(port)], {
     cwd: codeDir, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'],
-    env: { ...process.env, AGENT_OFFICE_PASSWORD: password, AGENT_OFFICE_AGENT: process.execPath.replaceAll('\\', '/'), AGENT_OFFICE_AGENT_ARGS: JSON.stringify(fixture) },
+    env: { ...process.env, AGENT_OFFICE_PASSWORD: password, AGENT_OFFICE_AGENT: process.execPath, AGENT_OFFICE_AGENT_ARGS: JSON.stringify(fixture) },
   });
   let ready = false;
   for (let i = 0; i < 150; i++) {
@@ -84,6 +70,8 @@ try {
   await page.evaluate(() => window.__office.net.send({ t: 'worker.spawn', deskId: 'desk-1', kind: 'agent', provider: 'custom', worktree: false }));
   await page.waitForFunction(() => [...window.__office.store.workers.values()].some(w => w.name === 'Pixel' && w.status === 'idle'));
   await page.evaluate(() => document.exitPointerLock());
+  // The Workers panel starts hidden in the HUD; the dock's Workers button shows it.
+  if (await page.locator('#workers-panel').evaluate((el) => el.classList.contains('hud-off'))) await page.locator('#dock button.dock-panel').filter({ hasText: 'Workers' }).click();
   await page.locator('#workers li').filter({ hasText: 'Pixel' }).click();
   await page.getByRole('button', { name: /Changes/, exact: false }).filter({ hasText: '🌿' }).click();
   const panel = page.getByRole('dialog', { name: "Pixel's changes", exact: true });
@@ -105,9 +93,40 @@ try {
   mkdirSync(empty); git(empty, 'init', '-b', 'main');
   await panel.getByRole('status').getByText('empty: No commits yet', { exact: true }).waitFor();
   assert.equal(await panel.getByRole('option').count(), 3);
+  const tabs = panel.getByRole('tablist', { name: 'Repositories' });
+  const frontend = tabs.getByRole('tab').filter({ hasText: /^frontend/ });
+  const backend = tabs.getByRole('tab').filter({ hasText: /^backend/ });
+  await frontend.click();
+  assert.equal(await frontend.getAttribute('aria-selected'), 'true');
+  assert.equal(await panel.getByRole('option').count(), 2);
+  assert.equal(await panel.getByRole('option').filter({ hasText: 'frontend/' }).count(), 0);
+  await panel.getByRole('option').filter({ hasText: 'app.txt' }).click();
+  await panel.getByText('updated while panel is open', { exact: true }).waitFor();
+  // A background refresh updates badges without moving us out of the selected repo.
+  writeFileSync(path.join(floor, 'backend/later.txt'), 'a second backend file\n');
+  await backend.locator('.repository-count').getByText('2', { exact: true }).waitFor();
+  assert.equal(await frontend.getAttribute('aria-selected'), 'true');
+  assert.equal(await panel.getByRole('option').count(), 2);
+  await backend.click();
+  await panel.getByText('backend panel edit', { exact: true }).waitFor();
+  assert.equal(await panel.getByRole('option').count(), 2);
+  // A clean repository should say so without hiding the edits in its sibling.
+  git(path.join(floor, 'backend'), 'restore', '--', 'app.txt');
+  rmSync(path.join(floor, 'backend/later.txt'));
+  await panel.getByText('No changes in backend.', { exact: true }).waitFor();
+  assert.equal(await backend.locator('.repository-count').innerText(), '0');
+  await tabs.getByRole('tab').filter({ hasText: /^empty/ }).click();
+  await panel.getByText("Couldn't read empty: No commits yet", { exact: true }).waitFor();
+  // Keyboard tab navigation must not accidentally navigate the file list instead.
+  await tabs.getByRole('tab').filter({ hasText: /^empty/ }).press('ArrowRight');
+  assert.equal(await frontend.getAttribute('aria-selected'), 'true');
+  await panel.getByText('updated while panel is open', { exact: true }).waitFor();
+  await frontend.press('Home');
+  assert.equal(await tabs.getByRole('tab').filter({ hasText: /^All repositories/ }).getAttribute('aria-selected'), 'true');
+  assert.equal(await panel.getByRole('option').count(), 2);
   if (process.argv[2]) await panel.screenshot({ path: path.resolve(process.argv[2]) });
   assert.deepEqual(errors, []);
-  console.log('PASS: built panel lists both repos, opens tracked/untracked diffs, refreshes live edits, shows per-repo errors, and disables combined Git actions.');
+  console.log('PASS: folder Changes lists both repos; tabs filter same-named files, preserve selection during live edits, show clean/error states, support keyboard navigation, and keep combined Git actions disabled.');
 } finally {
   await browser?.close();
   if (host && host.exitCode === null) {
