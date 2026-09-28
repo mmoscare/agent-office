@@ -25,6 +25,11 @@ Checkpoint rule: the office can restart at any time and end this session, so mak
 - If you're woken after a restart, first run git status and git log @{u}..HEAD (or git log origin/<your branch>..HEAD) to see what was already saved, and continue from there.
 </agent-office-checkpoint>`;
 
+/** A queued task without the checkpoint rule: the rule is for the worker, not for its pull request. */
+export function withoutCheckpoint(task: string): string {
+  return task.endsWith(CHECKPOINT_NOTE) ? task.slice(0, -CHECKPOINT_NOTE.length) : task;
+}
+
 const WAIT_FOR_TASK = 'No task has been assigned yet. Keep these standing instructions for future tasks and wait for the user\'s request.';
 
 const RETOLD_NOTE = `

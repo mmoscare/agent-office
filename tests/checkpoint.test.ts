@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { TaskQueue, type QueueWorkers } from '../src/server/queue.js';
-import { CHECKPOINT_NOTE, retoldTask, withWorkerHandoff } from '../src/server/handoff.js';
+import { CHECKPOINT_NOTE, retoldTask, withWorkerHandoff, withoutCheckpoint } from '../src/server/handoff.js';
 import { stationBrief } from '../src/server/stations.js';
 import type { StationKind } from '../src/shared/layout.js';
 import type { WorkerInfo } from '../src/shared/protocol.js';
@@ -52,6 +52,15 @@ test('a queued task in its own worktree is told to commit and push early and oft
 
 test('a task started from a GitHub issue gets the checkpoint rule too', () => {
   assert.ok(queuedPrompt(true, 42).includes(CHECKPOINT_NOTE));
+});
+
+test('a pull request drafted from a queued task shows the task, not the checkpoint rule', () => {
+  const prompt = queuedPrompt(true);
+  const task = withoutCheckpoint(prompt.trim());
+  assert.ok(task.startsWith('Fix the login redirect\n\n'));
+  assert.equal(task + CHECKPOINT_NOTE, prompt);
+  assert.doesNotMatch(task, /agent-office-checkpoint|Checkpoint rule|WIP/);
+  assert.equal(withoutCheckpoint('Fix the login redirect'), 'Fix the login redirect');
 });
 
 test('a queued task sharing the main checkout is not told to commit there', () => {
