@@ -34,7 +34,7 @@ export interface SideEvents {
 export class SideShells {
   private shells = new Map<string, Side>();
 
-  constructor(private events: SideEvents) {}
+  constructor(private events: SideEvents, private launch = () => sideShellLaunch(process.platform, process.env)) {}
 
   /**
    * Opens `workerId`'s side shell for `clientId`, starting it in `cwd` when none runs. Returns what
@@ -98,7 +98,7 @@ export class SideShells {
   }
 
   private start(workerId: string, cwd: string, env: Record<string, string>, cols: number, rows: number): Side | string {
-    const { file, args } = sideShellLaunch(process.platform, process.env);
+    const { file, args } = this.launch();
     let proc: pty.IPty;
     try {
       proc = pty.spawn(file, args, {

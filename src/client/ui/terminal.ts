@@ -416,7 +416,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   setTimeout(() => term.focus(), 50);
 }
 
-function newTerm(): { term: Terminal; fit: FitAddon } {
+export function newTerm(): { term: Terminal; fit: FitAddon } {
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
     fontSize: 14,

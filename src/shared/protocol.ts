@@ -1024,6 +1024,11 @@ export type ClientMsg =
   | { t: 'side.detach'; workerId: string }
   | { t: 'side.input'; workerId: string; data: string }
   | { t: 'side.resize'; workerId: string; cols: number; rows: number }
+  /** A standalone shell owned by this browser connection; fresh replaces it in the current floor. */
+  | { t: 'console.attach'; cols: number; rows: number; fresh?: boolean }
+  | { t: 'console.detach' }
+  | { t: 'console.input'; data: string }
+  | { t: 'console.resize'; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
   | { t: 'gh.merge'; number: number; repo?: string; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
@@ -1193,6 +1198,10 @@ export type ServerMsg =
   | { t: 'side.data'; workerId: string; data: string }
   /** The side shell couldn't start. */
   | { t: 'side.error'; workerId: string; error: string }
+  | { t: 'console.snapshot'; data: string; cols: number; rows: number; cwd: string }
+  | { t: 'console.data'; data: string }
+  | { t: 'console.exited' }
+  | { t: 'console.error'; error: string }
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */
