@@ -89,7 +89,7 @@ try {
   };
   await open();
   const dialog = page.getByRole('dialog', { name: 'The Office Ledger', exact: true });
-  await dialog.locator('.row.foot').waitFor();
+  await dialog.locator('.row.foot').waitFor().catch(async error => { console.error('Dialogs:', await page.locator('[role=dialog]').allTextContents(), 'Errors:', errors); await page.screenshot({ path: '.agent-office/ledger-debug.png' }); throw error; });
   assert.match(await dialog.locator('.total').first().locator('small').textContent(), /^\u2265 .* a year$/);
   await dialog.getByRole('combobox', { name: 'Codex (ChatGPT) plan', exact: true }).selectOption('none');
   assert.match(await dialog.locator('.total').nth(1).locator('small').textContent(), /^\u2265 .* a year$/);

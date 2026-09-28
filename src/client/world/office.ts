@@ -1766,10 +1766,11 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   book.add(mesh(box(0.03, 0.074, 0.46), leather, -0.17, 0.037, 0));
   for (const bz of [-0.15, 0.15]) book.add(mesh(box(0.35, 0.076, 0.025), gold, 0, 0.037, bz, false));
   book.add(mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 20), gold, 0.02, 0.076, 0, false));
-  book.position.set(-0.8, 0.83, 0.15);
+  // Keep it clear of the To Do Next binder on the left side of the desk.
+  book.position.set(0.8, 0.83, -0.22);
   book.rotation.y = 0.35;
   desk.add(book);
-  const ledger: Interactable = { kind: 'ledger', x: deskX - 0.8, z: deskZ + 0.15, y: floorY, radius: 1.3 };
+  const ledger: Interactable = { kind: 'ledger', x: deskX + 0.8, z: deskZ - 0.22, y: floorY, radius: 1.3 };
   interactables.push(ledger);
   book.userData.interact = ledger;
   desk.position.set(deskX, floorY, deskZ);
