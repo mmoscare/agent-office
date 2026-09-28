@@ -128,6 +128,8 @@ export interface WorkerInfo {
   lastInput?: { by: string; at: number };
   /** The meeting it was called to, for a worker at the meeting room's table (see Meeting). */
   meeting?: string;
+  /** Its side shell's size, while one runs (the Shell tab of its terminal window). */
+  side?: { cols: number; rows: number };
 }
 
 /** Session usage. The persistent office ledger continues to cover Claude Code only. */
@@ -1003,6 +1005,14 @@ export type ClientMsg =
   | { t: 'term.resize'; workerId: string; cols: number; rows: number }
   /** What you have open now (see PeerInfo.doing); none when you're back in the office. */
   | { t: 'doing'; what?: string }
+  /**
+   * Open a worker's side shell (the Shell tab of its terminal window): a plain shell in its
+   * checkout, started if none runs, shared by everyone with the tab open. Answered with side.snapshot.
+   */
+  | { t: 'side.attach'; workerId: string; cols: number; rows: number }
+  | { t: 'side.detach'; workerId: string }
+  | { t: 'side.input'; workerId: string; data: string }
+  | { t: 'side.resize'; workerId: string; cols: number; rows: number }
   | { t: 'gh.refresh' }
   /** Merge a pull request; the answer comes back as gh.merged. */
   | { t: 'gh.merge'; number: number; repo?: string; method: GhMergeMethod; deleteBranch: boolean; auto?: boolean }
@@ -1159,6 +1169,10 @@ export type ServerMsg =
   | { t: 'term.data'; workerId: string; data: string }
   /** Someone else in that terminal (`id`, a PeerInfo id) is typing; only its other viewers get these. */
   | { t: 'term.typing'; workerId: string; id: string }
+  | { t: 'side.snapshot'; workerId: string; data: string; cols: number; rows: number }
+  | { t: 'side.data'; workerId: string; data: string }
+  /** The side shell couldn't start. */
+  | { t: 'side.error'; workerId: string; error: string }
   | { t: 'gh.issues'; state: GhState<GhIssue> }
   | { t: 'gh.pulls'; state: GhState<GhPull> }
   /** Sent to whoever asked for the merge. */

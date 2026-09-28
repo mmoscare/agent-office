@@ -77,22 +77,16 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
   const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
   const host = h('div.term-host');
+  // An agent's window has a second tab: a plain shell in the same checkout, to look around beside
+  // the agent (which branch, git status, run the tests) without typing into its session.
+  const sideHost = h('div.term-host.hidden');
+  const agentTab = h('button.gh-tab.on', { type: 'button', role: 'tab', 'aria-selected': 'true', title: "The worker's own session" }, `🤖 ${info.name}`);
+  const shellTab = h('button.gh-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', title: "A shell in this worker's checkout, beside it: check the branch, git status, run the tests (Ctrl+Shift+` switches tabs)" }, '🐚 Shell');
+  const tabs = info.kind === 'agent' ? h('nav.gh-tabs.term-tabs', { role: 'tablist' }, agentTab, shellTab) : null;
   const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, host);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, tabs, host, sideHost);
 
-  const term = new Terminal({
-    fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-    fontSize: 14,
-    lineHeight: 1.1,
-    theme: TERM_THEME,
-    cursorBlink: true,
-    scrollback: 5000,
-    allowProposedApi: true,
-    macOptionIsMeta: true,
-  });
-  const fit = new FitAddon();
-  term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon());
+  const { term, fit } = newTerm();
 
   let ready = false;
   let lastSentSize = '';
@@ -201,6 +195,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       term.resize(w.cols, w.rows);
       lastSentSize = '';
     }
+    shellTab.classList.toggle('live', !!w.side);
+    sideSize();
   };
 
   /** Scrolls a search hit into view and lights it up for a few seconds. */
@@ -231,8 +227,100 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   };
   let pendingFind = find;
 
+  /** The Shell tab's terminal, made the first time the tab opens. */
+  let side: { term: Terminal; fit: FitAddon; ready: boolean } | null = null;
+  let onSide = false;
+  /**
+   * Sizes the side shell. It's shared too, so typing claims it for this window and just looking
+   * follows whoever typed last.
+   */
+  const sideSize = (typing = false) => {
+    if (!side?.ready) return;
+    const shell = store.workers.get(workerId)?.side;
+    if (!shell) return;
+    if (!typing) {
+      if (shell.cols !== side.term.cols || shell.rows !== side.term.rows) side.term.resize(shell.cols, shell.rows);
+      return;
+    }
+    try {
+      side.fit.fit();
+    } catch {
+      return;
+    }
+    if (shell.cols !== side.term.cols || shell.rows !== side.term.rows) net.send({ t: 'side.resize', workerId, cols: side.term.cols, rows: side.term.rows });
+  };
+  /** Starts (or rejoins) the side shell, sized to this window. */
+  const attachSide = () => {
+    if (!side) return;
+    side.ready = false;
+    try {
+      side.fit.fit();
+    } catch {
+      // not laid out yet: the server falls back to the worker's size
+    }
+    net.send({ t: 'side.attach', workerId, cols: side.term.cols, rows: side.term.rows });
+  };
+  const showTab = (shell: boolean) => {
+    onSide = shell;
+    agentTab.classList.toggle('on', !shell);
+    shellTab.classList.toggle('on', shell);
+    agentTab.setAttribute('aria-selected', String(!shell));
+    shellTab.setAttribute('aria-selected', String(shell));
+    host.classList.toggle('hidden', shell);
+    sideHost.classList.toggle('hidden', !shell);
+    if (shell && !side) {
+      const made = newTerm();
+      side = { ...made, ready: false };
+      made.term.open(sideHost);
+      made.term.attachCustomKeyEventHandler(keys);
+      made.term.onData((data) => {
+        if (!side?.ready) return;
+        // The shell exited: a key starts a new one.
+        if (!store.workers.get(workerId)?.side) return attachSide();
+        sideSize(true);
+        net.send({ t: 'side.input', workerId, data });
+      });
+      sideRo.observe(sideHost);
+      attachSide();
+    }
+    if (shell) {
+      sideSize();
+      side?.term.focus();
+    } else {
+      sendSize();
+      term.focus();
+    }
+  };
+  agentTab.addEventListener('click', () => showTab(false));
+  shellTab.addEventListener('click', () => showTab(true));
+  /**
+   * Ctrl+Shift+` flips between the agent and the shell. Every other key (Esc and Ctrl+] included)
+   * goes to the terminal; the window is left through its ✕.
+   */
+  const keys = (e: KeyboardEvent) => {
+    if (e.type !== 'keydown' || !e.ctrlKey) return true;
+    if (tabs && e.shiftKey && (e.key === '~' || e.key === '`' || e.code === 'Backquote')) {
+      showTab(!onSide);
+      return false;
+    }
+    return true;
+  };
+
   const onMsg = (msg: ServerMsg) => {
-    if (msg.t === 'term.data' && msg.workerId === workerId) term.write(msg.data);
+    if (msg.t === 'side.data' && msg.workerId === workerId) side?.term.write(msg.data);
+    else if (msg.t === 'side.snapshot' && msg.workerId === workerId && side) {
+      const s = side;
+      s.term.reset();
+      s.term.resize(msg.cols, msg.rows);
+      s.term.write(msg.data, () => {
+        s.ready = true;
+        s.term.scrollToBottom();
+        sideSize();
+      });
+    } else if (msg.t === 'side.error' && msg.workerId === workerId) {
+      side?.term.write(`\r\n\x1b[31m${msg.error}\x1b[0m\r\n`);
+      toast(msg.error, 'error');
+    } else if (msg.t === 'term.data' && msg.workerId === workerId) term.write(msg.data);
     else if (msg.t === 'term.typing' && msg.workerId === workerId) {
       typing.set(msg.id, Date.now() + TYPING_SHOWS_MS);
       const w = store.workers.get(workerId);
@@ -258,6 +346,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     if (w) renderPresence(w);
   });
   const ro = new ResizeObserver(() => sendSize());
+  const sideRo = new ResizeObserver(() => sideSize());
 
   const modal = openModal(el, {
     escCloses: false,
@@ -270,8 +359,13 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       clearInterval(typingTimer);
       ro.disconnect();
       branches.dispose();
+      sideRo.disconnect();
       net.send({ t: 'worker.detach', workerId });
       term.dispose();
+      if (side) {
+        net.send({ t: 'side.detach', workerId });
+        side.term.dispose();
+      }
       if (current?.modal === modal) current = null;
     },
   });
@@ -279,6 +373,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     workerId,
     modal,
     find: (f) => {
+      if (onSide) showTab(false);
       if (ready) jumpTo(f);
       else pendingFind = f;
     },
@@ -290,6 +385,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   });
 
   term.open(host);
+  term.attachCustomKeyEventHandler(keys);
   term.onData((data) => {
     sendSize(true);
     net.send({ t: 'term.input', workerId, data });
@@ -300,6 +396,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   term.textarea?.addEventListener('paste', sayTyping);
   modelsBtn.addEventListener('click', () => {
     if (modelsBtn.hasAttribute('disabled')) return;
+    if (onSide) showTab(false);
     sendSize(true);
     // OpenCode's native model picker is Ctrl+X, then M. Injecting the
     // control sequence preserves any draft already in the TUI input box.
@@ -311,4 +408,21 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   refresh();
   net.send({ t: 'worker.attach', workerId });
   setTimeout(() => term.focus(), 50);
+}
+
+function newTerm(): { term: Terminal; fit: FitAddon } {
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+    fontSize: 14,
+    lineHeight: 1.1,
+    theme: TERM_THEME,
+    cursorBlink: true,
+    scrollback: 5000,
+    allowProposedApi: true,
+    macOptionIsMeta: true,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.loadAddon(new WebLinksAddon());
+  return { term, fit };
 }

@@ -1188,3 +1188,8 @@ a.when:hover { text-decoration: underline; }
 .office-status.ok .office-toggle::after { content: 'Details ▾'; }
 .office-status[open] .office-toggle::after { content: 'Hide ▴'; }
 .office-body { max-height: 32vh; }
+
+/* Terminal window tabs: the worker's own session, and a shell beside it in its checkout */
+.modal.term .term-tabs { padding: 0 10px; }
+.modal.term .term-tabs .gh-tab { padding: 6px 12px 5px; font-size: 13px; }
+.modal.term .term-tabs .gh-tab.live::after { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #2a9d4b; }
