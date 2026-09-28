@@ -180,6 +180,8 @@ export interface UsageState {
   today: Usage;
   /** The day `today` covers, YYYY-MM-DD on the office's machine. */
   day: string;
+  /** Spend over the last 30 days, and over how many days (1-30) since the first one with any. */
+  month?: { cost: number; days: number };
   /** Daily budget in USD (--budget), when one is set. */
   budget?: number;
   /** New hires are refused for the rest of the day once the budget is spent (--budget-pause). */
