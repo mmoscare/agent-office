@@ -58,6 +58,22 @@ test('queue seats the selected provider and preserves it through completion and 
   assert.equal(f.workers[1].provider, 'opencode');
 });
 
+test('paused and interrupted queue workers keep their slot without completing the task', (t) => {
+  const f = fixture(); t.after(() => f.close());
+  const q = f.open(); q.setLimit(1);
+  q.add('First', 'Tester'); q.add('Second', 'Tester');
+  for (const status of ['paused', 'interrupted'] as const) {
+    f.workers[0].status = status; q.onWorker(f.workers[0]);
+    assert.deepEqual(q.state().tasks.map(t => t.status), ['running', 'queued']);
+    assert.equal(q.state().tasks[0].outcome, undefined);
+    assert.equal(f.workers.length, 1);
+    assert.equal(f.emptied(), 0);
+  }
+  f.workers[0].status = 'working'; q.onWorker(f.workers[0]);
+  f.workers[0].status = 'done'; q.onWorker(f.workers[0]);
+  assert.deepEqual(q.state().tasks.map(t => t.status), ['done', 'running']);
+});
+
 test('queued provider survives restart even when the configured default differs', (t) => {
   const f = fixture(); t.after(() => f.close());
   const q = f.open(); q.setLimit(0);

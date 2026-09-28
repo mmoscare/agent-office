@@ -17,7 +17,7 @@ import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } fro
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
 import { retoldTask, withWorkerHandoff, withoutCheckpoint, withoutWorkerHandoff } from './handoff.js';
-import { isBusy } from '../shared/status.js';
+import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
@@ -59,7 +59,7 @@ const scrubbed = (k: string) => SCRUB_ENV.has(k) || SCRUB_PREFIXES.some((p) => k
 
 const SCREEN_INTERVAL_MS = 250;
 /** What a worker with a live terminal can be doing. */
-const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input'] satisfies WorkerStatus[]);
+const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input', 'paused', 'interrupted'] satisfies WorkerStatus[]);
 const LATE_PROMPT_GRACE_MS = 5000;
 const KEYFRAME_MS = 8000;
 /** How often a steady typist's "last typed" time is refreshed for everyone. */
@@ -120,6 +120,10 @@ interface Worker {
   namedAt: number;
   /** Bumped by /clear: a new conversation, so a new task. */
   taskEpoch: number;
+  /** Current provider/local turn; cancelled-turn completions are ignored after a new prompt. */
+  turnId?: string;
+  turnSeq: number;
+  cancelledTurns: Set<string>;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -726,6 +730,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         w.bootBlocked = false;
         w.info.action = undefined;
+        beginTurn(w, hookTurnId(payload?.turn_id));
         if (typeof payload?.prompt === 'string') {
           w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
           this.notePrompt(w, payload.prompt);
@@ -745,6 +750,11 @@ export class WorkerManager {
         break;
       case 'PostToolUse':
       case 'PostToolUseFailure':
+        if (payload?.is_interrupt && !payload?.agent_id && !payload?.agent_type) {
+          cancelTurn(w, hookTurnId(payload?.turn_id));
+          this.setStatus(w, 'interrupted');
+          break;
+        }
         this.noteOutcome(w, payload, event === 'PostToolUseFailure');
         if (w.info.status === 'needs_input') {
           w.leftNeedsInputAt = now;
@@ -759,11 +769,11 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          if (w.info.status === 'working') this.setStatus(w, 'done');
+          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         }
         break;
       case 'Stop':
-        this.setStatus(w, 'done');
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         break;
     }
     return true;
@@ -804,6 +814,7 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         clearInput();
         w.info.action = undefined;
+        beginTurn(w, report.turnId);
         if (report.prompt) {
           w.info.activity = truncate(withoutWorkerHandoff(report.prompt), 80) || undefined;
           this.notePrompt(w, report.prompt);
@@ -811,6 +822,7 @@ export class WorkerManager {
         this.setStatus(w, 'working');
         break;
       case 'PreToolUse':
+        if (isCancelledTurn(w, report.turnId)) break;
         if (!w.codexInput) {
           w.info.activity = report.tool ? truncate(report.tool, 80) : 'Using a tool';
           w.info.action = toolAction(report.tool);
@@ -820,15 +832,21 @@ export class WorkerManager {
       case 'PermissionRequest':
         // A hook can be auto-approved before a human sees anything. The rendered
         // question/approval controls, checked below, are what warrant an alert.
+        if (isCancelledTurn(w, report.turnId)) break;
         busy();
         break;
       case 'PostToolUse':
-        busy();
+        // A cancelled tool can finish reporting after the turn's Interrupt hook.
+        if (!isCancelledTurn(w, report.turnId) && !isStopped(w.info.status) && w.info.status !== 'done') busy();
         break;
       case 'Stop':
+        clearInput();
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, report.turnId)) this.setStatus(w, 'done');
+        break;
       case 'Interrupt':
         clearInput();
-        this.setStatus(w, 'done');
+        cancelTurn(w, report.turnId);
+        this.setStatus(w, 'interrupted');
         break;
     }
     this.emitUpdate(w);
@@ -864,8 +882,9 @@ export class WorkerManager {
       w.openCodeError = false;
       this.persist();
     }
-    if (payload.type === 'error') w.openCodeError = true;
+    if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
+    if (payload.prompt || payload.type === 'prompt') beginTurn(w, payload.turnId);
     if (payload.prompt) {
       w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
       w.info.action = undefined;
@@ -876,9 +895,13 @@ export class WorkerManager {
     } else if (payload.detail) {
       w.info.activity = truncate(payload.detail, 80);
     }
-    if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
+    if (payload.status === 'interrupted') {
+      cancelTurn(w, payload.turnId);
+      this.setStatus(w, 'interrupted');
+    }
+    else if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
     else if (payload.status === 'working') this.setStatus(w, 'working');
-    else if (payload.status === 'done' && w.pty) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
+    else if (payload.status === 'done' && w.pty && !isStopped(w.info.status) && !isCancelledTurn(w, payload.turnId)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
     return true;
@@ -934,6 +957,8 @@ export class WorkerManager {
 
   private clearTask(w: Worker) {
     w.taskEpoch++;
+    w.turnId = undefined;
+    w.cancelledTurns.clear();
     w.prompts = [];
     w.tools = [];
     w.toolsSinceNamed = 0;
@@ -1288,10 +1313,10 @@ export class WorkerManager {
 
   private onProgress(w: Worker, busy: boolean) {
     const s = w.info.status;
-    if (busy && (s === 'idle' || s === 'done' || s === 'starting')) this.setStatus(w, 'working');
+    if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn ended without a Stop hook (the prompt was rejected or Esc'd).
-    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'done');
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
+    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'paused');
   }
 
   private setStatus(w: Worker, status: WorkerStatus) {
@@ -1360,6 +1385,8 @@ export class WorkerManager {
    */
   private checkBlocked(w: Worker) {
     if (w.info.kind === 'agent' && w.info.provider === 'codex' && w.term && w.pty) {
+      // The TUI can still show its old approval controls while cancellation redraws.
+      if (isStopped(w.info.status)) return;
       const prompt = codexInputPrompt(screenText(w.term));
       if (prompt) {
         w.codexInput ??= {
@@ -1595,6 +1622,8 @@ function newWorker(info: WorkerInfo, tracker: UsageTracker, hookToken = randomBy
     toolsSinceNamed: 0,
     namedAt: 0,
     taskEpoch: 0,
+    turnSeq: 0,
+    cancelledTurns: new Set(),
     tracker,
   };
 }
@@ -1630,15 +1659,47 @@ function validTask(t: unknown): WorkerTask | undefined {
   return typeof v?.name === 'string' && typeof v.summary === 'string' ? { name: v.name, summary: v.summary } : undefined;
 }
 
+const MAX_CANCELLED_TURNS = 16;
+
+function hookTurnId(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text && text.length <= 160 ? text : undefined;
+}
+
+function beginTurn(w: Worker, turnId?: string) {
+  w.turnSeq = (w.turnSeq || 0) + 1;
+  w.cancelledTurns ??= new Set();
+  w.turnId = turnId || `t${w.turnSeq}`;
+}
+
+function cancelTurn(w: Worker, turnId?: string) {
+  w.cancelledTurns ??= new Set();
+  const id = turnId || w.turnId;
+  if (!id) return;
+  w.cancelledTurns.add(id);
+  while (w.cancelledTurns.size > MAX_CANCELLED_TURNS) {
+    const oldest = w.cancelledTurns.values().next().value;
+    if (oldest === undefined) break;
+    w.cancelledTurns.delete(oldest);
+  }
+}
+
+function isCancelledTurn(w: Worker, turnId?: string): boolean {
+  const id = turnId || w.turnId;
+  return !!id && !!w.cancelledTurns?.has(id);
+}
+
 function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
   return typeof v.type === 'string' && ['session', 'prompt', 'tool', 'permission', 'question', 'error'].includes(v.type)
     && typeof v.sessionId === 'string' && v.sessionId.length > 0
-    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done'].includes(v.status)
+    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done', 'interrupted'].includes(v.status)
     && (v.prompt === undefined || typeof v.prompt === 'string')
     && (v.tool === undefined || typeof v.tool === 'string')
-    && (v.detail === undefined || typeof v.detail === 'string');
+    && (v.detail === undefined || typeof v.detail === 'string')
+    && (v.turnId === undefined || (typeof v.turnId === 'string' && v.turnId.length > 0 && v.turnId.length <= 160));
 }
 
 function snapshotScreen(term: HeadlessTerminal, last: string[]) {

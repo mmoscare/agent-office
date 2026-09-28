@@ -192,6 +192,7 @@ button { font-family: inherit; }
 .pill.working { background: var(--warn); }
 .pill.needs_input { background: var(--bad); color: #fff; animation: pulse 1s infinite; }
 .pill.done { background: var(--good); color: #fff; }
+.pill.paused, .pill.interrupted { background: #ffad66; color: #2b2d42; }
 .pill.exited, .pill.offline { background: #dee2e6; }
 .empty { color: var(--muted); font-size: 13px; font-weight: 600; }
 @keyframes pulse { 50% { transform: scale(1.08); } }

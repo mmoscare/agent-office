@@ -1102,7 +1102,7 @@ function syncWorkers() {
         if (w.status === 'needs_input' && yours(w)) cabinet.needsYou(w);
       }
       // Finished what it was on: a little spin and a puff of confetti.
-      if (w.status === 'done' && (v.status === 'working' || v.status === 'needs_input')) {
+      if (w.status === 'done' && (v.status === 'working' || v.status === 'needs_input' || v.status === 'paused')) {
         v.model.celebrate();
         burstOver(w.deskId, 40);
       }
