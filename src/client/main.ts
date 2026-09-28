@@ -8,6 +8,7 @@ import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, Gong
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { modelTag } from '../shared/model';
 import { isAsleep, isBusy } from '../shared/status';
+import { summarizeWorkers } from '../shared/attention';
 import { pullRequestLabel } from '../shared/pulls';
 import { Net } from './net';
 import { store, loadProfile, loadSettings, saveSettings, workerForPull, type Profile, type Topic } from './state';
@@ -62,6 +63,7 @@ import { toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { renderLimits } from './ui/limits';
+import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { mountHud } from './ui/menu';
 import { openJukebox } from './ui/jukebox';
@@ -531,14 +533,20 @@ net.onMessage((msg) => {
       voice.syncPeers();
       break;
     }
-    case 'floor.enter':
+    case 'floor.enter': {
+      const workerId = trip?.floor === store.floor ? trip.workerId : undefined;
       // The card belongs to the board downstairs (or up): the office already put it back there.
       if (carrying) {
         toast(`📌 #${carrying.issue} stayed behind on the other floor's board`);
         setCarrying(null);
       }
       arrive();
+      if (workerId) {
+        if (store.workers.has(workerId)) openWorkerTerminal(workerId);
+        else toast('That worker has already left this floor.');
+      }
       break;
+    }
     case 'floors':
       noticeWaiting();
       break;
@@ -641,7 +649,7 @@ store.on('project', renderProject);
 function renderTitle() {
   const name = store.project?.name;
   const elsewhere = store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0);
-  const waiting = [...store.workers.values()].filter(waitingOnSomeone).length + elsewhere;
+  const waiting = summarizeWorkers(store.workers.values()).waiting + elsewhere;
   document.title = `${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
 }
 
@@ -678,7 +686,7 @@ function fade(on: boolean, quick = false) {
 /** How you're going to another floor: by elevator, straight there from the floor list, or by the ladder or a pole. */
 type TripKind = 'elevator' | 'switch' | Grip;
 /** A trip under way: the lights are down (and by elevator the doors are shut) until the next floor arrives. */
-let trip: { floor: string; how: TripKind; timer: number } | null = null;
+let trip: { floor: string; how: TripKind; timer: number; workerId?: string } | null = null;
 
 function showElevator() {
   openElevator({ net, ride });
@@ -690,13 +698,13 @@ function lift() {
 }
 
 /** Rides the elevator to another floor (or up to the roof). From outside the car, you step in while the lights are down. */
-function ride(floorId: string) {
+function ride(floorId: string, workerId?: string) {
   if (trip || floorId === store.floor) return;
   closeAllModals();
   if (hanger.active) hanger.cancel();
   if (climber.active) climber.abort();
   const inside = inElevator(player.pos.x, player.pos.z);
-  trip = { floor: floorId, how: 'elevator', timer: window.setTimeout(tripFailed, 10_000) };
+  trip = { floor: floorId, how: 'elevator', workerId, timer: window.setTimeout(tripFailed, 10_000) };
   player.enabled = false;
   player.clearKeys();
   lift().setOpen(false);
@@ -1111,6 +1119,11 @@ function arrangeSeats() {
   for (const c of appeared) if (p.y > -0.1 && p.y < c.top && p.x > c.minX - 0.3 && p.x < c.maxX + 0.3 && p.z > c.minZ - 0.3 && p.z < c.maxZ + 0.3) p.y = c.top;
 }
 store.on('workers', syncWorkers);
+mountAttention((floorId, workerId) => {
+  if (trip) return;
+  if (floorId === store.floor) openWorkerTerminal(workerId);
+  else ride(floorId, workerId);
+}, ride);
 // A worker at the meeting table shows its role and round over its head (see meetingCard).
 store.on('meeting', syncWorkers);
 store.on('workers', renderUsage);
