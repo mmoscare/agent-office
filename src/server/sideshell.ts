@@ -85,6 +85,7 @@ export class SideShells {
     const s = this.shells.get(workerId);
     if (!s) return;
     this.shells.delete(workerId);
+    s.viewers.clear();
     try {
       s.proc.kill();
     } catch {
@@ -117,6 +118,7 @@ export class SideShells {
     const s: Side = { proc, term, ser, viewers: new Set(), cols, rows };
     this.shells.set(workerId, s);
     proc.onData((data) => {
+      if (this.shells.get(workerId) !== s) return;
       term.write(data);
       if (s.viewers.size) this.events.data(workerId, data, [...s.viewers]);
     });

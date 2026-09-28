@@ -84,6 +84,7 @@ test('standalone shells navigate outside the floor, keep their directory on reop
   output.set('alice', '');
   write('alice', win ? "Write-Output ('FRESH_' + (Get-Location).Path)" : "printf 'FRESH_%s\\n' \"$PWD\"");
   await until(() => (output.get('alice') ?? '').includes('FRESH_' + floor));
+  assert.ok(!(output.get('alice') ?? '').includes('ALICE_ONLY'));
   shells.close('alice');
   const closedCount = messages.length;
   shells.resync('alice');
