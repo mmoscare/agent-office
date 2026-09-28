@@ -18,5 +18,6 @@
 .clipboard-status { flex: none; margin-left: auto; padding: 1px 6px; border-radius: 6px; background: #eee6dc; font-size: 11px; font-weight: 900; }
 .clipboard-status.working { background: #c9f4e7; }
 .clipboard-status.needs_input { background: #ffe4ad; }
+.clipboard-status.paused, .clipboard-status.interrupted { background: #ffd8b8; }
 .clipboard-status.exited { background: #ffe0e7; }
 .clipboard-doing { color: #4a4458; font-size: 13px; font-weight: 600; line-height: 1.35; }
