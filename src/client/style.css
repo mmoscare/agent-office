@@ -313,10 +313,6 @@ button { font-family: inherit; }
 .provider-model.claude-model label { white-space: nowrap; }
 .provider-model.claude-model select { width: 100%; padding: 6px 9px; border: 2px solid var(--ink); border-radius: 9px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 800; }
 .provider-model.claude-model .provider-model-hint { grid-column: 1 / -1; }
-.queue-add .provider-choice { flex-direction: column; align-items: flex-start; gap: 2px; margin: 0; flex: none; }
-.queue-add .provider-choice label { font-size: 12px; }
-.queue-add .provider-note { flex: 0 1 auto; max-width: 155px; }
-.queue-add .provider-model { flex: 0 1 auto; min-width: 190px; }
 .modal.gh-window.issue footer .provider-choice { margin: 0; flex-direction: column; align-items: flex-start; gap: 2px; }
 .modal.gh-window.issue footer .provider-choice label { font-size: 12px; }
 .modal.gh-window.issue footer .provider-note { flex: 0 1 auto; max-width: 150px; }
@@ -814,9 +810,23 @@ a.when:hover { text-decoration: underline; }
 }
 
 /* Task queue */
-.queue-add { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
-.queue-add textarea { flex: 1; min-height: 46px; }
-.queue-add textarea { min-width: 180px; }
+/* The prompt gets its own row; the picker's pieces flow into one line under it, then its notes. */
+.queue-add { display: flex; gap: 8px 6px; align-items: center; flex-wrap: wrap; }
+.queue-add textarea { flex: 1 1 100%; min-height: 60px; }
+.queue-add .provider-choice, .queue-add .provider-model:not(.hidden) { display: contents; }
+.queue-add label { margin: 0 0 0 8px; font-size: 13px; white-space: nowrap; }
+.queue-add .provider-choice > label:first-child { margin-left: 0; }
+/* A zero basis keeps the row from wrapping: the pickers shrink first (down to a readable floor) and grow back to their natural width when there's room. */
+.queue-add .provider-select, .queue-add .provider-model.claude-model select { flex: 1 1 0; width: auto; min-width: 84px; max-width: max-content; }
+.queue-add .provider-model input[type=text] { flex: 1 1 0; width: auto; min-width: 140px; padding: 6px 9px; border-width: 2px; border-radius: 9px; font-size: 13px; }
+.queue-add button[type=submit] { margin-left: auto; }
+.queue-add::after { content: ''; order: 1; flex-basis: 100%; margin-top: -6px; }
+.queue-add .provider-note, .queue-add .provider-model-hint { order: 2; flex: 0 1 auto; margin-top: -6px; }
+/* Too narrow for one line: each label and its picker take a row, so a label never ends up stranded from its picker. */
+@media (max-width: 640px) {
+  .queue-add label { flex: 0 0 64px; margin-left: 0; }
+  .queue-add .provider-select, .queue-add .provider-model.claude-model select, .queue-add .provider-model input[type=text] { flex: 1 1 calc(100% - 70px); max-width: none; }
+}
 .queue h4 { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; font-size: 14px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; }
 .queue h4 .count { color: var(--muted); }
 .queue h4 .btn { margin-left: auto; padding: 3px 10px; font-size: 13px; text-transform: none; letter-spacing: 0; }
@@ -1048,3 +1058,66 @@ a.when:hover { text-decoration: underline; }
 .plan-actions .btn, .plan-actions select { font-size: 12px; padding: 5px 8px; }
 .plan-actions select { border: 1px solid var(--ink); border-radius: 6px; background: white; font: inherit; max-width: 100%; }
 @media (max-width: 700px) { .plans-board { grid-template-columns: 1fr; } .plans-add { align-items: stretch; flex-direction: column; } }
+
+/* The Git board: the PR board's other side (ui/git-board.ts) */
+.modal.git-board header .btn { padding: 4px 10px; font-size: 13px; }
+.modal.git-board header .close { width: 34px; padding: 0; }
+.modal.git-board .body.git-body { padding: 0; gap: 0; min-height: 0; overflow: hidden; }
+.git-front { flex: 1; overflow: auto; padding: 14px; }
+.git-note { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.git-front > .git-note { background: var(--paper); display: inline-block; padding: 4px 10px; border: 2px solid var(--ink); border-radius: 999px; margin-bottom: 14px; color: var(--ink); }
+.git-repos { list-style: none; margin: 0; padding: 4px; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 18px; }
+.git-repo { background: #caffbf; }
+.git-repo .ttl { font-size: 17px; }
+.git-sync { display: inline-flex; gap: 4px; font: 800 11px ui-monospace, Menlo, monospace; white-space: nowrap; }
+.git-sync .up { color: #1d6fd6; }
+.git-sync .down { color: #c3423f; }
+.git-sync.ok { color: #2a9d4b; }
+.git-sync.muted { color: var(--muted); font-family: inherit; }
+.git-sync.warn { color: #c3423f; font-family: inherit; }
+.git-branch { color: var(--ink); font-weight: 800; }
+.git-dirty { color: #b5651d; font-weight: 800; }
+.git-detail { flex: 1; min-height: 0; display: flex; background: #fff; }
+.git-branches { width: 250px; flex: none; display: flex; flex-direction: column; min-height: 0; border-right: 3px solid var(--ink); background: var(--paper); }
+.git-back { margin: 8px; font-size: 13px; padding: 4px 10px; }
+.git-branches h4, .git-section h4 { margin: 0; padding: 8px 12px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 2px solid rgba(43,45,66,.15); display: flex; justify-content: space-between; gap: 8px; }
+.git-branch-list { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.git-branch-list li { display: grid; grid-template-columns: 1fr auto; gap: 0 6px; padding: 5px 8px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 700; border: 2px solid transparent; }
+.git-branch-list li:hover { background: rgba(255,255,255,.8); }
+.git-branch-list li.on { background: #fff; border-color: var(--ink); box-shadow: 0 2px 0 var(--ink); }
+.git-branch-list li.empty { cursor: default; color: var(--muted); }
+.git-bname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-bname b { color: #2a9d4b; }
+.git-bdate { grid-column: 1 / -1; font-size: 11px; color: var(--muted); font-weight: 600; }
+.git-files { width: 380px; }
+.git-files-head { padding: 10px 12px 4px; border-bottom: 2px solid rgba(43,45,66,.15); display: flex; flex-direction: column; gap: 4px; }
+.git-on { font-size: 14px; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.git-on b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-tag { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border: 1.5px solid var(--ink); border-radius: 999px; background: var(--good); color: #fff; margin-left: 4px; white-space: nowrap; }
+.git-tag.muted { background: #e9ecef; color: var(--muted); }
+.git-vs { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; flex-wrap: wrap; }
+.git-vs .btn { margin-left: auto; padding: 3px 10px; font-size: 12px; }
+.git-lists { flex: 1; min-height: 0; overflow: auto; }
+.git-section ul { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; overflow: visible; flex: none; }
+.git-section h4 { position: sticky; top: 0; background: var(--paper-2); z-index: 1; }
+.git-count { background: #fff; border: 1.5px solid var(--ink); border-radius: 999px; padding: 0 7px; color: var(--ink); }
+.git-lists > .git-note { padding: 0 12px; }
+.changes-files .git-commit { cursor: default; font-size: 12px; }
+.git-commit code { font-size: 11px; color: #1d6fd6; }
+.git-commit .git-bdate { grid-column: auto; white-space: nowrap; }
+@media (max-width: 900px) {
+  .git-detail { flex-direction: column; overflow: auto; }
+  .git-branches, .git-files { width: auto; max-height: 30%; border-right: 0; border-bottom: 3px solid var(--ink); }
+}
+.modal.git-board footer.git-actions { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 3px solid var(--ink); background: var(--paper-2); flex-wrap: wrap; }
+.modal.git-board footer.git-actions[hidden] { display: none; }
+.git-actions .grow { flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; font-size: 13px; font-weight: 700; color: var(--muted); }
+.git-actions .grow > * + *::before { content: '·'; margin-right: 6px; }
+.git-actions .grow > .spinner + *::before { content: none; }
+.git-actions .btn.git-big { font-size: 15px; padding: 8px 16px; }
+.git-actions .pr-slot { gap: 8px; }
+.git-section h4 .grow { flex: 1; }
+.git-mini { width: 22px; height: 22px; flex: none; padding: 0; border: 2px solid var(--ink); border-radius: 6px; background: #fff; font: 900 14px/1 ui-monospace, Menlo, monospace; cursor: pointer; color: var(--ink); }
+.git-mini:hover:not(:disabled) { background: var(--good); color: #fff; }
+.git-mini:disabled { opacity: .4; cursor: default; }
+.git-section h4 .git-mini { width: 20px; height: 20px; font-size: 12px; }
