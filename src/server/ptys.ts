@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as pty from '@lydell/node-pty';
+import { spawnLocal } from './conpty.js';
 
 /**
  * Workers' terminals live in a small host process of their own (ptyhost.ts), not in the office.
@@ -213,7 +214,11 @@ export class PtyHost {
 
   /** A new terminal: in the host when there is one, else in-process. Throws if it can't start. */
   spawn(opts: SpawnOpts): Pty {
-    if (!this.sock) return pty.spawn(opts.file, opts.args, { name: 'xterm-256color', cols: opts.cols, rows: opts.rows, cwd: opts.cwd, env: opts.env });
+    if (!this.sock) {
+      const start = (cols = opts.cols, rows = opts.rows) => pty.spawn(opts.file, opts.args, { name: 'xterm-256color', cols, rows, cwd: opts.cwd, env: opts.env });
+      // Windows has no host: a ConPTY that a busy office let time out gets another go (see conpty.ts).
+      return process.platform === 'win32' ? spawnLocal(start) : start();
+    }
     const id = randomBytes(8).toString('hex');
     const p = new RemotePty(id, (m) => this.send(m));
     this.ptys.set(id, p);

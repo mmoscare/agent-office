@@ -7,8 +7,11 @@
 
 import type { AgentProvider } from '../shared/protocol.js';
 
-/** How long a launched agent may stay silent before its desk says it didn't start. */
-export const STARTUP_MS = 45_000;
+/**
+ * How long a launched agent may stay silent before its desk says it didn't start. Several OpenCodes
+ * starting at once on Windows took 35-40 seconds just to load (2026-09-28), so this leaves room.
+ */
+export const STARTUP_MS = 90_000;
 
 const LABEL: Record<AgentProvider, string> = { claude: 'Claude', opencode: 'OpenCode', codex: 'Codex', custom: 'The agent' };
 
