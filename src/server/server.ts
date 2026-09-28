@@ -19,6 +19,7 @@ import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
+import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
 import { ApiBalances } from './api-balances.js';
 import type { BalanceUpdate } from '../shared/api-balances.js';
@@ -861,6 +862,9 @@ export async function startServer(cfg: Config) {
         });
         res.end(logo.bytes);
         return;
+      }
+      if (p === '/api/ledger' && req.method === 'GET') {
+        return send(res, 200, ledgerFacts(ledger.state(), floors.values()));
       }
       if (p === '/api/model-usage' && req.method === 'GET') {
         const waiting = [];
