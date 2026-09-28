@@ -66,18 +66,22 @@ try {
   const board = () => page.evaluate(() => {
     const o = window.__office.office;
     const m = o.group.children.find(x => x.userData.interact?.kind === 'authorUpdates');
-    return { visible: m.visible, off: m.userData.interact.off, reserved: o.fixtures().some(f => f.u0 === 14.15) };
+    // The board's reservation: on the north wall over the gong (x 11.8), above the gong's own (which starts at the floor).
+    const mine = o.fixtures().find(f => f.wall === 'north' && f.u0 < 11.8 && f.u1 > 11.8 && f.y0 > 2.5);
+    // Nothing else on this floor claims the same stretch of wall: the elevator, the gong, the Reception kiosk…
+    const clash = mine && o.fixtures().filter(f => f !== mine && f.wall === mine.wall && f.u0 < mine.u1 && mine.u0 < f.u1 && f.y0 < mine.y1 && mine.y0 < f.y1);
+    return { visible: m.visible, off: m.userData.interact.off, reserved: !!mine, clear: !clash?.length };
   });
   await page.getByRole('button', { name: 'Author updates', exact: true }).waitFor();
-  assert.deepEqual(await board(), { visible: true, off: false, reserved: true });
+  assert.deepEqual(await board(), { visible: true, off: false, reserved: true, clear: true });
   const shots = path.join(codeDir, 'tmp/author-updates');
   await mkdir(shots, { recursive: true });
   await page.evaluate(() => {
     const p = window.__office.player;
     p.setView('first');
-    p.pos.set(15.5, 0, -8.5);
+    p.pos.set(11.8, 0, -8.5);
     p.camYaw = 0;
-    p.lookPitch = 0.24;
+    p.lookPitch = 0.49;
   });
   await pause(600);
   await page.screenshot({ path: path.join(shots, 'updates-wall.png') });
@@ -121,7 +125,7 @@ try {
   state = { enabled: false };
   await page.evaluate(() => { window.__office.store.floor = 'different-floor'; window.__office.store.emit('floor'); });
   await dialog.waitFor({ state: 'hidden' });
-  assert.deepEqual(await board(), { visible: false, off: true, reserved: false });
+  assert.deepEqual(await board(), { visible: false, off: true, reserved: false, clear: true });
   assert.equal(await page.getByRole('button', { name: 'Author updates', exact: true }).count(), 0);
   assert.ok(postChecks >= 3);
   assert.deepEqual(errors, []);

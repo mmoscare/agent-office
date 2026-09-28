@@ -129,6 +129,9 @@ test('reports real merge conflicts and provides a preservation-first worker task
   assert.match(prompt, /Do not restart or stop this office while workers are active/);
   assert.match(prompt, /upstream\/main -> main/);
   assert.match(prompt, /never run a second merge concurrently/);
+  // AGENTS.md's app code folder is where the office runs from, not a stale location to ignore.
+  assert.match(prompt, /app code folder named in AGENTS\.md/);
+  assert.doesNotMatch(prompt, /older location/);
 });
 
 test('missing personal branch is actionable and does not fetch against the wrong branch', async t => {

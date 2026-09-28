@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import type { AuthorUpdates } from '../../shared/author-updates';
-import { FLOOR } from '../../shared/layout';
+import { FLOOR, GONG } from '../../shared/layout';
 import { authorUpdateLabel } from '../ui/author-updates';
 import type { Office, Interactable } from './office';
 
-/** A small noticeboard on the north wall beside the merge gong. Hidden on every other floor. */
+/** Where the board hangs: centred over the gong, above its frame and clear of the receptionist's card past it. */
+const BOARD = { x: GONG.x, y: 3.75, width: 2.6, height: 1.56 } as const;
+
+/** A small noticeboard on the north wall above the merge gong. Hidden on every other floor. */
 export function mountAuthorUpdatesWall(office: Office) {
   const canvas = document.createElement('canvas');
   canvas.width = 900;
@@ -12,14 +15,15 @@ export function mountAuthorUpdatesWall(office: Office) {
   const g = canvas.getContext('2d')!;
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.56), new THREE.MeshBasicMaterial({ map: texture }));
-  mesh.position.set(15.5, 2.8, FLOOR.minZ + 0.12);
-  const interact: Interactable = { kind: 'authorUpdates', x: 15.5, z: FLOOR.minZ + 1.5, radius: 1.5, off: true };
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(BOARD.width, BOARD.height), new THREE.MeshBasicMaterial({ map: texture }));
+  mesh.position.set(BOARD.x, BOARD.y, FLOOR.minZ + 0.12);
+  // Only by pointing at it (or from the menu): walking up to it is walking up to the gong, and E there rings it.
+  const interact: Interactable = { kind: 'authorUpdates', x: BOARD.x, z: FLOOR.minZ + 1.5, radius: 0, off: true };
   mesh.userData.interact = interact;
   mesh.visible = false;
   office.group.add(mesh);
   office.interactables.push(interact);
-  const fixture = { wall: 'north' as const, u0: 14.15, u1: 16.85, y0: 1.97, y1: 3.63 };
+  const fixture = { wall: 'north' as const, u0: BOARD.x - BOARD.width / 2 - 0.05, u1: BOARD.x + BOARD.width / 2 + 0.05, y0: BOARD.y - BOARD.height / 2 - 0.05, y1: BOARD.y + BOARD.height / 2 + 0.05 };
   return (state: AuthorUpdates) => {
     mesh.visible = state.enabled;
     interact.off = !state.enabled;
