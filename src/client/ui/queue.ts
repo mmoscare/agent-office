@@ -5,14 +5,15 @@ import { h, openModal, timeAgo, STATUS_LABEL } from './dom';
 import { confirmDialog } from './prompt';
 import { providerPicker, providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
 import { officeFull } from '../world/machine';
+import { stoppedByRestart, taskStatus, unshippedText } from '../../shared/task-status';
 
 export interface QueueActions {
   openTerminal(workerId: string): void;
 }
 
-/** The queue task's name, linked to its GitHub issue when it has one. */
+/** The queue task's name, linked to its GitHub issue when it has one (or marked as a To Do Next item). */
 function taskTitle(t: QueueTask): HTMLElement {
-  if (t.issue === undefined) return h('div.queue-title', { title: t.prompt }, t.title);
+  if (t.issue === undefined) return h('div.queue-title', { title: t.prompt }, t.plan ? h('span', { title: 'From the 📒 To Do Next board' }, '📒 ') : null, t.title);
   const issue = store.issues.items.find((i) => i.number === t.issue && (i.repo ?? '').toLowerCase() === (t.repo ?? '').toLowerCase());
   const ref = ghRef({ number: t.issue, repo: t.repo });
   const text = t.title.startsWith(ref) || t.title.startsWith(`#${t.issue}`) ? t.title : `${ref} ${t.title}`;
@@ -20,6 +21,7 @@ function taskTitle(t: QueueTask): HTMLElement {
 }
 
 function outcome(t: QueueTask): string {
+  if (stoppedByRestart(t)) return 'stopped by restart';
   switch (t.outcome) {
     case 'done':
       return t.pr ? 'finished' : 'finished, no PR found yet';
@@ -85,6 +87,7 @@ export function openQueue(net: Net, actions: QueueActions) {
   const row = (t: QueueTask): HTMLElement => {
     const w = t.workerId ? store.workers.get(t.workerId) : undefined;
     const meta: string[] = [];
+    let warning: HTMLElement | null = null;
     const buttons: HTMLElement[] = [];
     const badge = modelBadge(t.provider, t.model, t.effort);
     const model = badge ? ` · initial: ${badge}` : '';
@@ -122,6 +125,9 @@ export function openQueue(net: Net, actions: QueueActions) {
     } else {
       meta.push(`⚙️ ${providerLabel(t.provider, store.project)}${model}${usageSuffix(t.provider, w?.usage)}`);
       meta.push(outcome(t));
+      // Finished but its branch still holds work no PR has: say so, in the warning colour.
+      const honest = taskStatus(t);
+      if (honest.warn) warning = h('div.queue-meta.queue-warn', { title: 'See 🧳 Unshipped work on the Pull Requests board to queue a PR for it' }, `⚠ ${honest.text}${t.unshipped ? ` · ${unshippedText(t.unshipped)}` : ''}`);
       if (t.workerName) meta.push(t.workerName);
       if (t.branch) meta.push(`🌿 ${t.branch}`);
       if (t.finishedAt) meta.push(timeAgo(t.finishedAt));
@@ -134,7 +140,7 @@ export function openQueue(net: Net, actions: QueueActions) {
       'li',
       { class: t.status },
       pos ? h('span.pos', {}, pos) : null,
-      h('div.queue-main', {}, taskTitle(t), h('div.queue-meta', {}, meta.join(' · '))),
+      h('div.queue-main', {}, taskTitle(t), warning, h('div.queue-meta', {}, meta.join(' · '))),
       h('div.queue-actions', {}, ...buttons),
     );
   };

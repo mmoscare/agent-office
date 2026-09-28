@@ -1,6 +1,7 @@
+import { previewPush, pushReviewed, pushTargets } from './push.js';
 import type { GitDiffMode } from '../shared/git-board.js';
 import { authorUpdates } from './author-updates.js';
-import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeStatus } from './git-board.js';
+import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeFloorPull, officeStatus, type OfficeFloor } from './git-board.js';
 
 /** A result that's a string is a failure, said for a person. */
 function reply<T>(r: T | string): [number, unknown] {
@@ -20,15 +21,19 @@ const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, ma
  * The Git board's HTTP API: `[status, JSON body]` for a request under /api/git/. POSTs change the
  * checkout (the server checks the request came from the office's own page first).
  */
-export async function routeGitBoard(p: string, method: string, q: URLSearchParams, floorDir: string, body: Record<string, unknown> = {}): Promise<[number, unknown]> {
+export async function routeGitBoard(p: string, method: string, q: URLSearchParams, floorDir: string, body: Record<string, unknown> = {}, floors: OfficeFloor[] = []): Promise<[number, unknown]> {
   const repo = (q.get('repo') ?? '').slice(0, 2048);
   const branch = (q.get('branch') ?? '').slice(0, 255) || undefined;
   try {
     if (p === '/api/git/author-updates' && method === 'GET') return [200, await authorUpdates.read(floorDir)];
     if (p === '/api/git/author-updates/check' && method === 'POST') return [200, await authorUpdates.read(floorDir, true)];
+    if (p === '/api/git/push-targets' && method === 'GET') return [200, await pushTargets(floorDir)];
+    if (p === '/api/git/push-preview' && method === 'GET') return [200, await previewPush(floorDir, text(q.get('target'), 2048))];
+    if (p === '/api/git/push-reviewed' && method === 'POST') return reply(await pushReviewed(floorDir, text(body.target, 2048), text(body.token, 100)));
     if (p === '/api/git/repos' && method === 'GET') return [200, await gitRepositories(floorDir)];
     // The office's own code folder, whichever floor asks (see OfficeStatus).
-    if (p === '/api/git/office' && method === 'GET') return [200, { office: (await officeStatus()) ?? null }];
+    if (p === '/api/git/office' && method === 'GET') return [200, { office: (await officeStatus(floors, q.get('fresh') === '1')) ?? null }];
+    if (p === '/api/git/office/pull-floor' && method === 'POST') return reply(await officeFloorPull(floors, text(body.dir, 4096)));
     if (!repo) return [400, { error: 'Choose a repository' }];
     if (method === 'GET') {
       if (p === '/api/git/repo') return [200, await gitRepository(floorDir, repo, branch)];

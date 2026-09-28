@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 const USAGE = `Usage:
   office-queue list                                  what's on the queue: id, status, title, worker, PR
   office-queue add --title "…" [--issue 12] <<'EOF'  add a task, its prompt on stdin (or --prompt "…");
-  …the prompt…                                       prints the new task's id
-  EOF
+  …the prompt…                                       prints the new task's id; --plan <id> links it to
+  EOF                                                a To Do Next item, which moves along as it runs
   office-queue remove <id>                           take a waiting task off`;
 
 /** A mistake in how the command was called: the usage is shown with it. */
@@ -24,7 +24,7 @@ const TIMEOUT_MS = 15_000;
 
 /**
  * What the command line asks for:
- * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', title, issue?, prompt? } | { cmd: 'remove', id }.
+ * { cmd: 'help' } | { cmd: 'list' } | { cmd: 'add', title, issue?, plan?, prompt? } | { cmd: 'remove', id }.
  * @param {string[]} argv the arguments after the command's name
  */
 export function parseArgs(argv) {
@@ -40,13 +40,13 @@ export function parseArgs(argv) {
     return { cmd: 'remove', id: rest[0] };
   }
   if (cmd !== 'add') throw new UsageError(`Unknown command: ${cmd}`);
-  /** @type {{ cmd: 'add', title?: string, issue?: number, prompt?: string }} */
+  /** @type {{ cmd: 'add', title?: string, issue?: number, plan?: string, prompt?: string }} */
   const out = { cmd: 'add' };
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
     const eq = arg.indexOf('=');
     const flag = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
-    if (flag !== '--title' && flag !== '--issue' && flag !== '--prompt') {
+    if (flag !== '--title' && flag !== '--issue' && flag !== '--plan' && flag !== '--prompt') {
       throw new UsageError(arg.startsWith('-') ? `Unknown option for add: ${flag}` : `Unexpected argument: ${arg} (quote the title, and give the prompt on stdin or with --prompt)`);
     }
     let value;
@@ -55,7 +55,10 @@ export function parseArgs(argv) {
     else throw new UsageError(`${flag} needs a value`);
     if (flag === '--title') out.title = value.trim();
     else if (flag === '--prompt') out.prompt = value;
-    else {
+    else if (flag === '--plan') {
+      if (!value.trim()) throw new UsageError('--plan takes a To Do Next item id (see office-plans list)');
+      out.plan = value.trim();
+    } else {
       const n = /^#?(\d+)$/.exec(value.trim());
       if (!n || Number(n[1]) < 1) throw new UsageError(`--issue takes an issue number, e.g. --issue 12 (got ${value})`);
       out.issue = Number(n[1]);
@@ -102,7 +105,7 @@ export function buildRequest(cmd, office, prompt) {
   if (!text) {
     throw new UsageError(`The task needs a prompt: pipe it in (office-queue add --title "…" <<'EOF' … EOF) or pass --prompt "…"`);
   }
-  const body = { title: cmd.title, prompt: text, ...(cmd.issue !== undefined ? { issue: cmd.issue } : {}) };
+  const body = { title: cmd.title, prompt: text, ...(cmd.issue !== undefined ? { issue: cmd.issue } : {}), ...(cmd.plan !== undefined ? { plan: cmd.plan } : {}) };
   return { method: 'POST', url: url.href, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) };
 }
 
@@ -115,12 +118,15 @@ export function formatQueue(view) {
   const limit = typeof view?.maxWorkers === 'number' ? ` · up to ${view.maxWorkers} at a time` : '';
   if (!tasks.length) return `The queue is empty${limit}.`;
   const lines = [`${tasks.length} task${tasks.length === 1 ? '' : 's'}${limit}`];
-  const status = (t) => (t.status === 'done' && t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : String(t.status ?? '?'));
+  // `state` is the office's honest word on a finished task ("done — no PR (unshipped work)", "stopped by restart").
+  const status = (t) => (typeof t.state === 'string' && t.state ? t.state : t.status === 'done' && t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : String(t.status ?? '?'));
   const width = Math.max(...tasks.map((t) => status(t).length));
   for (const t of tasks) {
     const parts = [`${t.title ?? ''}${t.issue ? ` (issue #${t.issue})` : ''}`];
+    if (t.plan) parts.push(`to-do ${t.plan}`);
     if (t.worker) parts.push(`worker ${t.worker}${t.branch ? ` on ${t.branch}` : ''}`);
     if (t.pr) parts.push(`PR #${t.pr.number}${t.pr.state ? ` ${String(t.pr.state).toLowerCase()}` : ''} ${t.pr.url}`);
+    if (t.unshipped) parts.push(`⚠ left behind: ${t.unshipped} — see Unshipped work on the PR board`);
     if (t.error) parts.push(`error: ${t.error}`);
     lines.push(`${t.id}  ${status(t).padEnd(width)}  ${parts.join(' · ')}`);
   }
@@ -135,8 +141,8 @@ export function refusal(status, body) {
   return `The office said no (${status})${said ? `: ${said}` : ''}.`;
 }
 
-/** Sends the request, retrying for a few seconds while nothing's listening (the office restarting). */
-async function send(req, fetchImpl) {
+/** Sends the request, retrying for a few seconds while nothing's listening (the office restarting). Shared with office-plans and office-inbox. */
+export async function send(req, fetchImpl) {
   const until = Date.now() + RETRY_MS;
   for (;;) {
     try {
@@ -204,7 +210,7 @@ export async function main(argv, io = {}) {
     else {
       const task = res.body?.task ?? {};
       out(task.id ?? '');
-      err(`Queued “${task.title ?? cmd.title}” (${task.status ?? 'queued'}${cmd.issue !== undefined ? `, issue #${cmd.issue}` : ''}).`);
+      err(`Queued “${task.title ?? cmd.title}” (${task.status ?? 'queued'}${cmd.issue !== undefined ? `, issue #${cmd.issue}` : ''}${cmd.plan !== undefined ? `, To Do Next item ${cmd.plan}` : ''}).`);
     }
     return 0;
   } catch (e) {
