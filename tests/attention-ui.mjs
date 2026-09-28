@@ -16,7 +16,7 @@ const url = `http://127.0.0.1:${server.httpServer.address().port}`;
 const wss = new WebSocketServer({ server: server.httpServer, path: '/ws' });
 const worker = (id, status, extra = {}) => ({
   id, name: id, kind: 'agent', provider: 'codex', deskId: `desk-${id.charCodeAt(0) % 4 + 1}`, color: '#4f86f7',
-  status, acked: false, createdBy: 'Test', createdAt: 1, cols: 80, rows: 24, viewers: [], ...extra,
+  status, acked: false, createdBy: 'Test', createdAt: 1, cols: 80, rows: 24, viewers: [], viewerIds: [], ...extra,
 });
 const floor = (id, name, palette, workers = []) => ({ id, name, palette, workers });
 const floors = [
@@ -30,6 +30,7 @@ const view = id => {
     floor: id, project: { name: f.name, dir: `/test/${id}`, agentCmd: 'codex', defaultProvider: 'codex' }, workers: f.workers,
     issues: { items: [], fetchedAt: 1, loading: false }, pulls: { items: [], fetchedAt: 1, loading: false },
     queue: { tasks: [], maxWorkers: 0 }, decor: [], services: { items: [], port: 1 }, dog: null,
+    meeting: { current: null, past: [] }, cabinet: { player: null, scores: [] },
     jukebox: { on: false, track: 'rainy-window', startedAt: 0, elapsed: 0 }, whiteboard: { elements: [], people: [] },
   };
 };
@@ -51,6 +52,8 @@ wss.on('connection', (ws, req) => {
     t: 'welcome', you: 'test', peers: [], floors: floors.map(info), projectsDir: '/test', ice: [], chat: [],
     invites: false, version: 'fixture', upgrade: { available: false, phase: 'idle' },
     usage: { total: zero, today: zero, day: '', pauseHiring: false }, limits: { windows: [], at: 0 },
+    machine: { cpu: 0, cores: 4, memUsed: 0, memTotal: 1, history: [], workers: 0 },
+    theme: { pick: 'auto', active: null },
     me: { admin: false }, notify: {}, sky: { lat: 43, lon: -79, utcOffset: -240, weather: 'clear', intensity: 0 }, ...view(ws.floor),
   });
   ws.on('message', data => {
@@ -78,13 +81,14 @@ try {
     headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
   page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  page.setDefaultTimeout(15_000);
   await page.route('**/api/**', route => route.fulfill({ contentType: 'application/json', body: '{"me":{"admin":false}}' }));
   await page.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Test', color: '#ff8a5b', look: { skin: 0, hair: 0, style: 0 } }));
-    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
+    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true, hud: { workers: true, spend: true } }));
   });
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => { errors.push(error.message); console.error(error); });
   await page.goto(url);
   const badge = async count => page.waitForFunction(n => document.querySelector('#attention-count')?.textContent === String(n), count);
   const row = name => page.locator('.attention-worker').filter({ has: page.locator('.attention-name', { hasText: name }) });
@@ -93,6 +97,12 @@ try {
   assert.equal(await page.locator('.attention-floor-button').count(), 2);
   assert.match(await page.locator('#attention-summary').innerText(), /3 need input/);
   assert.equal(await page.locator('.workers + #attention').count(), 1, 'widget sits directly below Workers');
+  assert.equal(await page.locator('#attention + #spend').count(), 1, 'the separate Spend panel follows the widget');
+  await page.locator('#workers-panel').getByRole('button', { name: 'Hide', exact: true }).click();
+  assert.equal(await page.locator('#workers-panel').isVisible(), false, 'the personal HUD hide control still works');
+  assert.equal(await page.locator('#attention').isVisible(), true, 'building attention stays available with Workers hidden');
+  await page.locator('#dock .dock-panel').filter({ hasText: 'Workers' }).click();
+  assert.equal(await page.locator('#workers-panel').isVisible(), true);
 
   await row('Byte').focus();
   update('app', 'Ada', { status: 'done', task: { name: 'Login flow', summary: 'Login changes are ready to review' } });

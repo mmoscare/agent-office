@@ -1,4 +1,5 @@
 import type { FloorInfo, WorkerAttention, WorkerInfo } from './protocol.js';
+import { DESK_BY_ID } from './layout.js';
 import { alertDetail } from './status.js';
 
 /** One notification per agent. Questions stay pending until the agent moves on. */
@@ -22,7 +23,12 @@ export function summarizeWorkers(workers: Iterable<WorkerInfo>): Pick<FloorInfo,
     const entry = workerAttention(w);
     return entry ? [entry] : [];
   });
-  return { workers: list.length, busy: list.filter((w) => w.status === 'working').length, waiting: attention.length, attention };
+  return {
+    workers: list.filter((w) => !DESK_BY_ID.get(w.deskId)?.station).length,
+    busy: list.filter((w) => w.status === 'working').length,
+    waiting: attention.length,
+    attention,
+  };
 }
 
 /** Local worker updates arrive before the throttled building broadcast; never count both copies. */

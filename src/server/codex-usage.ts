@@ -1,5 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { isEffort, isModelId } from '../shared/model.js';
 import type { Usage } from '../shared/protocol.js';
 
 const TAIL_BYTES = 4 * 1024 * 1024;
@@ -28,6 +29,9 @@ export function codexTokenUsage(value: unknown): Usage | undefined {
  */
 export class CodexUsageReader {
   private stamp = '';
+  /** The model named by the latest turn in the rollout, kept across reads that find no new usage. */
+  model: string | undefined;
+  effort: string | undefined;
   read(file: string, sessionId: string, home: string): Usage | undefined {
     let fd: number | undefined;
     try {
@@ -55,6 +59,15 @@ export class CodexUsageReader {
       const lines = text.split('\n');
       lines.pop(); // A final partial line is retried after the next append.
       if (start) lines.shift();
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"turn_context"')) continue;
+        let row;
+        try { row = JSON.parse(lines[i]); } catch { continue; }
+        if (row.type !== 'turn_context' || !isModelId(row.payload?.model)) continue;
+        this.model = row.payload.model;
+        this.effort = isEffort(row.payload.effort) ? row.payload.effort : undefined;
+        break;
+      }
       for (let i = lines.length - 1; i >= 0; i--) {
         if (!lines[i].includes('"token_count"')) continue;
         let row;

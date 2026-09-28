@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import type { ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import { isBusy } from '../shared/status.js';
 import { summarizeWorkers } from '../shared/attention.js';
+import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
 import { configuredProvider } from './agents.js';
@@ -15,7 +16,11 @@ import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { MeetingRoom } from './meetings.js';
+import { Worktrees } from './worktrees.js';
+import { readProjectLogo, type ProjectLogo } from './project-logo.js';
 import type { Ledger } from './usage.js';
+import type { Capacity } from './machine.js';
 
 type ToastLevel = 'info' | 'warn' | 'error';
 
@@ -26,6 +31,8 @@ export interface FloorContext {
   hook: HookEnv;
   /** Spend, across every floor. */
   ledger: Ledger;
+  /** The office's worker limit, across every floor. */
+  capacity: Capacity;
   /** To everyone on this floor. */
   emit(floor: Floor, msg: ServerMsg, droppable?: boolean): void;
   toast(floor: Floor, text: string, level?: ToastLevel): void;
@@ -73,6 +80,7 @@ export class Floor {
   readonly id: string;
   readonly dir: string;
   readonly project: ProjectInfo;
+  readonly logo?: ProjectLogo;
   readonly workers: WorkerManager;
   readonly github: GitHub;
   readonly queue: TaskQueue;
@@ -81,6 +89,8 @@ export class Floor {
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
   readonly whiteboard: Whiteboard;
+  /** The meeting room, where workers work through a question together (see meetings.ts). */
+  readonly meetings: MeetingRoom;
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
   readonly ready: Promise<void>;
   readonly dog: Dog;
@@ -98,6 +108,8 @@ export class Floor {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     excludeFromGit(def.dir);
     this.project = projectInfo(def.dir, def.name, ctx.agentCmd, ctx.agentArgs);
+    this.logo = readProjectLogo(def.dir);
+    if (this.logo) this.project.logo = `/api/floors/${encodeURIComponent(def.id)}/logo?v=${this.logo.version}`;
 
     // Before the workers, so it hears about the ones who wake up needing input.
     this.dog = new Dog(def.id, dataDir, {
@@ -117,6 +129,7 @@ export class Floor {
           ctx.emit(this, { t: 'worker.update', worker });
           // Still being built: the first updates come from waking the workers already at their desks.
           this.queue?.onWorker(worker);
+          this.meetings?.onWorker(worker);
           this.dog.onWorker(worker);
           ctx.workerChanged(this, worker);
         },
@@ -124,6 +137,7 @@ export class Floor {
           this.changes?.forget(workerId);
           ctx.emit(this, { t: 'worker.remove', workerId });
           this.queue?.onWorkerGone(workerId);
+          this.meetings?.onWorkerGone(workerId);
           this.dog.onWorkerGone(workerId);
           ctx.workerChanged(this, workerId);
         },
@@ -132,6 +146,7 @@ export class Floor {
         toast: (text, level) => ctx.toast(this, text, level),
       },
       ctx.ledger,
+      ctx.capacity,
     );
 
     this.github = new GitHub(
@@ -141,9 +156,10 @@ export class Floor {
         ctx.emit(this, { t: 'gh.pulls', state });
         this.queue?.onPulls(state.items);
         if (state.loading || state.error) return;
+        this.workers.onPulls(state.items);
         for (const p of this.merges.look(state.items)) {
-          ctx.toast(this, `🎉 PR #${p.number} merged: ${p.title}`);
-          this.merged(p.number);
+          ctx.toast(this, `🎉 PR ${ghRef(p)} merged: ${p.title}`);
+          this.merged(p.number, undefined, p.repo);
         }
       },
     );
@@ -151,14 +167,36 @@ export class Floor {
     this.queue = new TaskQueue(dataDir, this.workers, !!this.project.branch, {
       update: (state) => ctx.emit(this, { t: 'queue', state }),
       toast: (text, level) => ctx.toast(this, text, level),
-      claimIssue: (issue) => this.github.claim(issue),
+      claimIssue: (issue, repo) => this.github.claim(issue, repo),
       refreshGitHub: () => void this.github.refresh(),
       hiringPaused: () => ctx.ledger.hiringPaused,
+      room: () => ctx.capacity.room(),
       emptied: () => {
         ctx.toast(this, '📋 The queue is empty: every task is done 🎉');
         ctx.emit(this, { t: 'gong', why: 'queue' });
       },
     });
+
+    // Meetings seat their own workers round the meeting room's table and run them round by round.
+    this.meetings = new MeetingRoom(
+      def.dir,
+      dataDir,
+      {
+        defaultProvider: this.workers.defaultProvider,
+        list: () => this.workers.list(),
+        seat: (deskId, by, prompt, provider, model, effort, meeting) => this.workers.spawn(deskId, by, prompt, false, 'agent', provider, model, effort, meeting),
+        prompt: (id, text, by) => this.workers.prompt(id, text, by),
+        write: (id, data, by) => this.workers.write(id, data, by),
+        kill: (id) => this.workers.kill(id),
+      },
+      this.project.branch ? new Worktrees(def.dir) : undefined,
+      {
+        update: (state) => ctx.emit(this, { t: 'meeting', state }),
+        toast: (text, level) => ctx.toast(this, text, level),
+        hiringPaused: () => ctx.ledger.hiringPaused,
+        postReview: (pr, file) => this.github.review(pr, file),
+      },
+    );
 
     // What each worker changed, for the Changes window at its desk (see changes.ts).
     this.changes = new Changes(
@@ -170,8 +208,8 @@ export class Floor {
         return { name: w.name, cwd: w.worktree ? path.join(def.dir, w.worktree.path) : def.dir, rel: w.worktree?.path ?? '', worktreeBase: w.worktree?.base };
       },
       (branch) => {
-        const pr = this.github.pulls.items.find((p) => p.state === 'OPEN' && p.headRefName === branch);
-        return pr ? { number: pr.number, url: pr.url } : undefined;
+        return pullForBranch(this.github.pulls.items, branch)
+          ?? this.workers.list().find((w) => w.worktree?.branch === branch)?.pr;
       },
       {
         state: (state, ids) => ctx.changes(state, ids),
@@ -180,6 +218,8 @@ export class Floor {
       },
     );
 
+    // On a floor that's a folder of checkouts, the board agents are told which ones.
+    this.workers.checkouts = () => this.github.checkouts.map((c) => ({ repo: c.repo!, dir: c.rel! }));
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
@@ -192,9 +232,9 @@ export class Floor {
     }, REFRESH_MS);
   }
 
-  /** Pull request `n` merged (`by` someone, from the PR window): the gong rings, once per PR. */
-  merged(n: number, by?: string) {
-    if (this.merges.ring(n)) this.ctx.emit(this, { t: 'gong', why: 'merged', pr: n, by });
+  /** Pull request `n` (of `repo`, on a floor of several) merged (`by` someone, from the PR window): the gong rings, once per PR. */
+  merged(n: number, by?: string, repo?: string) {
+    if (this.merges.ring(n, repo)) this.ctx.emit(this, { t: 'gong', why: 'merged', pr: n, by });
   }
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */
@@ -203,7 +243,7 @@ export class Floor {
   }
 
   private active(): boolean {
-    return this.ctx.people(this) > 0 || this.workers.list().some((w) => isBusy(w.status)) || this.queue.state().tasks.some((t) => t.status !== 'done');
+    return this.ctx.people(this) > 0 || this.workers.list().some((w) => isBusy(w.status)) || this.queue.state().tasks.some((t) => t.status !== 'done') || this.meetings.state().current?.status === 'running';
   }
 
   info(): FloorInfo {
@@ -227,6 +267,7 @@ export class Floor {
     this.dog.stop();
     this.github.stop();
     this.queue.shutdown();
+    this.meetings.shutdown();
     this.changes.stop();
     this.whiteboard.flush();
     this.workers.shutdown(keep);

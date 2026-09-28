@@ -1,4 +1,5 @@
-import type { ChangedFile, ChangesState, ServerMsg } from '../../shared/protocol';
+import { changedImageType, type ChangedFile, type ChangesState, type ServerMsg } from '../../shared/protocol';
+import { pullRequestLabel } from '../../shared/pulls';
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, openModal, type Modal } from './dom';
@@ -79,6 +80,31 @@ function renderDiff(text: string, truncated: boolean): HTMLElement {
   return out;
 }
 
+/** Where one side of a changed picture loads from. The file's signature makes a new URL whenever it changes. */
+function imageUrl(workerId: string, f: ChangedFile, side: 'old' | 'new'): string {
+  const q = new URLSearchParams({ floor: store.floor ?? '', worker: workerId, path: f.path, side, v: f.sig });
+  return `/api/changes/file?${q}`;
+}
+
+/** A changed picture, before and after; new and deleted files only have the one side. */
+function renderPreview(workerId: string, f: ChangedFile): HTMLElement {
+  const sides: ('old' | 'new')[] = f.status === '?' || f.status === 'A' ? ['new'] : f.status === 'D' ? ['old'] : ['old', 'new'];
+  return h(
+    'div.img-preview',
+    {},
+    ...sides.map((side) => {
+      const label = side === 'old' ? 'Before' : 'After';
+      const size = h('span.size');
+      const frame = h('div.img-frame');
+      const img = h('img', { src: imageUrl(workerId, f, side), alt: `${side === 'old' ? f.from ?? f.path : f.path} (${label.toLowerCase()})` });
+      img.addEventListener('load', () => (size.textContent = `${img.naturalWidth} × ${img.naturalHeight}`));
+      img.addEventListener('error', () => frame.replaceChildren(h('p', {}, `Couldn't load the picture ${side === 'old' ? 'from before' : 'as it is now'}.`)));
+      frame.append(img);
+      return h('figure', {}, h('figcaption', {}, h('b', {}, label), size), frame);
+    }),
+  );
+}
+
 export function openChanges(net: Net, workerId: string, onTerminal?: () => void) {
   if (current?.workerId === workerId) return;
   const info = store.workers.get(workerId);
@@ -98,8 +124,9 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
   const terminalBtn = h('button.btn', { type: 'button', title: 'Open the terminal instead' }, '⌨️ Terminal');
   const closeBtn = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const filesHead = h('h4', {}, 'Changed files');
+  const repositoryNotes = h('div.note', { role: 'status' });
   const list = h('ul', { role: 'listbox', 'aria-label': 'Changed files' });
-  const files = h('aside.changes-files', {}, filesHead, list);
+  const files = h('aside.changes-files', {}, filesHead, repositoryNotes, list);
   const diffHead = h('div.dh');
   const diffBody = h('div.diff-scroll');
   const diff = h('section.changes-diff', {}, diffHead, diffBody);
@@ -145,7 +172,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
         'div.changes-empty',
         {},
         h('div.big', {}, '🌱'),
-        h('p', {}, state.base === 'HEAD' ? `Nothing uncommitted in ${where()}.` : `${info.name} hasn't changed anything since ${state.base} yet.`),
+        h('p', {}, state.repositories ? (state.repositories.some((r) => r.error) ? 'Some repositories could not be read. See the repository errors in the file list.' : `No changes in the repositories inside ${where()}.`) : state.base === 'HEAD' ? `Nothing uncommitted in ${where()}.` : `${info.name} hasn't changed anything since ${state.base} yet.`),
         h('p.note', {}, 'This window follows the checkout as the worker works, so changes show up here as they are made.'),
       ),
     );
@@ -154,6 +181,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
   const renderList = () => {
     const s = state;
     list.replaceChildren();
+    repositoryNotes.replaceChildren(...(s?.repositories ?? []).filter((r) => r.error).map((r) => h('p', {}, `${r.path}: ${r.error}`)));
     if (!s) return;
     const n = s.files.length;
     filesHead.textContent = n ? `${n}${s.more ? '+' : ''} changed file${n > 1 || s.more ? 's' : ''}` : 'Changed files';
@@ -187,7 +215,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
       h('span.word', {}, f.uncommitted ? `${STATUS_WORD[f.status]} · not committed` : STATUS_WORD[f.status]),
       plusMinus(f.additions, f.deletions, f.binary),
     );
-    if (f.uncommitted && !state?.busy) diffHead.append(discardOne);
+    if (f.uncommitted && !state?.busy && !state?.repositories) diffHead.append(discardOne);
   };
 
   const renderFooter = () => {
@@ -203,16 +231,17 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
       if (s.files.length) bits.push(plusMinus(adds, dels));
       bits.push(uncommitted ? `${uncommitted} uncommitted` : s.files.length ? 'all committed' : '');
       if (s.ahead) bits.push(`${s.ahead} commit${s.ahead > 1 ? 's' : ''} ahead of ${s.base}`);
+      if (s.repositories) bits.push('View only: use each repository for Git actions');
       if (!s.dir) bits.push(h('span', { title: "This worker works in the project folder itself, so this is everything uncommitted there — everyone's edits, not just its own." }, '📁 shared project folder'));
       else bits.push(h('span', { title: `Its own worktree at ${s.dir}` }, `📁 ${s.dir}`));
       summary.append(...bits.filter(Boolean).map((b) => (typeof b === 'string' ? h('span', {}, b) : b)));
     }
-    discardBtn.disabled = busy || !uncommitted;
-    commitBtn.disabled = busy || !uncommitted;
+    discardBtn.disabled = busy || !uncommitted || !!s?.repositories;
+    commitBtn.disabled = busy || !uncommitted || !!s?.repositories;
     commitBtn.textContent = uncommitted ? `✅ Commit ${uncommitted} file${uncommitted > 1 ? 's' : ''}…` : '✅ Commit…';
     prSlot.replaceChildren();
-    if (!s) return;
-    if (s.pr) prSlot.append(h('a.btn.primary', { href: s.pr.url, target: '_blank', rel: 'noopener', title: 'Open on GitHub' }, `🔀 PR #${s.pr.number} ↗`));
+    if (!s || s.repositories) return;
+    if (s.pr) prSlot.append(h('a.btn.primary', { href: s.pr.url, target: '_blank', rel: 'noopener', title: 'Open on GitHub' }, `🔀 ${pullRequestLabel(s.pr)} ↗`));
     else if (s.prBase) {
       const why = busy ? '' : uncommitted ? 'Commit first' : !s.ahead ? `Nothing on ${s.branch} that ${s.prBase} lacks yet` : '';
       const pr = h('button.btn.primary', { type: 'button', title: why || `Push ${s.branch} and open a pull request against ${s.prBase}` }, '🔀 Open PR…');
@@ -239,6 +268,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
     if (w) title.textContent = `${w.name} · changes`;
     const s = state;
     if (!s || s.error) branch.textContent = '';
+    else if (s.repositories) branch.textContent = `📁 ${s.repositories.length} repositories`;
     else branch.textContent = s.base === 'HEAD' ? `🌿 ${s.branch} · uncommitted changes` : `🌿 ${s.branch} · vs ${s.base}`;
   };
 
@@ -265,9 +295,13 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
     else if (msg.t === 'changes.diff' && msg.workerId === workerId && msg.path === selected) {
       loading = false;
       shownSig = requestedSig;
-      diffBody.replaceChildren(msg.error ? h('div.changes-empty', {}, h('p', {}, msg.error)) : renderDiff(msg.diff, msg.truncated));
-      // The file changed again while the diff was on its way: fetch the fresh one.
       const f = state?.files.find((x) => x.path === selected);
+      const text = msg.error ? h('div.changes-empty', {}, h('p', {}, msg.error)) : renderDiff(msg.diff, msg.truncated);
+      const type = f ? changedImageType(f.path) : undefined;
+      // A picture's diff only says it differs, so show the picture instead. An SVG is text too: its diff stays below.
+      if (f && type) diffBody.replaceChildren(renderPreview(workerId, f), ...(type === 'image/svg+xml' ? [text] : []));
+      else diffBody.replaceChildren(text);
+      // The file changed again while the diff was on its way: fetch the fresh one.
       if (f && f.sig !== shownSig) requestDiff();
     }
   };
@@ -315,6 +349,7 @@ export function openChanges(net: Net, workerId: string, onTerminal?: () => void)
     else renderHeader();
   });
   const modal = openModal(el, {
+    doing: `🌿 looking over ${info.name}'s changes`,
     onClose: () => {
       listeners.delete(onMsg);
       unsub();

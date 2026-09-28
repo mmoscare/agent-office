@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { WorkerManager } from '../src/server/workers.js';
@@ -27,11 +28,13 @@ function fixture(t: TestContext) {
   const workers = new WorkerManager(root, data, command, [], { url: 'http://127.0.0.1:1', token: '' }, {
     update() {}, remove() {}, data() {}, screen() {}, toast() {},
   }, new Ledger(data, { pauseHiring: false }, () => {}, () => {}));
-  t.after(() => {
+  t.after(async () => {
     workers.shutdown();
+    t.mock.timers.reset();
     assert.equal(path.dirname(path.resolve(root)), path.resolve(tmpdir()));
     assert.ok(path.basename(root).startsWith('office-attention-'));
-    rmSync(root, { recursive: true, force: true });
+    // Attaching now reads Git branches asynchronously; Windows can hold the fixture briefly.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
   const info = workers.spawn('desk-1', 'Test', 'Test task');
   assert.notEqual(typeof info, 'string');

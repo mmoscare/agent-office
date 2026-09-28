@@ -76,6 +76,24 @@ test('live current-floor updates override stale summaries without changing or du
   assert.deepEqual(attentionFloors([], null, []), []);
 });
 
+test('floor totals exclude board agents but retain their activity and attention, while meeting completions stay quiet', () => {
+  const workers = [
+    worker('desk', 'needs_input', { deskId: 'desk-1' }),
+    worker('meeting', 'done', { deskId: 'meeting-1', meeting: 'review', acked: true }),
+    worker('board-busy', 'working', { deskId: 'station-issues' }),
+    worker('board-waiting', 'needs_input', { deskId: 'station-queue' }),
+  ];
+  const summary = summarizeWorkers(workers);
+  assert.equal(summary.workers, 2);
+  assert.equal(summary.busy, 1);
+  assert.equal(summary.waiting, 2);
+  assert.deepEqual(summary.attention.map((w) => w.id), ['desk', 'board-waiting']);
+  const local = attentionFloors([floor('a', [])], 'a', workers)[0];
+  assert.equal(local.workers, summary.workers);
+  assert.equal(local.busy, summary.busy);
+  assert.deepEqual(local.attention, summary.attention);
+});
+
 test('the building notification is bounded and omits terminal, session and usage fields', () => {
   const w = worker('1', 'needs_input', { activity: 'a'.repeat(1000), sessionId: 'private-session', prompt: 'full prompt' });
   const entry = workerAttention(w)!;
