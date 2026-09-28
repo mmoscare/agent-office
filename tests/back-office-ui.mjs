@@ -99,6 +99,9 @@ try {
   assert.equal(saved.length, 2);
   assert.equal(saved.find(d => d.name === 'back office project').backOffice, true);
   assert.equal(saved.find(d => d.id === officeFloor).backOffice, undefined);
+  // The header counts floors the way the elevator numbers them.
+  const projectMeta = () => page.locator('#project-meta').textContent();
+  assert.match(await projectMeta(), /Back Office floor B1 of 1/);
 
   // On a Back Office floor, the elevator opens in the basement.
   await openElevator();
@@ -113,6 +116,7 @@ try {
   await elevator.screenshot({ path: path.join(screenshotDir, 'back-office-main.png') });
   await elevator.locator('.floor-row .floor-btn').first().click();
   await page.waitForFunction(id => window.__office?.store.floor === id, officeFloor);
+  assert.match(await projectMeta(), /🛗 floor 1 of 1\b/, 'the Back Office floor is not counted among the main floors');
 
   // Down to B and pick the Back Office floor.
   await openElevator();
