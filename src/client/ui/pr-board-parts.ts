@@ -1,3 +1,4 @@
+import { branchWorker } from '../../shared/pulls';
 import { h } from './dom';
 
 /**
@@ -98,4 +99,13 @@ export function section(p: SectionParts): HTMLElement {
     h('h3', {}, h('span.prb-icon', { 'aria-hidden': 'true' }, p.icon), h('span.prb-name', {}, p.title), h('span.prb-count', {}, String(p.count)), p.hint ? h('span.prb-hint', {}, p.hint) : '', ...(p.tools ?? [])),
     h('ul.prb-rows', {}, ...p.rows),
   );
+}
+
+/**
+ * The worker whose desk a pull request came from, once it has left the desk: small, like the desk chip
+ * without the desk. Neutral rather than 🤖, since a shell worker's branch reads the same as an agent's.
+ */
+export function submitterChip(branch: string): HTMLElement | '' {
+  const name = branchWorker(branch);
+  return name ? h('span.pr-submitter', { title: `Opened from ${name}'s desk (${branch})` }, `🪑 ${name}`) : '';
 }
