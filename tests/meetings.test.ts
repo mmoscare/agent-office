@@ -154,6 +154,26 @@ test('a worker that ends its part without writing the file is reminded once, the
   assert.match(m.reason!, /round limit without writing decision\.md/);
 });
 
+test('an interrupted or paused turn counts as ended, so the meeting reminds instead of waiting forever', (t) => {
+  for (const stopped of ['interrupted', 'paused'] as const) {
+    const f = fixture(); t.after(() => f.close());
+    assert.equal(f.start({}), undefined);
+    f.settle();
+    const m = f.room.state().current!;
+    const turn = m.turns.find((x) => x.seat === 0)!;
+    const w = f.workers.find((x) => x.id === m.seats[0].workerId)!;
+    const before = f.prompts.length;
+    w.status = 'working';
+    f.room.onWorker(w);
+    w.status = stopped;
+    f.room.onWorker(w);
+    assert.equal(f.room.state().current!.status, 'running');
+    assert.ok(f.prompts.length > before, `${stopped} worker is prompted again`);
+    assert.match(f.prompts.at(-1)!.text, /without writing/);
+    assert.equal(turn.seat, 0);
+  }
+});
+
 test('sending a worker home stops the meeting and names who left', async (t) => {
   const f = fixture(); t.after(() => f.close());
   assert.equal(f.start({}), undefined);

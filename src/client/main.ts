@@ -1081,8 +1081,9 @@ function syncWorkers() {
         // Playing at the arcade: one of yours stops the game.
         if (w.status === 'needs_input' && yours(w)) cabinet.needsYou(w);
       }
-      // Finished what it was on: a little spin and a puff of confetti.
-      if (w.status === 'done' && (v.status === 'working' || v.status === 'needs_input')) {
+      // Finished what it was on: a little spin and a puff of confetti. The Stop hook can land after
+      // the screen already went quiet, so finishing from a pause counts too.
+      if (w.status === 'done' && (v.status === 'working' || v.status === 'needs_input' || v.status === 'paused' || v.status === 'interrupted')) {
         v.model.celebrate();
         burstOver(w.deskId, 40);
       }

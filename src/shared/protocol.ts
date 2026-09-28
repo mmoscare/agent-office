@@ -17,6 +17,8 @@ export type WorkerStatus =
   | 'idle' // waiting for a first prompt
   | 'working' // agent is busy
   | 'needs_input' // permission prompt / question open
+  | 'paused' // stopped making progress without a completion hook
+  | 'interrupted' // provider reported a cancelled turn; terminal is still alive
   | 'done' // finished its turn
   | 'exited' // process ended (can be resumed if it had a session)
   | 'offline'; // restored from disk after a server restart; resumable

@@ -16,7 +16,7 @@ import { Worktrees, describeWork, type WorktreeCleanup, type WorktreeState } fro
 import { DESK_BY_ID, STATION_AGENT } from '../shared/layout.js';
 import { stationBrief, stationDisallowedTools, type Checkout } from './stations.js';
 import { retoldTask, withWorkerHandoff, withoutWorkerHandoff } from './handoff.js';
-import { isBusy } from '../shared/status.js';
+import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
@@ -57,7 +57,7 @@ const scrubbed = (k: string) => SCRUB_ENV.has(k) || SCRUB_PREFIXES.some((p) => k
 
 const SCREEN_INTERVAL_MS = 250;
 /** What a worker with a live terminal can be doing. */
-const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input'] satisfies WorkerStatus[]);
+const RUNNING = new Set<unknown>(['starting', 'idle', 'working', 'done', 'needs_input', 'paused', 'interrupted'] satisfies WorkerStatus[]);
 const LATE_PROMPT_GRACE_MS = 5000;
 const KEYFRAME_MS = 8000;
 /** How often a steady typist's "last typed" time is refreshed for everyone. */
@@ -127,6 +127,8 @@ interface Worker {
   unsaved?: boolean;
   /** Where this run's own output starts, below the scrollback carried over from before. */
   fresh?: { readonly line: number };
+  /** Where Claude's current turn started on its screen, so an interrupt notice from an older turn is ignored. */
+  turnStart?: { readonly line: number; dispose(): void };
 }
 
 export interface WorkerEvents {
@@ -678,6 +680,8 @@ export class WorkerManager {
       case 'UserPromptSubmit':
         w.bootBlocked = false;
         w.info.action = undefined;
+        w.turnStart?.dispose();
+        w.turnStart = w.term?.registerMarker(0);
         if (typeof payload?.prompt === 'string') {
           w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
           this.notePrompt(w, payload.prompt);
@@ -697,6 +701,10 @@ export class WorkerManager {
         break;
       case 'PostToolUse':
       case 'PostToolUseFailure':
+        if (payload?.is_interrupt && !payload?.agent_id && !payload?.agent_type) {
+          this.setStatus(w, 'interrupted');
+          break;
+        }
         this.noteOutcome(w, payload, event === 'PostToolUseFailure');
         if (w.info.status === 'needs_input') {
           w.leftNeedsInputAt = now;
@@ -715,7 +723,7 @@ export class WorkerManager {
         }
         break;
       case 'Stop':
-        this.setStatus(w, 'done');
+        if (w.info.status !== 'interrupted') this.setStatus(w, 'done');
         break;
     }
     return true;
@@ -775,12 +783,16 @@ export class WorkerManager {
         busy();
         break;
       case 'PostToolUse':
-        busy();
+        // A cancelled tool can finish reporting after the turn's Interrupt hook.
+        if (!isStopped(w.info.status) && w.info.status !== 'done') busy();
         break;
       case 'Stop':
+        clearInput();
+        if (w.info.status !== 'interrupted') this.setStatus(w, 'done');
+        break;
       case 'Interrupt':
         clearInput();
-        this.setStatus(w, 'done');
+        this.setStatus(w, 'interrupted');
         break;
     }
     this.emitUpdate(w);
@@ -816,7 +828,7 @@ export class WorkerManager {
       w.openCodeError = false;
       this.persist();
     }
-    if (payload.type === 'error') w.openCodeError = true;
+    if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
     if (payload.prompt) {
       w.info.activity = truncate(withoutWorkerHandoff(payload.prompt), 80) || undefined;
@@ -828,9 +840,10 @@ export class WorkerManager {
     } else if (payload.detail) {
       w.info.activity = truncate(payload.detail, 80);
     }
-    if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
+    if (payload.status === 'interrupted') this.setStatus(w, 'interrupted');
+    else if (payload.status === 'needs_input') this.setStatus(w, 'needs_input');
     else if (payload.status === 'working') this.setStatus(w, 'working');
-    else if (payload.status === 'done' && w.pty) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
+    else if (payload.status === 'done' && w.pty && !isStopped(w.info.status)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
     return true;
@@ -1078,6 +1091,7 @@ export class WorkerManager {
     w.lastLines = [];
     w.screenDirty = true;
     w.fresh = undefined;
+    w.turnStart = undefined;
     return term;
   }
 
@@ -1239,10 +1253,10 @@ export class WorkerManager {
 
   private onProgress(w: Worker, busy: boolean) {
     const s = w.info.status;
-    if (busy && (s === 'idle' || s === 'done' || s === 'starting')) this.setStatus(w, 'working');
+    if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn ended without a Stop hook (the prompt was rejected or Esc'd).
-    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'done');
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
+    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) this.setStatus(w, 'paused');
   }
 
   private setStatus(w: Worker, status: WorkerStatus) {
@@ -1311,6 +1325,8 @@ export class WorkerManager {
    */
   private checkBlocked(w: Worker) {
     if (w.info.kind === 'agent' && w.info.provider === 'codex' && w.term && w.pty) {
+      // The TUI can still show its old approval controls while cancellation redraws.
+      if (isStopped(w.info.status)) return;
       const prompt = codexInputPrompt(screenText(w.term));
       if (prompt) {
         w.codexInput ??= {
@@ -1332,6 +1348,13 @@ export class WorkerManager {
     }
     if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
     const s = w.info.status;
+    // Esc with no tool running fires no hook: the turn just goes quiet (paused). Claude prints an
+    // interrupt notice under the prompt, and that names it properly.
+    if (s === 'paused') {
+      const from = w.turnStart?.line ?? -1;
+      if (from >= 0 && CLAUDE_INTERRUPTED.test(screenText(w.term, from))) this.setStatus(w, 'interrupted');
+      return;
+    }
     if (s !== 'starting' && s !== 'idle' && !(w.bootBlocked && s === 'needs_input')) return;
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
     const text = screenText(w.term, w.term.buffer.active.type === 'normal' ? Math.max(0, w.fresh?.line ?? 0) : 0);
@@ -1583,7 +1606,7 @@ function isOpenCodeHookEvent(value: unknown): value is OpenCodeStatusEvent {
   const v = value as Record<string, unknown>;
   return typeof v.type === 'string' && ['session', 'prompt', 'tool', 'permission', 'question', 'error'].includes(v.type)
     && typeof v.sessionId === 'string' && v.sessionId.length > 0
-    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done'].includes(v.status)
+    && typeof v.status === 'string' && ['starting', 'working', 'needs_input', 'done', 'interrupted'].includes(v.status)
     && (v.prompt === undefined || typeof v.prompt === 'string')
     && (v.tool === undefined || typeof v.tool === 'string')
     && (v.detail === undefined || typeof v.detail === 'string');
@@ -1642,6 +1665,7 @@ function snapshotScreen(term: HeadlessTerminal, last: string[]) {
 
 /** First-run screens Claude shows before it can take a prompt. */
 const SETUP_PROMPT = /trust this folder|Do you trust the files|Select login method|Choose the text style|Press Enter to continue|Bypass Permissions mode/i;
+const CLAUDE_INTERRUPTED = /Interrupted by user|Interrupted\s*·\s*What should Claude do instead/i;
 const NOT_LOGGED_IN = /Not logged in\s*·\s*Run \/login|Invalid API key|Please run \/login/i;
 
 /** The text on screen, leaving out rows above buffer row `from`. */

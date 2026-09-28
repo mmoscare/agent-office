@@ -12,6 +12,11 @@ export function isBusy(status: WorkerStatus): boolean {
   return status === 'starting' || status === 'working' || status === 'needs_input';
 }
 
+/** The chat stopped short of completion, but can take another prompt. */
+export function isStopped(status: WorkerStatus): boolean {
+  return status === 'paused' || status === 'interrupted';
+}
+
 /**
  * One line for a notification about a worker: what it's asking for when it needs input, or what it
  * was on when it's done (its last activity may be a permission prompt it has long got past).

@@ -7,6 +7,7 @@ import { MEETING_SEATS } from '../shared/layout.js';
 import { MAX_MEETING_BUDGET, MEETING_NOTES_DIR, MEETING_PATTERNS, TOKENS_PER_SEAT, isMeetingPattern, meetingRecord, outputProblem, slugify } from '../shared/meetings.js';
 import { fmtTokens, isAgentEffort, isAgentProvider, tokensOf, type AgentEffort, type AgentProvider, type Meeting, type MeetingRecord, type MeetingRequest, type MeetingState, type MeetingTurn, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { validateWorkerEffort, validateWorkerModel } from './agents.js';
+import { isStopped } from '../shared/status.js';
 import { gitError, type WorktreeRef, type WorktreeState } from './worktrees.js';
 
 const execFileP = promisify(execFile);
@@ -53,8 +54,11 @@ const BY = 'the meeting room';
 /** What a red team or a reviewer writes when it has nothing to report. */
 const NOTHING = /^\W*no findings\b/i;
 
-/** Ready for its next part: not starting up, busy, waiting on someone, or asleep. */
-const ready = (s: WorkerStatus) => s === 'idle' || s === 'done';
+/**
+ * Ready for its next part: not starting up, busy, waiting on someone, or asleep. A turn that was
+ * interrupted or went quiet without finishing has ended too, so the meeting retries or moves on.
+ */
+const ready = (s: WorkerStatus) => s === 'idle' || s === 'done' || isStopped(s);
 
 /** A part of a round, before it's handed over. */
 interface Part {
