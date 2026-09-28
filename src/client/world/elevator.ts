@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, WALL_HEIGHT } from '../../shared/layout';
 import { mesh, roundedBox, textPlane, toon } from './toon';
 import type { Collider, Interactable } from './office';
+import { buildElevatorTiles } from './elevator-tiles';
+import type { FloorInfo } from '../../shared/protocol';
 
 // The elevator: a steel shaft against the north wall, doors facing into the room. Every floor has
 // it in the same place; riding it swaps the floor around you while the doors are shut.
@@ -22,6 +24,8 @@ export interface Elevator {
   /** Whether the doors have finished moving. */
   readonly settled: boolean;
   update(dt: number): void;
+  setFloors(floors: FloorInfo[], current: string | null): void;
+  turnPage(direction: number): void;
 }
 
 export function buildElevator(sign: THREE.Group): Elevator {
@@ -36,6 +40,8 @@ export function buildElevator(sign: THREE.Group): Elevator {
   const steel = toon(STEEL);
   const steelDark = toon(STEEL_DARK);
   const brass = toon(BRASS);
+  const tiles = buildElevatorTiles();
+  group.add(tiles.group);
 
   // Side walls, the whole height of the room.
   for (const sx of [minX + wall / 2, maxX - wall / 2]) {
@@ -167,5 +173,7 @@ export function buildElevator(sign: THREE.Group): Elevator {
       return openness === (open ? 1 : 0);
     },
     update,
+    setFloors: tiles.setFloors,
+    turnPage: tiles.turnPage,
   };
 }
