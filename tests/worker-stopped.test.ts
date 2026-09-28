@@ -169,6 +169,87 @@ test('Claude terminal OSC progress really pauses and resumes the worker', async 
   }
 });
 
+/** A real headless screen for a Claude worker, and a way to print to it. */
+function claudeScreen() {
+  const f = fixture('claude');
+  f.w.info.cols = 80;
+  f.w.info.rows = 24;
+  const term = f.manager.newTerm(f.w);
+  const output = (text: string) => new Promise<void>(resolve => term.write(text, resolve));
+  return { ...f, term, output };
+}
+
+// Claude's input box at the foot of its screen, with the cursor left on its last row.
+const INPUT_BOX = '\r\n╭────────╮\r\n│ >      │\r\n╰────────╯\r\n  ? for shortcuts';
+// Claude redraws in place: back up over the input box and print the turn where it stood.
+const OVER_INPUT_BOX = '\x1b[3A\r\x1b[J';
+const ESC_NOTICE = '  ⎿  Interrupted · What should Claude do instead?';
+
+test('Claude Esc with no tool running reads as interrupted from its screen notice, until a new prompt', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`● Ready.${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    // Esc while Claude thinks: no hook at all, just the notice, printed above where the cursor was.
+    await f.output(`${OVER_INPUT_BOX}> fix it\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('UserPromptSubmit', { prompt: 'try again' });
+    assert.equal(f.w.info.status, 'working');
+    assert.ok(!f.updates.includes('done'));
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('an interrupt notice from an earlier turn, or quoted in the output, leaves a quiet turn paused until Stop', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`> first\r\n${ESC_NOTICE}${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'second' });
+    await f.output(`${OVER_INPUT_BOX}> second\r\n● Claude prints "Interrupted by user" when you press Esc.\r\n`
+      + `+const NOTICE = /Interrupted · What should Claude do instead?/;${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused', 'the notice above the turn start belongs to the first turn');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'done');
+    // Claude redraws its whole screen (a resize, say), reprinting the first turn's notice below the
+    // row this turn started on: that start is gone, so the notice can't be placed.
+    f.hook('UserPromptSubmit', { prompt: 'third' });
+    await f.output(`\x1b[H\x1b[2J> first\r\n${ESC_NOTICE}\r\n> second\r\n> third${INPUT_BOX}\x1b]9;4;0\x07`);
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused');
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('Claude idle notification that beats the progress marker cannot pass an Esc off as done', async () => {
+  const f = claudeScreen();
+  try {
+    f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    // Hooks and terminal output travel separately, so the idle notification can be handled first.
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    assert.equal(f.w.info.status, 'done');
+    await f.output(`> fix it\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused', 'only Stop proves the turn finished');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'interrupted');
+    // A done that Stop proved stays done, whatever order the idle reports come in.
+    f.hook('UserPromptSubmit', { prompt: 'again' });
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    f.hook('Stop');
+    await f.output('\x1b]9;4;0\x07');
+    assert.equal(f.w.info.status, 'done');
+  } finally {
+    f.term.dispose();
+  }
+});
+
 test('a child Claude cancellation does not stop its parent', () => {
   const f = fixture('claude');
   f.hook('PostToolUseFailure', { is_interrupt: true, agent_id: 'child' });
