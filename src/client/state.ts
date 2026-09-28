@@ -7,9 +7,10 @@ import type { DogState } from '../shared/dog';
 import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
+import type { TimeCardState } from '../shared/timecard';
 import type { InboxState } from '../shared/inbox';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'plans' | 'inbox';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'plans' | 'inbox' | 'timecard';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -161,6 +162,8 @@ class Store {
   queue: QueueState = { tasks: [], maxWorkers: 0 };
   /** The floor's 📒 To Do Next board. */
   plans: PlansState = { revision: 0, items: [] };
+  /** Your 🗂️ Indirect Time card: when you had the office open, per day (the whole building's, not the floor's). */
+  timecard: TimeCardState = { name: '', stints: [], open: false };
   /** The floor's 📥 in-tray: what came in from outside. */
   inbox: InboxState = { revision: 0, items: [], dir: '', door: false };
   /** The meeting room: the meeting at the table, and the ones before. */
@@ -420,6 +423,10 @@ class Store {
       case 'inbox':
         this.inbox = msg.state;
         this.emit('inbox');
+        break;
+      case 'timecard':
+        this.timecard = msg.state;
+        this.emit('timecard');
         break;
       case 'meeting':
         this.meeting = msg.state;

@@ -284,6 +284,8 @@ export const MANUAL: ManualChapter[] = [
       },
       { h: 'The board agents read it too' },
       { p: 'Every board agent knows the board through `office-plans` (`list`, `add`, `set <id> todo|progress|finished`, `remove <id>`) and queues an item with `office-queue add --plan <id>`. Ask the Queue agent to “queue everything on the To Do Next board” and it makes one task per item.' },
+      { h: 'Your hours: the Indirect Time card' },
+      { p: 'The 🗂️ **Indirect Time** index card beside the binder (or ☰ → **Indirect Time**) keeps your hours in the office, per day. You clock in when your first browser window opens the office and out when your last one closes, on whichever floor; a reload or a restart within 5 minutes carries on the same stint. It is the same card on every floor. **⬇️ CSV** downloads every day for a timesheet. The cards are kept on the office’s machine in `.agent-office/timecard.json`.' },
     ],
   },
   {

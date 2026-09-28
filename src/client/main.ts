@@ -69,6 +69,7 @@ import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elev
 import { toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { openPlans } from './ui/plans';
+import { openTimeCard, todayText } from './ui/timecard';
 import { openInbox } from './ui/inbox';
 import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
@@ -1665,6 +1666,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
     }
   } else if (target.kind === 'gong') hitGong();
   else if (target.kind === 'plans') openPlans(plansActions());
+  else if (target.kind === 'timecard') openTimeCard(net);
   else if (target.kind === 'whiteboard') openWhiteboard(net);
   else if (target.kind === 'cabinet') cabinet.play();
   else if (target.kind === 'ladder') grabLadder();
@@ -2160,6 +2162,10 @@ function hintFor(it: Interactable): Hint {
       return { k: `${left}|${best?.name}|${best?.score}`, parts: [title(`🕹️ ${GAME}`), aside(about), key('E', left !== null ? 'Carry on' : 'Play')] };
     }
     case 'plans': return { k: '', parts: [title('To Do Next'), aside('Your plans for this floor'), key('E', 'Open binder')] };
+    case 'timecard': {
+      const today = todayText();
+      return { k: today, parts: [title('🗂️ Indirect Time'), aside(`Today ${today} in the office`), key('E', 'Read card')] };
+    }
     case 'whiteboard': {
       const names = store.drawing.flatMap((id) => (id === store.you ? [] : (store.peers.get(id)?.name ?? []))).join(', ');
       return { k: names, parts: [title('📝 Whiteboard'), aside(names ? `✏️ ${clip(names, 40)} drawing` : 'draw together, live'), key('E', names ? 'Join in' : 'Draw')] };
@@ -2618,7 +2624,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2778,6 +2784,7 @@ const hud = mountHud(
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
     { id: 'services', icon: '🌐', label: 'Services', section: 'Open', count: () => store.services.items.length, title: () => 'Web servers the workers are running', run: () => openServices() },
     { id: 'plans', icon: '📒', label: 'To Do Next', section: 'Open', count: () => store.plans.items.filter((p) => p.status === 'todo').length, title: () => 'Your plans for this floor: hand them to the workers from here', run: () => openPlans(plansActions()) },
+    { id: 'timecard', icon: '🗂️', label: 'Indirect Time', section: 'Office', title: () => `Your hours with the office open, per day: ${todayText()} today`, run: () => openTimeCard(net) },
     { id: 'inbox', icon: '📥', label: 'In-tray', section: 'Open', key: 'I', count: () => store.inbox.items.length, title: () => 'What came in from outside: notes, forwarded emails and files, to file or queue', run: showInbox },
     { id: 'whiteboard', icon: '📝', label: 'Whiteboard', section: 'Open', title: () => 'Draw together, live', run: () => openWhiteboard(net) },
     // Up on the top bar while a meeting is on: what's being worked through in the meeting room.
