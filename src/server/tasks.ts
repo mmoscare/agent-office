@@ -5,6 +5,7 @@
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import type { WorkerTask } from '../shared/protocol.js';
+import { commandLaunch } from './windows-command.js';
 
 /** What a worker has been asked and has been doing lately. */
 export interface TaskContext {
@@ -144,7 +145,7 @@ function run(claude: string, env: Record<string, string>, input: string): Promis
     '--disable-slash-commands',
     '--no-session-persistence',
   ];
-  return new Promise((resolve) => {
+  return new Promise<string | null>((resolve) => {
     let out = '';
     let settled = false;
     const finish = (v: string | null) => {
@@ -153,11 +154,13 @@ function run(claude: string, env: Record<string, string>, input: string): Promis
       clearTimeout(timer);
       resolve(v);
     };
-    const child = spawn(claude, args, {
+    const launch = commandLaunch(claude, args);
+    const child = spawn(launch.file, launch.args, {
       // A neutral directory, so it doesn't pick up the project's CLAUDE.md.
       cwd: os.tmpdir(),
       env: { ...env, MAX_THINKING_TOKENS: '0' },
       stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
     });
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
@@ -169,7 +172,7 @@ function run(claude: string, env: Record<string, string>, input: string): Promis
     child.on('close', (code) => finish(code === 0 ? out : null));
     child.stdin.on('error', () => {});
     child.stdin.end(input);
-  });
+  }).catch(() => null);
 }
 
 function parse(out: string): WorkerTask | null {

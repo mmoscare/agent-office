@@ -129,7 +129,7 @@ test('board workers get both their role and the shared handoff rule', (t) => {
 test('shell launch and input do not receive agent instructions', (t) => {
   const { workers, launches } = fixture(t);
   const info = worker(workers.spawn('desk-1', 'Tester', undefined, false, 'shell'));
-  assert.deepEqual(launches[0].opts.args, ['-l']);
+  assert.deepEqual(launches[0].opts.args, process.platform === 'win32' && !process.env.SHELL ? [] : ['-l']);
   workers.prompt(info.id, 'git status');
   assert.equal(launches[0].input[0], '\x1b[200~git status\x1b[201~');
 });

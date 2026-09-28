@@ -75,6 +75,7 @@ try {
   const addProject = async () => {
     await page.evaluate(() => document.exitPointerLock());
     await page.locator('#project').click();
+    await page.getByRole('menuitem', { name: /Elevator.*Add a project/ }).click();
     await page.getByRole('button', { name: /Add a project/ }).click();
     assert.equal(await page.getByRole('button', { name: 'Local folder', exact: true }).getAttribute('aria-pressed'), 'true');
   };
@@ -83,7 +84,7 @@ try {
   await page.locator('.folder-row').filter({ hasText: 'multi repo project' }).click();
   await page.waitForFunction(dir => document.querySelector('#local-floor-path')?.value === dir, projectDir);
   assert.equal(await page.locator('.folder-row').count(), 2);
-  const screenshotDir = path.join(codeDir, 'tmp/screenshots');
+  const screenshotDir = path.join(codeDir, '.agent-office/verification/local-floor');
   await mkdir(screenshotDir, { recursive: true });
   await page.getByRole('dialog', { name: 'Elevator', exact: true }).screenshot({ path: path.join(screenshotDir, 'local-folder-picker.png') });
   await page.getByRole('button', { name: 'Open folder', exact: true }).click();
@@ -104,7 +105,8 @@ try {
   assert.equal(await page.locator('#local-floor-path').isVisible(), true);
   await page.getByRole('dialog', { name: 'Elevator', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await page.evaluate(() => document.exitPointerLock());
-  await page.locator('#btn-model-usage').click();
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: /Usage & cost/ }).click();
   await page.waitForFunction(() => document.querySelectorAll('.usage-record').length === 2);
   assert.match(await page.locator('.usage-summary').innerText(), /2,000 tokens.*\$0.42/);
   await page.getByRole('combobox', { name: 'Filter usage by provider' }).selectOption('codex');
@@ -124,9 +126,10 @@ try {
     const original = net.send.bind(net);
     window.__terminalInputs = [];
     net.send = msg => { if (msg.workerId === 'keyboard-fixture') window.__terminalInputs.push(msg); else original(msg); };
-    store.workers.set('keyboard-fixture', { id: 'keyboard-fixture', name: 'Keyboard fixture', kind: 'agent', provider: 'codex', deskId: 'desk-1', color: '#ff8a5b', status: 'idle', acked: true, createdBy: 'Test', createdAt: Date.now(), cols: 80, rows: 24, viewers: [] });
+    store.workers.set('keyboard-fixture', { id: 'keyboard-fixture', name: 'Keyboard fixture', kind: 'agent', provider: 'codex', deskId: 'desk-1', color: '#ff8a5b', status: 'idle', acked: true, createdBy: 'Test', createdAt: Date.now(), cols: 80, rows: 24, viewers: [], viewerIds: [] });
     store.emit('workers');
   });
+  await page.getByRole('button', { name: /Workers/ }).click();
   await page.locator('#workers li').filter({ hasText: 'Keyboard fixture' }).click();
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Escape');

@@ -66,11 +66,14 @@ test('a genuine question remains visible during parallel work, then clears when 
   assert.equal(f.w.info.status, 'needs_input');
   assert.equal(f.w.info.acked, false);
   f.hook('PreToolUse', { tool_name: 'read_file', tool_use_id: 'other' });
+  assert.equal(f.w.info.action, 'read', 'parallel work still updates the worker animation');
   f.hook('PostToolUse', { tool_name: 'read_file', tool_use_id: 'other' });
   assert.equal(f.w.info.status, 'needs_input');
   await f.screen(working);
   assert.equal(f.w.info.status, 'working');
   assert.equal(f.w.info.acked, true);
+  f.hook('Stop');
+  assert.equal(f.w.info.action, undefined, 'finishing clears the worker animation');
 });
 
 test('approval dismissal clears needs_input even without a matching post-tool hook', async t => {

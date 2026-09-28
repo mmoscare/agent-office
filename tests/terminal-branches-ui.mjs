@@ -60,6 +60,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => window.__office?.store.floor);
+  await page.getByRole('button', { name: /Workers/ }).click();
   async function openWorker(deskId, worktree) {
     await page.evaluate(({ deskId, worktree }) => window.__office.net.send({ t: 'worker.spawn', deskId, worktree, kind: 'agent', provider: 'custom' }), { deskId, worktree });
     await page.waitForFunction(id => [...window.__office.store.workers.values()].some(w => w.deskId === id), deskId);

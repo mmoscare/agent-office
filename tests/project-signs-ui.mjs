@@ -85,7 +85,10 @@ try {
   await page.evaluate(() => document.fonts.ready);
   const ride = async (id) => {
     await page.evaluate((floor) => window.__office.ride(floor), id);
-    await page.waitForFunction((floor) => window.__office.store.floor === floor && window.__office.office.elevator.open, id);
+    await page.waitForFunction((floor) => {
+      const o = window.__office;
+      return o.store.floor === floor && (floor === '@roof' ? o.roof()?.elevator.open : o.office.elevator.open);
+    }, id);
   };
   const snapshot = () => page.evaluate(() => {
     const signs = [];
@@ -94,8 +97,10 @@ try {
     });
     const textures = signs.map((sign) => sign.getObjectByName('project-sign-face').material.map);
     const canvas = textures[0].image;
+    window.__office.office.group.updateMatrixWorld(true);
     return {
       signs: signs.map((s) => s.name), shared: textures.every((t) => t === textures[0]),
+      heights: Object.fromEntries(signs.map((s) => [s.name, s.getWorldPosition(s.position.clone()).y])),
       pixels: canvas.toDataURL(), text: canvas.signText,
       trim: signs[0].children[0].material.color.getHexString(),
       logo: window.__office.store.project.logo,
@@ -112,6 +117,14 @@ try {
     return !canvas.signText.some((t) => t.text === 'AO');
   });
   const brand = await snapshot();
+  const streetDrop = await page.evaluate(() => window.__office.office.night.street);
+  assert.ok(streetDrop < -4, 'an upper floor has its street below it');
+  for (const side of ['inside', 'outside']) {
+    const exit = `project-sign-exit-${side}`;
+    const balcony = `project-sign-balcony-${side}`;
+    assert.ok(brand.heights[exit] < initial.heights[exit] - 4, 'exit plaques follow the ground-level door');
+    assert.equal(brand.heights[balcony], initial.heights[balcony], 'balcony plaques stay on the current floor');
+  }
   assert.notEqual(brand.trim, initial.trim, 'sign trim follows the floor palette');
   assert.ok(brand.text.some((t) => t.text === 'Agent Office'));
   const image = await context.request.get(url + brand.logo);
@@ -133,7 +146,8 @@ try {
   await photograph('whiteboard-front', [5.4, 3.25, 1.5], [5.4, 2.3, -5.4]);
   await photograph('whiteboard-back', [5.4, 2.3, -9.5], [5.4, 1.8, -5.4]);
   await photograph('elevator', [8.5, 3, -5.9], [8.5, 2.1, -10.6]);
-  await photograph('exit', [-13, 3, 6.5], [-18, 2.4, 6.5]);
+  const exitDrop = brand.heights['project-sign-exit-inside'] - initial.heights['project-sign-exit-inside'];
+  await photograph('exit', [-13, 3 + exitDrop, 6.5], [-18, 2.4 + exitDrop, 6.5]);
   await photograph('balcony', [-4, 3, 7], [-4, 2.4, 13]);
   await photograph('loft', [6, 5, 10.7], [9, 5, 12.1]);
   await ride(long);
@@ -161,8 +175,13 @@ try {
   const version = await page.evaluate(() => window.__office.office.group.getObjectByName('project-sign-face').material.map.version);
   await page.evaluate(() => { for (let i = 0; i < 20; i++) window.__office.store.emit('floors'); });
   assert.equal(await page.evaluate(() => window.__office.office.group.getObjectByName('project-sign-face').material.map.version), version, 'worker-count broadcasts do not redraw signage');
+  await ride('@roof');
+  assert.equal(await page.evaluate(() => window.__office.roof().group.visible), true);
+  await photograph('rooftop-elevator', [8.5, 3, -5.9], [8.5, 2.1, -10.6]);
+  await ride('sketchbook');
+  assert.deepEqual((await snapshot()).heights, initial.heights, 'returning to the ground floor restores the plaques');
   assert.deepEqual(errors, []);
-  console.log('PASS: 9 plaques, shared textures, authenticated local logos, floor palettes, initials, long names, floor rides, delayed image race, broken images, stable broadcasts and whiteboard interaction.');
+  console.log('PASS: 9 plaques, shared textures, authenticated local logos, floor palettes, initials, long names, upper-floor exit/balcony placement, rooftop elevator, floor rides, delayed image race, broken images, stable broadcasts and whiteboard interaction.');
   console.log(`Screenshots: ${shots}`);
 } finally {
   if (browser) await browser.close();
