@@ -11,6 +11,7 @@ import { buildPhone, type Phone } from './phone';
 import { buildJukebox, type JukeboxView } from './jukebox';
 import { buildCabinet, type CabinetModel } from './cabinet';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
+import { buildBookshelf } from './bookshelf';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
@@ -27,7 +28,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1766,6 +1767,18 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   const lamp = pendant();
   lamp.position.set(deskX, roofY - 0.4, cz);
   group.add(lamp);
+
+  // A bookshelf on the back wall, under the sign, with the Office Manual on it (world/bookshelf.ts).
+  const shelf = buildBookshelf();
+  const shelfX = maxX - 3;
+  const shelfZ = maxZ - shelf.depth / 2 - 0.02;
+  shelf.group.position.set(shelfX, floorY, shelfZ);
+  shelf.group.rotation.y = Math.PI;
+  group.add(shelf.group);
+  const manual: Interactable = { kind: 'manual', x: shelfX, y: floorY, z: shelfZ - 0.9, radius: 1.2 };
+  shelf.group.userData.interact = manual;
+  interactables.push(manual);
+  colliders.push({ minX: shelfX - shelf.width / 2, maxX: shelfX + shelf.width / 2, minZ: maxZ - shelf.depth - 0.02, maxZ, bottom: floorY, top: floorY + 1.4 });
 
   // Signs: one on the back wall inside, one over the glass for everyone downstairs.
   const inside = textPlane('👑 Boss Office', { bg: '#fffaf3', size: 64 });
