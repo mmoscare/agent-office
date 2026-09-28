@@ -228,23 +228,47 @@ test('an interrupt notice from an earlier turn, or quoted in the output, leaves 
   }
 });
 
-test('Claude idle notification that beats the progress marker cannot pass an Esc off as done', async () => {
+test('Claude idle notification that beats the progress marker publishes nothing, so an Esc never reads as done', async () => {
   const f = claudeScreen();
   try {
     f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    await f.output('> fix it\x1b]9;4;3\x07');
     // Hooks and terminal output travel separately, so the idle notification can be handled first.
     f.hook('Notification', { notification_type: 'idle_prompt' });
-    assert.equal(f.w.info.status, 'done');
-    await f.output(`> fix it\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
-    assert.equal(f.w.info.status, 'paused', 'only Stop proves the turn finished');
+    assert.equal(f.w.info.status, 'working');
+    await f.output(`\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused');
     f.manager.checkBlocked(f.w);
     assert.equal(f.w.info.status, 'interrupted');
-    // A done that Stop proved stays done, whatever order the idle reports come in.
+    assert.ok(!f.updates.includes('done'), 'the queue and plans never see a finished turn');
+    // The same race on a turn that finished: it reads as paused either way round, until Stop.
     f.hook('UserPromptSubmit', { prompt: 'again' });
     f.hook('Notification', { notification_type: 'idle_prompt' });
-    f.hook('Stop');
     await f.output('\x1b]9;4;0\x07');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused');
+    f.hook('Stop');
     assert.equal(f.w.info.status, 'done');
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('with no progress reports from Claude, the idle notification reads an Esc off the screen and otherwise completes the turn', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`● Ready.${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    await f.output(`${OVER_INPUT_BOX}> fix it\r\n${ESC_NOTICE}${INPUT_BOX}`);
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('UserPromptSubmit', { prompt: 'again' });
+    await f.output(`${OVER_INPUT_BOX}> again\r\n● Done.${INPUT_BOX}`);
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    assert.equal(f.w.info.status, 'done', 'with no Stop and no progress marker, the notification still stands in for Stop');
+    assert.equal(f.updates.filter((s) => s === 'done').length, 1);
   } finally {
     f.term.dispose();
   }

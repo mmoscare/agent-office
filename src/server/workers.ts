@@ -126,8 +126,8 @@ interface Worker {
   cancelledTurns: Set<string>;
   /** Where Claude's current turn starts on its screen: an interrupt notice at or above it is an older turn's. */
   turnStart?: { readonly line: number; dispose(): void };
-  /** This `done` came from Claude's idle notification, not a Stop hook, so it proves nothing: Esc leaves the prompt idle too. */
-  idleDone?: boolean;
+  /** Claude reports its progress on this terminal, so its idle marker, not the idle notification, says a turn stopped. */
+  reportsProgress?: boolean;
   /** Where the session's tokens and cost are read from (see usage.ts). */
   tracker: UsageTracker;
   scanTimer?: NodeJS.Timeout;
@@ -773,19 +773,19 @@ export class WorkerManager {
         if (payload?.notification_type === 'permission_prompt') {
           if (now - w.leftNeedsInputAt > LATE_PROMPT_GRACE_MS) this.setStatus(w, 'needs_input');
         } else if (payload?.notification_type === 'idle_prompt') {
-          // Stands in for a Stop hook that never came. It can beat the terminal's own progress report
-          // here, which may still say the turn only stopped (see onProgress).
-          if (w.info.status === 'working' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) {
-            this.setStatus(w, 'done');
-            w.idleDone = true;
+          // Stands in for a Stop hook that never came, when nothing else says the turn ended. Where
+          // Claude reports its progress, its idle marker does (see onProgress); this notification can
+          // beat that marker here, and Esc leaves the prompt idle too, so it proves nothing.
+          if (w.info.status === 'working' && !w.reportsProgress && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) {
+            if (this.interruptedOnScreen(w)) {
+              cancelTurn(w);
+              this.setStatus(w, 'interrupted');
+            } else this.setStatus(w, 'done');
           }
         }
         break;
       case 'Stop':
-        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) {
-          this.setStatus(w, 'done');
-          w.idleDone = false;
-        }
+        if (w.info.status !== 'interrupted' && !isCancelledTurn(w, hookTurnId(payload?.turn_id))) this.setStatus(w, 'done');
         break;
     }
     return true;
@@ -1167,6 +1167,7 @@ export class WorkerManager {
     w.screenDirty = true;
     w.fresh = undefined;
     w.turnStart = undefined;
+    w.reportsProgress = false;
     return term;
   }
 
@@ -1327,21 +1328,29 @@ export class WorkerManager {
   }
 
   private onProgress(w: Worker, busy: boolean) {
+    w.reportsProgress = true;
     const s = w.info.status;
     if (busy && (s === 'idle' || s === 'done' || s === 'starting' || isStopped(s))) this.setStatus(w, 'working');
     // Progress stays busy while a permission prompt is open, so going idle from needs_input means the
-    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event, and
-    // the idle notification's stand-in done may have arrived before it.
-    else if (!busy && (s === 'working' || (s === 'done' && w.idleDone) || (s === 'needs_input' && !w.bootBlocked))) {
+    // turn stopped. Only a Stop hook proves completion; it may arrive after this progress event.
+    else if (!busy && (s === 'working' || (s === 'needs_input' && !w.bootBlocked))) {
       this.setStatus(w, 'paused');
       // Look for Claude's interrupt notice on the next screen check (see checkBlocked).
       w.screenDirty = true;
     }
   }
 
+  /**
+   * Whether Claude's interrupt notice shows below where its current turn started. A start that's gone
+   * (its row erased by a whole-screen redraw, or out of the scrollback) can't tell it from an older one.
+   */
+  private interruptedOnScreen(w: Worker): boolean {
+    const start = w.turnStart?.line ?? -1;
+    return !!w.term && start >= 0 && lastInterruptNotice(w.term, start + 1) >= 0;
+  }
+
   private setStatus(w: Worker, status: WorkerStatus) {
     if (w.info.status === status) return;
-    w.idleDone = false;
     if (w.info.status === 'needs_input') w.leftNeedsInputAt = Date.now();
     w.info.status = status;
     // Done, idle or asleep: it's not acting anything out any more.
@@ -1430,11 +1439,9 @@ export class WorkerManager {
     if (w.info.kind !== 'agent' || !w.term || (w.info.provider !== 'claude' && w.info.provider !== 'custom')) return;
     const s = w.info.status;
     // Esc with no tool running fires no hook, so the turn only reads as paused. The notice Claude
-    // prints for it, below where the turn started, says it was interrupted. A start that's gone (its
-    // row erased by a whole-screen redraw, or out of the scrollback) can't tell it from an older one.
+    // prints for it says it was interrupted.
     if (s === 'paused') {
-      const start = w.turnStart?.line ?? -1;
-      if (start >= 0 && lastInterruptNotice(w.term, start + 1) >= 0) {
+      if (this.interruptedOnScreen(w)) {
         cancelTurn(w);
         this.setStatus(w, 'interrupted');
       }
