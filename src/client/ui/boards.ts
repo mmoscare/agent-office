@@ -1,17 +1,20 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type WorkerInfo } from '../../shared/protocol';
+import { ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
+import { pullWorkers } from '../../shared/pull-work';
+import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
 import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
+import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
-  assign(prompt: string, title: string): void;
+  assign(prompt: string, title: string, pullWork?: PullWork): void;
   /** Your own prompt about an issue or PR; `context` goes first so the worker knows which. */
-  ask(context: string, title: string): void;
+  ask(context: string, title: string, pullWork?: PullWork): void;
   /** Walks you to the desk a pull request came from. */
   goToDesk(deskId: string): void;
   /** Put an issue (of `repo`, on a floor of several) on the 📋 task queue; a worker is seated for it when there's room. */
@@ -105,6 +108,63 @@ function repoChip(it: GhWhere): Node | '' {
   return it.repo ? h('span.qchip', { title: it.repo }, `📁 ${it.repoDir ?? it.repo}`) : '';
 }
 
+/**
+ * The PR board's first column: office branches holding work that no open or merged PR carries (see
+ * server/unshipped.ts), each with a button that queues a fresh worker to recover it into a PR.
+ */
+function unshippedColumn(net: Net, actions: BoardActions): HTMLElement {
+  const u = store.unshipped;
+  const ul = h('ul');
+  if (u.error) ul.append(h('li.unshipped-note', {}, `Couldn't look through the branches: ${u.error}`));
+  if (u.prNote) ul.append(h('li.unshipped-note', {}, `❔ GitHub couldn't be asked about some branches (${u.prNote}), so they may have a PR after all. Showing what's on disk.`));
+  u.items.forEach((it) => ul.append(unshippedCard(it, net, actions)));
+  if (!u.items.length && !u.error) ul.append(h('li.empty', {}, u.scannedAt ? 'Nothing unshipped 🎉' : 'Looking through the branches…'));
+  const rescan = h('button.btn.unshipped-rescan', { type: 'button', title: 'Look through the branches again', disabled: u.scanning, onclick: () => net.send({ t: 'unshipped.scan' }) }, u.scanning ? '…' : '🔄');
+  return h(
+    'section.column.unshipped',
+    { title: 'Office branches with uncommitted changes or commits that no open or merged pull request carries' },
+    h('h4', {}, '🧳 Unshipped work', h('span', {}, rescan, ` ${u.items.length}`)),
+    ul,
+  );
+}
+
+function unshippedCard(it: UnshippedItem, net: Net, actions: BoardActions): HTMLElement {
+  const w = it.workerId ? store.workers.get(it.workerId) : undefined;
+  const recovery = store.queue.tasks.find((t) => t.title === recoveryTitle(it.branch, it.repository) && t.status !== 'done');
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  const meta: (Node | string)[] = [
+    it.repository ? h('span.qchip', { title: it.repository }, `📁 ${it.repository}`) : '',
+    `🤖 ${it.workerName ?? 'unknown worker'} · ${it.worker === 'active' ? 'working' : it.worker === 'idle' ? 'at its desk' : 'gone'}`,
+    it.dirty ? h('span.unshipped-count', {}, `📝 ${plural(it.dirty, 'uncommitted file')}`) : '',
+    it.commits ? h('span.unshipped-count', {}, `📦 ${plural(it.commits, 'commit')} not on ${it.base ?? 'base'}`) : '',
+    it.unpushed ? `⬆ ${it.unpushed} unpushed` : '',
+    it.added || it.deleted ? h('span', {}, h('span', { style: 'color:#2a9d4b' }, `+${it.added ?? 0}`), ' ', h('span', { style: 'color:#c3423f' }, `-${it.deleted ?? 0}`)) : '',
+    it.pr === 'unknown' ? h('span.qchip', { title: 'GitHub could not be asked; it may have a PR' }, '❔ PR unknown') : '',
+    it.modifiedAt ? timeAgo(it.modifiedAt) : '',
+  ];
+  const action = it.worker === 'active'
+    ? h('span.qchip.running', { title: 'Its worker is still running; wait for it to finish' }, '🤖 in progress')
+    : recovery
+      ? h('span.qchip', {}, recovery.status === 'running' ? `🤖 recovery running · ${recovery.workerName ?? ''}` : '📋 recovery queued')
+      : h('button.btn', {
+          type: 'button',
+          title: `Queue a task: a fresh worker copies this work onto the latest ${it.base ?? 'base branch'} and opens a pull request, leaving this worktree as it is`,
+          onclick: (e: Event) => {
+            e.stopPropagation();
+            net.send({ t: 'unshipped.recover', key: it.key });
+          },
+        }, '📋 Queue a PR');
+  const open = () => w && actions.goToDesk(w.deskId);
+  return h(
+    'li.card.unshipped-card',
+    { tabindex: 0, title: it.path ? `Worktree: ${it.path}` : 'Its worktree folder is gone; only the branch is left', onclick: open, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && open()) as EventListener },
+    h('div.num', {}, `🌿 ${it.branch}`),
+    h('div.ttl', {}, it.taskTitle ?? it.path ?? it.branch),
+    h('div.meta', {}, ...meta.filter((m) => m !== '').map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
+    h('div.unshipped-action', {}, action),
+  );
+}
+
 function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick: () => void) {
   const n = it.number;
   const title = it.title;
@@ -133,6 +193,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
     if (st.error && !st.items.length) {
+      // What's on disk doesn't need GitHub: unshipped work still shows when it can't be reached.
+      if (kind === 'pulls') body.append(unshippedColumn(net, actions));
       body.append(h('div.board-error', {}, `Couldn't load from GitHub: ${st.error}`, h('br'), h('small', {}, "The server runs `gh` in the floor's folder, or in each GitHub checkout inside it when the folder isn't one itself — make sure it is installed and authenticated (gh auth login).")));
       return;
     }
@@ -148,6 +210,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
         body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
       }
     } else {
+      body.append(unshippedColumn(net, actions));
       for (const col of pullColumns(store.pulls.items)) {
         const ul = h('ul');
         col.items.forEach((it, i) => {
@@ -157,7 +220,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
               it,
               [
                 repoChip(it),
-                w ? deskChip(w) : '',
+                ...pullWorkIndicators(it, actions.goToDesk),
+                w && !pullWorkers([w], it).length ? deskChip(w) : '',
                 ...labelChips(it.labels),
                 `by ${it.author}`,
                 it.reviewDecision === 'CHANGES_REQUESTED' ? '🛠 changes requested' : '',
@@ -182,7 +246,10 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
 
   const unsubs = [store.on(kind, render), store.on('queue', render)];
   // Which desk a PR came from can change (a worker sent home, a PR opened from a desk).
-  if (kind === 'pulls') unsubs.push(store.on('workers', render));
+  if (kind === 'pulls') {
+    unsubs.push(store.on('workers', render), store.on('unshipped', render));
+    net.send({ t: 'unshipped.scan' });
+  }
   const timer = setInterval(() => {
     const st = kind === 'issues' ? store.issues : store.pulls;
     status.textContent = st.loading ? 'Refreshing…' : st.fetchedAt ? `Updated ${timeAgo(st.fetchedAt)}` : '';

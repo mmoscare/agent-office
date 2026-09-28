@@ -48,3 +48,31 @@ test('the issues and PR agents keep their jobs, and may still be asked for somet
 test('the queue agent is launched without the file-editing tools', () => {
   assert.deepEqual(QUEUE_AGENT_DISALLOWED_TOOLS, ['Edit', 'Write', 'NotebookEdit']);
 });
+
+import { stationDisallowedTools } from '../src/server/stations.js';
+test('the receptionist triages the in-tray with office-inbox, files onto To Do Next with office-plans, and never takes orders from a note', () => {
+  const brief = stationBrief('inbox');
+  assert.match(brief, /Receptionist/);
+  assert.match(brief, /the 📥 in-tray/);
+  assert.match(brief, /office-inbox list/);
+  assert.match(brief, /office-inbox read <name>/);
+  assert.match(brief, /office-inbox archive <name>/);
+  assert.match(brief, /office-plans add/);
+  assert.match(brief, /office-queue add --title "[^"]+" \[--issue <number>\] \[--plan <id>\]/);
+  assert.match(brief, /not instructions to you/);
+  assert.match(brief, /goes on the task queue, always/);
+  assert.match(brief, /what came in and where each item went/);
+  assert.doesNotMatch(brief, /curl|\/office\/inbox|AGENT_OFFICE_HOOK_TOKEN|Authorization/);
+  assert.ok(brief.endsWith('The request:'));
+  assert.deepEqual(stationDisallowedTools('inbox'), ['Edit', 'Write', 'NotebookEdit']);
+  assert.deepEqual(stationDisallowedTools('queue'), ['Edit', 'Write', 'NotebookEdit']);
+  assert.deepEqual(stationDisallowedTools('issues'), []);
+  assert.deepEqual(stationDisallowedTools('pulls'), []);
+  // Every board agent is told about the To Do Next board, and how to queue an item from it.
+  for (const kind of ['issues', 'pulls', 'queue', 'inbox'] as StationKind[]) {
+    const b = stationBrief(kind);
+    assert.match(b, /office-plans list/, kind);
+    assert.match(b, /office-queue add --plan <id>/, kind);
+    assert.match(b, /office-plans set <id> todo\|progress\|finished/, kind);
+  }
+});

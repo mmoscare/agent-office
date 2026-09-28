@@ -3,6 +3,7 @@ import { FLOOR, SLAB, STREET_Y, WALL_T } from '../../shared/layout';
 import type { SkyState, Theme, Weather } from '../../shared/protocol';
 import { guessPlace, sunPosition } from '../../shared/sun';
 import type { NightParts } from './outside';
+import { ShootingStars } from './shooting-star';
 
 /*
  * Day, night and the weather outside the windows. The server says where the office is and what the
@@ -409,6 +410,8 @@ export class Sky {
 
   private readonly dome = new THREE.Group();
   private readonly stars: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  /** Now and then on a clear night, a shooting star (see shooting-star.ts). */
+  private readonly meteors = new ShootingStars();
   private readonly sunDisc: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private readonly moonDisc: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   private readonly halos: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>[] = [];
@@ -453,7 +456,7 @@ export class Sky {
     this.sunDisc = disc(5, '#fff4c8');
     this.moonDisc = disc(3.2, '#f2f1ea');
     this.moonDisc.material.map = moonTexture();
-    this.dome.add(this.spookyDome, this.stars, this.sunDisc, this.moonDisc);
+    this.dome.add(this.spookyDome, this.stars, this.meteors.group, this.sunDisc, this.moonDisc);
     scene.add(this.dome);
 
     // Halos round the bulbs at night, one set of points per size (and per floor or street).
@@ -525,6 +528,11 @@ export class Sky {
   show(preview: { hour?: number; weather?: Weather; intensity?: number }) {
     this.preview = preview;
     this.snap = true;
+  }
+
+  /** For quick checks from the console: send a shooting star across the sky now (seen only at night). */
+  shootingStar() {
+    this.meteors.launch();
   }
 
   /**
@@ -722,6 +730,7 @@ export class Sky {
     const clear = (1 - this.cover) * (1 - this.fog);
     this.stars.material.opacity = (1 - day) ** 2 * clear;
     this.stars.visible = this.stars.material.opacity > 0.01;
+    this.meteors.update(dt, this.stars.material.opacity);
     const up = (e: number, a: number, m: THREE.Mesh) => m.position.set(Math.cos(e) * Math.sin(a) * 160, Math.sin(e) * 160, -Math.cos(e) * Math.cos(a) * 160);
     up(el, az, this.sunDisc);
     this.sunDisc.material.color.copy(C.sunLow).lerp(C.white, smooth(0, 20, elD));

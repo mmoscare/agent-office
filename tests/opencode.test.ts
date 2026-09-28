@@ -55,7 +55,7 @@ test('writes a loadable plugin module that forwards root events and excludes sub
     assert.deepEqual(sent, [
       { type: 'session', sessionId: 'ses_existing', status: 'working' },
       { type: 'session', sessionId: 'ses_root', status: 'starting' },
-      { type: 'prompt', sessionId: 'ses_root', status: 'working', prompt: 'fix the thing' },
+      { type: 'prompt', sessionId: 'ses_root', status: 'working', turnId: '1', prompt: 'fix the thing' },
       { type: 'session', sessionId: 'ses_root', status: 'working' },
     ]);
 
@@ -96,15 +96,15 @@ test('writes a loadable plugin module that forwards root events and excludes sub
     ]);
     assert.deepEqual(sent, [
       { type: 'session', sessionId: 'saved', status: 'starting' },
-      { type: 'prompt', sessionId: 'saved', status: 'working', prompt: 'continue here' },
-      { type: 'session', sessionId: 'saved', status: 'done' },
+      { type: 'prompt', sessionId: 'saved', status: 'working', turnId: '1', prompt: 'continue here' },
+      { type: 'session', sessionId: 'saved', status: 'done', turnId: '1' },
     ]);
     await selected['chat.message']({ sessionID: 'child' }, { parts: [{ type: 'text', text: 'child task' }] });
     assert.equal(sent.length, 3, 'a child prompt must not take over the worker');
 
     // State belongs to the plugin instance, even when OpenCode caches the module itself.
     await hooks.event({ event: { type: 'session.status', properties: { sessionID: 'ses_root', status: { type: 'idle' } } } });
-    assert.deepEqual(sent.at(-1), { type: 'session', sessionId: 'ses_root', status: 'done' });
+    assert.deepEqual(sent.at(-1), { type: 'session', sessionId: 'ses_root', status: 'done', turnId: '1' });
 
     sent.length = 0;
     const event = (type: string, properties: Record<string, unknown>) => selected.event({ event: { type, properties: { sessionID: 'saved', ...properties } } });
@@ -116,6 +116,24 @@ test('writes a loadable plugin module that forwards root events and excludes sub
     assert.equal((sent.at(-1) as any).status, 'working');
     await event('session.error', { error: { name: 'APIError', data: { message: 'Unavailable' } } });
     assert.deepEqual(sent.at(-1), { type: 'error', sessionId: 'saved', status: 'needs_input', detail: 'Unavailable' });
+    await event('permission.asked', { id: 'cancelled-permission', permission: 'edit' });
+    await event('session.error', { error: { name: 'MessageAbortedError', data: { message: 'aborted' } } });
+    assert.deepEqual(sent.at(-1), { type: 'error', sessionId: 'saved', status: 'interrupted', detail: 'Turn interrupted', turnId: '1' });
+    await event('message.updated', { info: {
+      id: 'aborted-reply', sessionID: 'saved', role: 'assistant', error: { name: 'MessageAbortedError' },
+      tokens: { input: 3, output: 2 }, cost: 0.1,
+    } });
+    assert.deepEqual(sent.at(-2), { type: 'error', sessionId: 'saved', status: 'interrupted', detail: 'Turn interrupted', turnId: '1' });
+    assert.equal((sent.at(-1) as any).type, 'usage', 'aborted reply usage is still counted');
+    const beforeLateReply = sent.length;
+    await event('permission.replied', { requestID: 'cancelled-permission', reply: 'reject' });
+    assert.equal(sent.length, beforeLateReply, 'a late permission reply cannot restart an aborted turn');
+    const beforeChild = sent.length;
+    await event('session.error', { sessionID: 'child', error: { name: 'MessageAbortedError' } });
+    await event('message.updated', { sessionID: 'child', info: {
+      id: 'child-abort', sessionID: 'child', role: 'assistant', error: { name: 'MessageAbortedError' },
+    } });
+    assert.ok(sent.slice(beforeChild).every((value: any) => value.type === 'usage'), 'child abort cannot interrupt root');
   } finally {
     globalThis.fetch = oldFetch;
     if (oldUrl === undefined) delete process.env.AGENT_OFFICE_HOOK_URL; else process.env.AGENT_OFFICE_HOOK_URL = oldUrl;

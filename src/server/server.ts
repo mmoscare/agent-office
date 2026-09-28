@@ -12,6 +12,7 @@ import type { Config } from './config.js';
 import { Auth, type Session } from './auth.js';
 import { Accounts } from './accounts.js';
 import { childEnv, resolveCommand } from './workers.js';
+import { ConsoleShells } from './console-shell.js';
 import { configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
 import { createOpenCodeModelCatalogue } from './models.js';
 import { Team } from './team.js';
@@ -19,6 +20,7 @@ import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
 import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
+import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
 import { ApiBalances } from './api-balances.js';
 import type { BalanceUpdate } from '../shared/api-balances.js';
@@ -29,6 +31,8 @@ import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
+import { PlansError } from './plans.js';
+import { INBOX_SERVE_MAX, InTrayDoor, InboxError, fileType, plainName, readBytes } from './inbox.js';
 import { Sky } from './sky.js';
 import { Themes } from './theme.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
@@ -36,7 +40,10 @@ import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
+import { taskStatus, unshippedText } from '../shared/task-status.js';
 import { normalizeRepo } from '../shared/floors.js';
+import { PLAN_COLUMNS, PLAN_TEXT_MAX, planTitle, type PlanStatus } from '../shared/plans.js';
+import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../shared/inbox.js';
 import { DESK_BY_ID, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
@@ -174,6 +181,8 @@ function arrivalSpot(at: unknown): { x: number; y: number; z: number; rotY: numb
   return { x: clamp(a.x, -60, 60), y: clamp(a.y, streetBelow(MAX_FLOORS - 1), 10), z: clamp(a.z, -60, 60), rotY: num(a.rotY) };
 }
 const issueNumber = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
+/** A worker's side shell, in a client's `attached` and `stale` sets (its own terminal goes by its id). */
+const sideKey = (workerId: string) => `side:${workerId}`;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const TOO_MANY_ATTEMPTS = 'Too many attempts. Try again in a few minutes.';
 /** WebSocket close code for a session that stopped counting: the account was revoked, or the shared password switched off. */
@@ -216,6 +225,13 @@ export async function startServer(cfg: Config) {
     }
   };
   const toastAll = (text: string, level: ToastLevel = 'info') => broadcast({ t: 'toast', text, level });
+  const consoleStale = new Set<string>();
+  const consoles = new ConsoleShells((id, msg) => {
+    const c = clients.get(id);
+    if (!c || c.out) return;
+    if (msg.t === 'console.data' && (consoleStale.has(id) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES)) consoleStale.add(id);
+    else sendTo(c, msg);
+  });
 
   // --- The building: a floor per project, each with its own workers, boards and queue -----------
   const building = new Building(cfg.dataDir, cfg.projectsDir);
@@ -230,6 +246,8 @@ export async function startServer(cfg: Config) {
     for (const f of floors.values()) if (f.workers.get(workerId)) return f;
     return undefined;
   };
+  /** The in-tray door (POST /api/inbox from outside), one for the whole building (see inbox.ts). */
+  const door = new InTrayDoor(cfg.dataDir);
   /** To everyone on one floor. */
   const toFloor = (floor: Floor, msg: ServerMsg, droppable = false) => {
     const json = JSON.stringify(msg);
@@ -274,6 +292,8 @@ export async function startServer(cfg: Config) {
       return send(res, 400, {});
     }
     if (url.pathname === '/office/queue') return officeQueue(req, res, url);
+    if (url.pathname === '/office/plans') return officePlans(req, res, url);
+    if (url.pathname === '/office/inbox') return officeInbox(req, res, url);
     if (req.method !== 'POST' || !['/hooks/claude', '/hooks/opencode', '/hooks/codex'].includes(url.pathname)) return send(res, 404, { ok: false });
     let payload: unknown = {};
     try {
@@ -309,7 +329,8 @@ export async function startServer(cfg: Config) {
       const q = floor.queue.state();
       return {
         maxWorkers: q.maxWorkers,
-        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, outcome: t.outcome, issue: t.issue, repo: t.repo, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error })),
+        // `state` and `unshipped` say honestly what a finished task left behind (see shared/task-status.ts).
+        tasks: q.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, state: taskStatus(t).text, outcome: t.outcome, issue: t.issue, repo: t.repo, plan: t.plan, addedBy: t.addedBy, worker: t.workerName, branch: t.branch, pr: t.pr, error: t.error, unshipped: unshippedText(t.unshipped) || undefined })),
       };
     };
     if (req.method === 'GET') return send(res, 200, view());
@@ -318,7 +339,7 @@ export async function startServer(cfg: Config) {
       return err ? send(res, 400, { error: err }) : send(res, 200, view());
     }
     if (req.method !== 'POST') return send(res, 405, { error: 'GET, POST or DELETE' });
-    let body: { prompt?: unknown; title?: unknown; issue?: unknown; repo?: unknown };
+    let body: { prompt?: unknown; title?: unknown; issue?: unknown; repo?: unknown; plan?: unknown };
     try {
       body = JSON.parse(await readBody(req));
     } catch {
@@ -327,11 +348,134 @@ export async function startServer(cfg: Config) {
     const issue = Number.isInteger(body?.issue) && (body.issue as number) > 0 ? (body.issue as number) : undefined;
     const repo = normalizeRepo(body?.repo);
     if (issue !== undefined && !repo && floor.github.checkouts.length > 1) return send(res, 400, { error: `This floor holds several repositories: send "repo" (owner/name) with "issue", one of ${floor.github.checkouts.map((c) => c.repo).join(', ')}` });
-    const err = floor.queue.add(str(body?.prompt, 20000), agent.name, str(body?.title, 200) || undefined, issue, undefined, undefined, undefined, repo);
+    const plan = str(body?.plan, 64) || undefined;
+    if (plan && !floor.plans.state().items.some((p) => p.id === plan)) return send(res, 400, { error: `There is no To Do Next item ${plan} (see office-plans list)` });
+    const err = floor.queue.add(str(body?.prompt, 20000), agent.name, str(body?.title, 200) || undefined, issue, undefined, undefined, undefined, repo, plan);
     if (err) return send(res, 400, { error: err });
     const task = floor.queue.state().tasks.at(-1)!;
-    toastFloor(floor, `📋 The ${agent.name} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : `“${task.title}”`}`);
+    toastFloor(floor, `📋 The ${agent.name} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : `“${task.title}”`}${plan ? ' from To Do Next' : ''}`);
     send(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status } });
+  };
+  /** The agent standing by a board that's asking, for the /office/* endpoints; the refusal is already sent when there isn't one. */
+  const boardAgent = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string): { floor: Floor; agent: { id: string; name: string } } | undefined => {
+    const workerId = url.searchParams.get('worker') ?? '';
+    const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+    const floor = workerFloor(workerId);
+    const agent = floor?.workers.authenticate(workerId, token);
+    if (!floor || !agent) {
+      send(res, 401, { error: 'Send your own AGENT_OFFICE_WORKER_ID as ?worker= and AGENT_OFFICE_HOOK_TOKEN as the bearer token' });
+      return undefined;
+    }
+    if (!DESK_BY_ID.get(agent.deskId)?.station) {
+      send(res, 403, { error: `Only the agents standing by the boards can use ${what}` });
+      return undefined;
+    }
+    return { floor, agent };
+  };
+  /**
+   * The 📒 To Do Next board, for the board agents (office-plans): GET lists it; POST adds, moves or
+   * removes an item ({"action": "add", "text"}, {"action": "edit", "id", "status"} or {"action": "remove", "id"}).
+   */
+  const officePlans = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'the To Do Next board');
+    if (!who) return;
+    const { floor, agent } = who;
+    try {
+      if (req.method === 'GET') return send(res, 200, floor.plans.read());
+      if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
+      let body: { action?: unknown; id?: unknown; text?: unknown; status?: unknown };
+      try {
+        body = JSON.parse(await readBody(req, 128 * 1024));
+      } catch {
+        return send(res, 400, { error: 'Send JSON: {"action": "add", "text": "…"}, {"action": "edit", "id": "…", "status": "progress"} or {"action": "remove", "id": "…"}' });
+      }
+      const action = body?.action;
+      if (action !== 'add' && action !== 'edit' && action !== 'remove') return send(res, 400, { error: 'The action is add, edit or remove' });
+      const id = str(body?.id, 64);
+      const state = floor.plans.apply(
+        action === 'add'
+          ? { action, text: str(body?.text, PLAN_TEXT_MAX + 1) }
+          : action === 'remove'
+            ? { action, id }
+            : { action, id, ...(body?.text !== undefined ? { text: str(body.text, PLAN_TEXT_MAX + 1) } : {}), ...(body?.status !== undefined ? { status: body.status as PlanStatus } : {}) },
+      );
+      const item = action === 'add' ? state.items.at(-1) : state.items.find((p) => p.id === id);
+      const what = item ? `“${planTitle(item.text)}”` : 'an item';
+      toastFloor(floor, action === 'add' ? `📒 The ${agent.name} added ${what} to To Do Next` : action === 'remove' ? `📒 The ${agent.name} took an item off To Do Next` : body?.status !== undefined && item ? `📒 The ${agent.name} moved ${what} to ${PLAN_COLUMNS[item.status]}` : `📒 The ${agent.name} edited ${what} on To Do Next`);
+      return send(res, 200, { ok: true, item, state });
+    } catch (error) {
+      if (error instanceof PlansError) return send(res, error.status, { error: error.message });
+      throw error;
+    }
+  };
+  /**
+   * The 📥 in-tray, for the board agents (office-inbox): GET lists it, or with ?read=<name> gives one
+   * item (a note's text, or a file's path); POST {"action": "archive", "name"} puts an item away.
+   */
+  const officeInbox = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'the in-tray');
+    if (!who) return;
+    const { floor, agent } = who;
+    try {
+      if (req.method === 'GET') {
+        const name = url.searchParams.get('read');
+        if (name === null) return send(res, 200, { dir: floor.inbox.dir, items: floor.inbox.list() });
+        return send(res, 200, await floor.inbox.read(name));
+      }
+      if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
+      let body: { action?: unknown; name?: unknown };
+      try {
+        body = JSON.parse(await readBody(req, 16 * 1024));
+      } catch {
+        return send(res, 400, { error: 'Send JSON: {"action": "archive", "name": "…"}' });
+      }
+      if (body?.action !== 'archive') return send(res, 400, { error: 'The action is archive' });
+      const name = str(body?.name, 256);
+      const where = floor.inbox.archive(name);
+      toastFloor(floor, `📥 The ${agent.name} put ${name} away`);
+      return send(res, 200, { ok: true, path: where });
+    } catch (error) {
+      if (error instanceof InboxError) return send(res, error.status, { error: error.message });
+      throw error;
+    }
+  };
+  /**
+   * The in-tray door: POST /api/inbox from outside the office, with the token an admin made as the
+   * bearer token (or ?token=). A JSON body {"title", "text", "from"} or a text body becomes a note;
+   * anything else is saved as a file named by its X-Filename header (or ?name=). ?floor= says which
+   * floor's tray; it can be left out while the building has one floor.
+   */
+  const inboxDoor = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const ip = clientIp(req, cfg.trustProxy);
+    if (!door.allow(ip)) return send(res, 429, { error: 'Too many requests. Try again in a minute.' });
+    if (!door.open) return send(res, 403, { error: 'The in-tray door is closed: an admin can open it from the In-tray window in the office.' });
+    const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '') || url.searchParams.get('token') || '';
+    if (!door.check(token)) return send(res, door.allowBadToken(ip) ? 401 : 429, { error: 'That token does not open the in-tray door.' });
+    const wanted = url.searchParams.get('floor');
+    const floor = wanted ? floors.get(wanted) : floors.size === 1 ? floors.values().next().value : undefined;
+    if (!floor) return send(res, 400, { error: wanted ? `No floor called ${wanted}` : `Say which floor's tray with ?floor=<id>: one of ${[...floors.keys()].join(', ')}` });
+    const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    const title = str(url.searchParams.get('title'), 200);
+    const from = str(url.searchParams.get('from'), 200);
+    try {
+      let name: string;
+      if (type === 'application/json') {
+        const body = JSON.parse((await readBytes(req, INBOX_NOTE_MAX + 4096)).toString('utf8') || '{}') as Record<string, unknown> | null;
+        name = floor.inbox.note(str(body?.title, 200) || title, str(body?.text ?? body?.body ?? body?.note, INBOX_NOTE_MAX + 1), str(body?.from, 200) || from || undefined);
+      } else if (!type || type.startsWith('text/')) {
+        name = floor.inbox.note(title, (await readBytes(req, INBOX_NOTE_MAX + 4096)).toString('utf8'), from || undefined);
+      } else {
+        const given = str(req.headers['x-filename'], 300) || str(url.searchParams.get('name'), 300);
+        if (!given) return send(res, 400, { error: 'Name the file: an X-Filename header, or ?name=' });
+        name = floor.inbox.file(given, await readBytes(req, INBOX_FILE_MAX));
+      }
+      toastFloor(floor, `📥 Something came in through the in-tray door: ${name}`);
+      return send(res, 201, { ok: true, floor: floor.id, name });
+    } catch (error) {
+      if (error instanceof InboxError) return send(res, error.status, { error: error.message });
+      if (error instanceof SyntaxError) return send(res, 400, { error: 'That JSON could not be read' });
+      throw error;
+    }
   };
   // Workers' terminals outlive a restart of the office (see ptys.ts) with this address in their
   // environment, so listen where the last office did when that port is free.
@@ -422,14 +566,15 @@ export async function startServer(cfg: Config) {
     capacity: machine,
     emit: toFloor,
     toast: toastFloor,
-    termData: (workerId, data, viewers) => {
-      const json = JSON.stringify({ t: 'term.data', workerId, data } satisfies ServerMsg);
+    termData: (workerId, data, viewers, side) => {
+      const json = JSON.stringify({ t: side ? 'side.data' : 'term.data', workerId, data } satisfies ServerMsg);
+      const key = side ? sideKey(workerId) : workerId;
       for (const id of viewers) {
         const c = clients.get(id);
         if (!c || c.ws.readyState !== WebSocket.OPEN) continue;
         // A viewer on a slow link skips output and gets a fresh snapshot once it catches up,
         // instead of queueing unbounded data in server memory.
-        if (c.stale.has(workerId) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(workerId);
+        if (c.stale.has(key) || c.ws.bufferedAmount > SLOW_CLIENT_BYTES) c.stale.add(key);
         else c.ws.send(json);
       }
     },
@@ -461,6 +606,7 @@ export async function startServer(cfg: Config) {
       return n;
     },
     peers: (floor) => [...clients.values()].filter((c) => c.peer.floor === floor.id).map((c) => c.peer),
+    inboxDoor: () => door.open,
   };
   const openFloor = (def: FloorDef): Floor | undefined => {
     if (!existsSync(def.dir)) {
@@ -537,7 +683,10 @@ export async function startServer(cfg: Config) {
     jukebox: floor?.jukebox.state() ?? { on: false, track: JUKEBOX_TUNES[0].id, startedAt: Date.now(), elapsed: 0 },
     whiteboard: { elements: floor?.whiteboard.scene() ?? [], people: floor ? drawing(floor) : [] },
     meeting: floor?.meetings.state() ?? { current: null, past: [] },
+    unshipped: floor?.unshipped.state,
     cabinet: { ...cabinetState(floor), frame: (floor && cabinetPlayer(floor)?.frame) ?? null },
+    plans: floor?.plans.state() ?? { revision: 0, items: [] },
+    inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
   });
   /** The rooftop bar: nobody works up there, so it has none of a floor's things. */
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
@@ -697,6 +846,8 @@ export async function startServer(cfg: Config) {
       if (p === '/claim' || p === '/claim.html') return serveFile(res, path.join(publicDir, 'claim.html'), false);
       if (p === '/join' || p === '/join.html') return serveFile(res, path.join(publicDir, 'join.html'), false);
       if (p === '/favicon.svg') return serveFile(res, path.join(publicDir, 'favicon.svg'), false);
+      // The in-tray door lets things in from outside with its own token, not a signed-in session.
+      if (p === '/api/inbox' && req.method === 'POST') return await inboxDoor(req, res, url);
 
       const session = auth.fromRequest(req);
       if (!session) {
@@ -719,6 +870,9 @@ export async function startServer(cfg: Config) {
         });
         res.end(logo.bytes);
         return;
+      }
+      if (p === '/api/ledger' && req.method === 'GET') {
+        return send(res, 200, ledgerFacts(ledger.state(), floors.values()));
       }
       if (p === '/api/model-usage' && req.method === 'GET') {
         const waiting = [];
@@ -758,7 +912,65 @@ export async function startServer(cfg: Config) {
           return send(res, 400, { error: (err as Error).message });
         }
       }
-      if (p === '/api/workspace/repositories' && req.method === 'GET') {
+      if (p === '/api/plans') {
+        const floor = floors.get(url.searchParams.get('floor') ?? '');
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        res.setHeader('cache-control', 'no-store');
+        try {
+          if (req.method === 'GET') return send(res, 200, floor.plans.read());
+          if (req.method !== 'POST') return send(res, 405, { error: 'Use GET or POST' });
+          if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+          let body: unknown;
+          try { body = JSON.parse(await readBody(req, 128 * 1024)); }
+          catch { return send(res, 400, { error: 'The plan could not be read. Keep it under 10,000 characters.' }); }
+          return send(res, 200, floor.plans.change(body));
+        } catch (error) {
+          if (error instanceof PlansError) return send(res, error.status, { error: error.message });
+          throw error;
+        }
+      }
+      if (p === '/api/inbox/door') {
+        // The in-tray door's state; admins open it (a new token, shown once) and close it.
+        const admin = meOf(session.account?.id).admin;
+        if (req.method === 'GET') return send(res, 200, { ...door.info(), admin, floors: [...floors.values()].map((f) => ({ id: f.id, name: f.project.name })) });
+        if (req.method !== 'POST' && req.method !== 'DELETE') return send(res, 405, { error: 'GET, POST or DELETE' });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        if (!admin) return send(res, 403, { error: 'Only an admin can open or close the in-tray door' });
+        const who = session.account?.name ?? 'an admin';
+        const token = req.method === 'POST' ? door.generate(who) : undefined;
+        if (!token) door.close();
+        for (const f of floors.values()) toFloor(f, { t: 'inbox', state: f.inbox.state() });
+        console.log(`  ${who} ${token ? 'opened' : 'closed'} the in-tray door`);
+        return send(res, 200, { ...door.info(), ...(token ? { token } : {}) });
+      }
+      if (p === '/api/inbox/file' && req.method === 'GET') {
+        // A tray item in the browser: a note to read, a picture, a PDF, a voice memo to play.
+        const floor = floors.get(url.searchParams.get('floor') ?? '');
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        const name = url.searchParams.get('name') ?? '';
+        if (!plainName(name)) return send(res, 400, { error: 'Bad request' });
+        const file = floor.inbox.pathOf(name, url.searchParams.get('archived') === '1');
+        let size: number;
+        try {
+          size = statSync(file).size;
+        } catch {
+          return send(res, 404, { error: 'That is not in the tray (any more)' });
+        }
+        if (size > INBOX_SERVE_MAX) return send(res, 413, { error: 'Too big to open here: open it from the tray folder' });
+        const { type, inline } = fileType(name);
+        res.writeHead(200, {
+          'content-type': type,
+          'content-length': String(size),
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          'cross-origin-resource-policy': 'same-origin',
+          'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`,
+        });
+        createReadStream(file).pipe(res);
+        return;
+      }
+      if (p === '/api/workspace/repositories'  && req.method === 'GET') {
         const floor = floors.get(url.searchParams.get('floor') ?? '');
         if (!floor) return send(res, 404, { error: 'No such floor' });
         try { return send(res, 200, await workspaceRepositories(floor.dir)); }
@@ -779,7 +991,7 @@ export async function startServer(cfg: Config) {
             return send(res, 400, { error: 'Bad request' });
           }
         }
-        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input);
+        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input, [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })));
         return send(res, status, body);
       }
       if (p === '/api/floors/local' && req.method === 'POST') {
@@ -1050,6 +1262,8 @@ export async function startServer(cfg: Config) {
       handleMessage(client, msg);
     });
     ws.on('close', () => {
+      consoles.close(id);
+      consoleStale.delete(id);
       clients.delete(id);
       if (client.whiteboard) drawingChanged(floorOf(client));
       stopPlaying(client);
@@ -1142,6 +1356,10 @@ export async function startServer(cfg: Config) {
   const takeIssue = (c: Client, floor: Floor, n: number) => {
     floor.queue.dropIssue(n);
     void floor.github.claim(n).then((err) => warn(c, err && `Couldn't assign issue #${n} on GitHub: ${err}`));
+  };
+  /** A worker was handed a 📒 To Do Next item at a desk: it's in progress, by that worker. */
+  const takePlan = (floor: Floor, plan: string, w: { id: string; name: string }) => {
+    if (floor.plans.start(plan, { id: w.id, name: w.name })) toastFloor(floor, `📒 ${w.name} took a To Do Next item`);
   };
 
   const handleMessage = (c: Client, msg: ClientMsg) => {
@@ -1306,13 +1524,21 @@ export async function startServer(cfg: Config) {
         }
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace);
+        const r = floor.workers.spawn(str(msg.deskId, 32), who, str(msg.prompt, 20000) || undefined, msg.worktree === true, kind, msg.provider, model, effort, undefined, msg.workspace, msg.pullWork);
         const issue = kind === 'agent' ? issueNumber(msg.issue) : undefined;
+        const plan = kind === 'agent' ? str(msg.plan, 64) || undefined : undefined;
         if (typeof r === 'string') warn(c, r);
         else toastFloor(floor, kind === 'shell' ? `${who} opened a shell at a desk` : `${who} hired ${r.name}${issue ? ` for issue #${issue}` : r.prompt ? ' with a task' : ''}`);
         if (typeof r !== 'string' && issue) takeIssue(c, floor, issue);
+        if (typeof r !== 'string' && plan) takePlan(floor, plan, r);
         break;
       }
+      case 'console.attach':
+      case 'console.detach':
+      case 'console.input':
+      case 'console.resize':
+        consoles.handle(c.id, msg, floorOf(c)?.dir ?? cfg.dir);
+        break;
       case 'worker.workspace.add': {
         const w = worker(msg.workerId);
         if (!w) break;
@@ -1366,13 +1592,15 @@ export async function startServer(cfg: Config) {
       }
       case 'worker.prompt': {
         const w = worker(msg.workerId);
-        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who) : 'No such worker';
+        const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who, msg.pullWork ?? (msg.issue || msg.plan ? null : msg.pullWork)) : 'No such worker';
         warn(c, err);
         const issue = w?.info.kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (w && !err && issue) {
           toastFloor(w.floor, `${who} handed issue #${issue} to ${w.info.name}`);
           takeIssue(c, w.floor, issue);
         }
+        const plan = w?.info.kind === 'agent' ? str(msg.plan, 64) || undefined : undefined;
+        if (w && !err && plan) takePlan(w.floor, plan, w.info);
         break;
       }
       case 'station.prompt': {
@@ -1426,6 +1654,30 @@ export async function startServer(cfg: Config) {
       }
       case 'term.resize':
         if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.resize(msg.workerId, num(msg.cols), num(msg.rows));
+        break;
+      case 'side.attach': {
+        const w = worker(msg.workerId);
+        if (!w) break;
+        const snap = w.floor.workers.attachSide(w.wid, c.id, num(msg.cols), num(msg.rows));
+        if (typeof snap === 'string') {
+          sendTo(c, { t: 'side.error', workerId: w.wid, error: snap });
+          break;
+        }
+        c.attached.add(sideKey(w.wid));
+        sendTo(c, { t: 'side.snapshot', workerId: w.wid, ...snap });
+        break;
+      }
+      case 'side.detach': {
+        const wid = str(msg.workerId, 32);
+        c.attached.delete(sideKey(wid));
+        workerFloor(wid)?.workers.detachSide(wid, c.id);
+        break;
+      }
+      case 'side.input':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.writeSide(msg.workerId, str(msg.data, 64 * 1024));
+        break;
+      case 'side.resize':
+        if (c.attached.has(sideKey(msg.workerId))) workerFloor(msg.workerId)?.workers.resizeSide(msg.workerId, num(msg.cols), num(msg.rows));
         break;
       case 'gh.refresh':
         void floorOf(c)?.github.refresh();
@@ -1509,9 +1761,63 @@ export async function startServer(cfg: Config) {
         const repo = normalizeRepo(msg.repo);
         const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
         const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
-        const err = floor.queue.add(str(msg.prompt, 20000), who, str(msg.title, 200), issue, msg.provider, model, effort, repo);
+        const plan = str(msg.plan, 64) || undefined;
+        const err = floor.queue.add(str(msg.prompt, 20000), who, str(msg.title, 200), issue, msg.provider, model, effort, repo, plan);
         if (err) warn(c, err);
-        else toastFloor(floor, `📋 ${who} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : 'a task'}`);
+        else toastFloor(floor, `📋 ${who} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : plan ? 'a To Do Next item' : 'a task'}`);
+        break;
+      }
+      case 'inbox.note': {
+        const floor = here();
+        if (!floor) break;
+        try {
+          floor.inbox.note(str(msg.title, 200), str(msg.text, INBOX_NOTE_MAX + 1), `${who} in the office`);
+          toastFloor(floor, `📥 ${who} dropped a note in the in-tray`);
+        } catch (error) {
+          warn(c, error instanceof InboxError ? error.message : 'The note could not be saved');
+        }
+        break;
+      }
+      case 'inbox.archive': {
+        const floor = here();
+        if (!floor) break;
+        const name = str(msg.name, 256);
+        try {
+          floor.inbox.archive(name);
+          toastFloor(floor, `📥 ${who} put ${name} away`);
+        } catch (error) {
+          warn(c, error instanceof InboxError ? error.message : 'That item could not be put away');
+        }
+        break;
+      }
+      case 'inbox.plan': {
+        const floor = here();
+        if (!floor) break;
+        void floor.inbox.read(str(msg.name, 256)).then((r) => {
+          // A file's place is known once it's archived; a note carries its text, and is put away once filed.
+          const where = r.item.kind === 'note' ? r.path : floor.inbox.archive(r.item.name);
+          floor.plans.apply({ action: 'add', text: inboxPlanText(r.item, r.body, where).slice(0, PLAN_TEXT_MAX) });
+          if (r.item.kind === 'note') floor.inbox.archive(r.item.name);
+          toastFloor(floor, `📒 ${who} filed “${planTitle(r.item.title)}” from the in-tray on To Do Next`);
+        }).catch((error) => warn(c, error instanceof InboxError || error instanceof PlansError ? error.message : 'That item could not be filed'));
+        break;
+      }
+      case 'inbox.queue': {
+        const floor = here();
+        if (!floor) break;
+        if (msg.provider !== undefined && (!isAgentProvider(msg.provider) || !floor.project.agentProviders.includes(msg.provider))) {
+          warn(c, 'Unknown agent provider');
+          break;
+        }
+        const model = msg.model === undefined ? undefined : str(msg.model, OPEN_CODE_MODEL_MAX + 1);
+        const effort = isAgentEffort(msg.effort) ? msg.effort : undefined;
+        void floor.inbox.read(str(msg.name, 256)).then((r) => {
+          const where = r.item.kind === 'note' ? r.path : floor.inbox.archive(r.item.name);
+          const err = floor.queue.add(inboxPrompt(r.item, r.body, where), who, `📥 ${r.item.title}`, undefined, msg.provider, model, effort);
+          if (err) return warn(c, err);
+          if (r.item.kind === 'note') floor.inbox.archive(r.item.name);
+          toastFloor(floor, `📋 ${who} queued “${planTitle(r.item.title)}” from the in-tray`);
+        }).catch((error) => warn(c, error instanceof InboxError ? error.message : 'That item could not be queued'));
         break;
       }
       case 'queue.remove': {
@@ -1533,6 +1839,21 @@ export async function startServer(cfg: Config) {
       case 'queue.limit':
         floorOf(c)?.queue.setLimit(num(msg.maxWorkers));
         break;
+      case 'unshipped.scan':
+        void floorOf(c)?.unshipped.scan(true);
+        break;
+      case 'unshipped.recover': {
+        const floor = here();
+        if (!floor) break;
+        void floor.unshipped.recover(str(msg.key, 1000), !!floor.project.branch).then((r) => {
+          if (typeof r === 'string') return warn(c, r);
+          if (floor.queue.state().tasks.some((t) => t.title === r.title && t.status !== 'done')) return warn(c, 'Its recovery is already on the queue');
+          const err = floor.queue.add(r.prompt, who, r.title, undefined, undefined, undefined, undefined, undefined, undefined, r.workspace);
+          if (err) warn(c, err);
+          else toastFloor(floor, `📋 ${who} queued a PR for the unshipped work on ${r.title.replace(/^Recover unshipped work from /, '')}`);
+        });
+        break;
+      }
       case 'meeting.start': {
         const floor = here();
         if (!floor) break;
@@ -1874,11 +2195,25 @@ export async function startServer(cfg: Config) {
   };
 
   const resync = setInterval(() => {
+    for (const id of consoleStale) {
+      const c = clients.get(id);
+      if (c && c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
+      consoleStale.delete(id);
+      if (c && !c.out) consoles.resync(id);
+    }
     for (const c of clients.values()) {
       if (!c.stale.size || c.ws.bufferedAmount > SLOW_CLIENT_BYTES / 8) continue;
-      for (const wid of c.stale) {
-        const snap = c.attached.has(wid) ? workerFloor(wid)?.workers.attach(wid, c.id, c.peer.name) : undefined;
-        if (snap) sendTo(c, { t: 'term.snapshot', workerId: wid, ...snap });
+      for (const key of c.stale) {
+        if (!c.attached.has(key)) continue;
+        if (key.startsWith('side:')) {
+          const wid = key.slice(5);
+          const w = workerFloor(wid)?.workers.get(wid);
+          const snap = w?.side && workerFloor(wid)!.workers.attachSide(wid, c.id, w.side.cols, w.side.rows);
+          if (snap && typeof snap !== 'string') sendTo(c, { t: 'side.snapshot', workerId: wid, ...snap });
+          continue;
+        }
+        const snap = workerFloor(key)?.workers.attach(key, c.id, c.peer.name);
+        if (snap) sendTo(c, { t: 'term.snapshot', workerId: key, ...snap });
       }
       c.stale.clear();
     }
@@ -1908,6 +2243,7 @@ export async function startServer(cfg: Config) {
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
   const shutdown = (keep = false) => {
+    consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
     clearTimeout(floorsTimer);
