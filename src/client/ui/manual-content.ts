@@ -45,6 +45,7 @@ export const MANUAL: ManualChapter[] = [
         ],
       },
       { note: 'Steps 3–7 are only for agent-office PRs; for other floors just ⬇️ Pull on the Git board. For the full version, see **📝 To-do list** and **📋 Merging an agent-office PR, step by step**.' },
+      { p: 'Not sure whether something is uncommitted? See **🧭 Changes made straight to personal**.' },
     ],
   },
   {
@@ -168,6 +169,60 @@ export const MANUAL: ManualChapter[] = [
           '**Pull the floor after merging.** New workers start from your local copy. If it’s behind, they build on old code and their PRs conflict more.',
           '**Work done outside a worker skips the loop.** When you or a chat session edit a folder directly, that work exists only on your PC until someone commits and pushes it. That’s what the “uncommitted” and “↑ to push” numbers show.',
           '**Desks stay after a merge.** A worker’s worktree and branch remain until you send the worker home. `agent-office prune` clears leftovers.',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'direct-changes',
+    icon: '🧭',
+    title: 'Changes made straight to personal',
+    blocks: [
+      { p: '**Desk workers and queue tasks** always get their own worktree and branch in the floor folder, so their work arrives as a PR you merge. A change can only land on `personal` without a PR in one of two folders:' },
+      {
+        list: [
+          'The **floor folder** `C:\\Users\\Owner\\agent-office\\mmoscare\\agent-office`. Nobody should edit it directly.',
+          'The **app folder** `' + APP_DIR + '`, where the office runs from.',
+        ],
+      },
+      { h: 'How it happens' },
+      {
+        list: [
+          'The project’s instructions (`CLAUDE.md`, `AGENTS.md`, `PERSONAL-WORKFLOW.md`) tell an agent asked to “change the app” to work on `personal` in the app folder. So that chat edits `personal` directly, with no branch and no PR.',
+          'A Claude Code or Codex chat you open yourself (terminal, VS Code, desktop app) isn’t a desk worker, so it gets no worktree. It edits whatever branch its folder is on.',
+          'A chat that stops halfway (closed, hit a limit, or waiting for your “commit?”) leaves its changes uncommitted.',
+          'Pulling into a folder that has its own local commits makes a merge commit. That shows up as “ahead N”.',
+        ],
+      },
+      { h: 'Checking the floor folder' },
+      { p: 'Use the 🌿 **Git board**, the other side of the PR board: flip it with the switch above it, or ☰ → **Git repositories**. Open the repository. **Changes** and **Staged changes** are uncommitted, **Commits not on GitHub** aren’t pushed, and **On GitHub, not here** aren’t pulled.' },
+      { p: 'To save them, click **➕ git add .** → **✅ Commit…** → **⬆️ Push**. On `personal` it asks you to confirm before it pushes.' },
+      { h: 'Checking the app folder' },
+      { p: 'It isn’t a floor, so the Git board doesn’t show it (for now). In PowerShell:' },
+      { code: 'git fetch\ngit status -sb', dir: APP_DIR },
+      {
+        table: {
+          head: ['If you see', 'It means'],
+          rows: [
+            ['Any line after the first', 'An uncommitted change: `M` is an edited file, `??` a new one.'],
+            ['`ahead N` on the first line', 'N commits that aren’t on GitHub yet.'],
+            ['`behind N` on the first line', 'GitHub has N commits (from PRs you merged) that aren’t here, so they aren’t live in the office yet. Pull, `npm run build` and restart (see the front page).'],
+            ['Just the first line, with no `ahead` or `behind`', 'Nothing to do. It matches GitHub.'],
+          ],
+        },
+      },
+      { h: 'Saving them (app folder)' },
+      { p: 'Commit, with your own words in the quotes. `git add .` takes every change and new file, so check the list from `git status -sb` first.' },
+      { code: 'git add .\ngit commit -m "Describe the change"', dir: APP_DIR },
+      { p: 'Bring in anything new from GitHub, then push:' },
+      { code: 'git pull origin personal\ngit push origin personal', dir: APP_DIR },
+      { p: 'If the pull says **CONFLICT**, see “If step 5 says CONFLICT” in **📋 Merging an agent-office PR, step by step**. If it brought in new commits, build and restart as on the front page. Or just ask any agent: “commit and push the app folder”.' },
+      { h: 'Avoiding it' },
+      {
+        list: [
+          'Make app changes through the **task queue** or a **desk worker**. They always get a branch and a PR.',
+          'Treat the app folder as the place you **pull, build and run**, not where edits happen.',
+          'If a chat does edit the app folder, have it **commit and push before it finishes**.',
         ],
       },
     ],
