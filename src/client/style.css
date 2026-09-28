@@ -643,6 +643,9 @@ button { font-family: inherit; }
 .modal.gh-window.issue { width: min(920px, 100%); }
 .modal.gh-window header .pill { font-size: 12px; }
 .pill.merged { background: #9d4edd; color: #fff; }
+/* The kind of work a worker is on (shared/work-kind.ts): a stripe down its row and a small badge. */
+#workers li.has-kind { box-shadow: inset 5px 0 0 var(--kind); }
+.work-kind { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 900; padding: 1px 6px; border-radius: 999px; border: 2px solid var(--ink); vertical-align: 1px; white-space: nowrap; }
 .gh-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 700; color: var(--muted); border-bottom: 2px solid rgba(43, 45, 66, .15); }
 .gh-meta b { color: var(--ink); font-weight: 900; }
 .gh-meta code { font: 12px ui-monospace, Menlo, monospace; background: #e0f2fe; color: #1d4f91; border-radius: 6px; padding: 1px 6px; }
