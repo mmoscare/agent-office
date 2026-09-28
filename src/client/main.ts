@@ -5,6 +5,8 @@ import { sameLook } from '../shared/avatar';
 import { BALCONY, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, seatAt, seatPlace, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { floorPalette } from '../shared/floors';
 import type { AgentProvider, GongWhy, PeerInfo, WorkerInfo } from '../shared/protocol';
+import type { WorkspaceRequest } from '../shared/workspaces';
+import { openWorkspace } from './ui/workspace';
 import { isAsleep, isBusy } from '../shared/status';
 import { Net } from './net';
 import { store, loadProfile, loadSettings, saveSettings, workerForPull, type Profile, type Topic } from './state';
@@ -320,7 +322,7 @@ net.onMessage((msg) => {
       const openId = openTerminalFor();
       if (openId && store.workers.has(openId)) net.send({ t: 'worker.attach', workerId: openId });
       const watching = openChangesFor();
-      if (watching && store.workers.has(watching)) net.send({ t: 'changes.watch', workerId: watching });
+      if (watching && store.workers.has(watching.workerId)) net.send({ t: 'changes.watch', ...watching });
       renderProject();
       $('btn-team').classList.toggle('hidden', !store.invites);
       // Back from a restart on another version: this page's code is stale, so load the new one.
@@ -675,8 +677,8 @@ function freeDesk(): string | null {
 
 let askedToNotify = false;
 
-function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string) {
-  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model });
+function hire(deskId: string, prompt?: string, worktree = false, provider?: AgentProvider, model?: string, workspace?: WorkspaceRequest) {
+  net.send({ t: 'worker.spawn', deskId, prompt, worktree, provider, model, workspace });
   // The moment notifications start to matter: ask once (it has to come from a key press or click).
   if (settings.notify && notifyPermission() === 'default' && !askedToNotify) {
     askedToNotify = true;
@@ -697,8 +699,8 @@ function promptAtDesk(deskId: string) {
       subtitle: 'A fresh worker will sit down and start on this right away. Choose the worker engine below.',
       submitLabel: 'Hire & start',
       providerOption: true,
-      worktreeOption: !!store.project?.branch,
-      onSubmit: (text, o) => hire(deskId, text, o.worktree, o.provider, o.model),
+      worktreeOption: true,
+      onSubmit: (text, o) => hire(deskId, text, o.worktree, o.provider, o.model, o.workspace),
     });
   } else if (isAsleep(w.status)) {
     toast(`${w.name} is asleep — press R to resume first`, 'warn');
@@ -728,8 +730,8 @@ function hireAtDesk(deskId: string) {
     submitLabel: 'Hire & start',
     allowEmpty: true,
     providerOption: true,
-    worktreeOption: !!store.project?.branch,
-    onSubmit: (text, o) => hire(deskId, text || undefined, o.worktree, o.provider, o.model),
+    worktreeOption: true,
+    onSubmit: (text, o) => hire(deskId, text || undefined, o.worktree, o.provider, o.model, o.workspace),
   });
 }
 
@@ -738,13 +740,14 @@ function killWorker(id: string) {
   if (!w) return;
   const where = DESK_BY_ID.get(w.deskId)?.label ?? 'the desk';
   const session = w.kind === 'shell' ? 'shared shell' : `${providerLabel(w.provider, store.project)} session`;
-  if (w.worktree) {
+  if (w.worktree || w.workspace) {
     // A worker with its own worktree: choose what becomes of the worktree and its branch.
     sendHomeDialog({
       workerId: id,
       name: w.name,
       where,
       worktree: w.worktree,
+      workspace: w.workspace,
       ask: () => net.send({ t: 'worker.worktree', workerId: id }),
       onConfirm: (cleanup) => net.send({ t: 'worker.kill', workerId: id, cleanup }),
     });
@@ -791,11 +794,12 @@ function resumeWorker(w: WorkerInfo) {
 
 /** Whether a worker's branch can become a PR: it has its own worktree and isn't mid-turn. */
 function prReady(w: WorkerInfo) {
-  return !!w.worktree && !isBusy(w.status);
+  return !!(w.worktree || w.workspace) && !isBusy(w.status);
 }
 
 /** O at a desk: see the worker's pull request, or push its branch and open one. */
 function pullRequestFor(w: WorkerInfo) {
+  if (w.workspace) return openWorkspace(net, w.id, () => openWorkerTerminal(w.id));
   if (w.pr) {
     const it = store.pulls.items.find((p) => p.number === w.pr!.number);
     if (it) openPull(it, net, boardActions());
@@ -840,7 +844,9 @@ function showSearch() {
 
 /** What the worker changed: changed files, diff, commit / discard / open a PR. */
 function openWorkerChanges(id: string) {
-  if (!store.workers.has(id)) return;
+  const worker = store.workers.get(id);
+  if (!worker) return;
+  if (worker.workspace) return openWorkspace(net, id, () => openWorkerTerminal(id));
   openChanges(net, id, () => openWorkerTerminal(id));
 }
 
@@ -865,11 +871,11 @@ function sendToWorker(title: string, text: { context?: string; initial?: string 
     ...text,
     newDesk: desk ? DESK_BY_ID.get(desk)!.label : undefined,
     workers: awake.map((w) => ({ id: w.id, name: w.name, color: w.color, status: w.status })),
-    worktreeOption: !!store.project?.branch,
+    worktreeOption: true,
     providerOption: true,
-    onSubmit: (prompt, to, worktree, provider, model) => {
+    onSubmit: (prompt, to, worktree, provider, model, workspace) => {
       if (to) net.send({ t: 'worker.prompt', workerId: to, prompt });
-      else if (desk) hire(desk, prompt, worktree, provider, model);
+      else if (desk) hire(desk, prompt, worktree, provider, model, workspace);
     },
   });
 }
@@ -1245,7 +1251,7 @@ function deskHint(deskId: string): Hint {
       key('E', 'Open terminal'),
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
-      w.pr ? key('O', `PR #${w.pr.number}`) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
+      w.workspace ? key('O', 'Repositories & PRs') : w.pr ? key('O', `PR #${w.pr.number}`) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
       key('X', 'Send home'),
     ],
   };

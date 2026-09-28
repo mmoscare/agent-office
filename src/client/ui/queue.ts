@@ -169,7 +169,9 @@ export function openQueue(net: Net, actions: QueueActions) {
         h('b', {}, 'Add to queue'),
         ' on an issue. Whenever a desk is free and fewer than ',
         h('b', {}, q.maxWorkers === 0 ? '0' : String(q.maxWorkers)),
-        ' workers are busy, the next task gets a fresh worker in its own git worktree. Issues are assigned on GitHub when they start, and the pull request is linked when it shows up.',
+        store.project?.branch
+          ? ' workers are busy, the next task gets a fresh worker in its own git worktree. Issues are assigned on GitHub when they start, and the pull request is linked when it shows up.'
+          : ' workers are busy, the next task gets a fresh worker in this shared folder. For separate worktrees across repositories, hire from an empty desk and select those repositories instead.',
       ),
       section('🤖 Working on it', running),
       section('⏳ Up next', queued),

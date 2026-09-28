@@ -7,6 +7,7 @@ import { TERM_THEME } from '../world/laptop';
 import { h, openModal, STATUS_LABEL, timeAgo, toast, type Modal } from './dom';
 import { usageLabel, usageTitle } from './usage';
 import { openModelUsage } from './model-usage';
+import { testChangesButton } from './test-changes';
 import { terminalBranches } from './terminal-branches';
 import type { ServerMsg } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
@@ -59,7 +60,8 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
   const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
   const host = h('div.term-host');
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, onChanges ? changesBtn : null, closeBtn), branches.element, host);
+  const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, host);
 
   const term = new Terminal({
     fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
@@ -103,6 +105,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   };
 
   const refresh = () => {
+    test?.refresh();
     const w = store.workers.get(workerId);
     if (!w) {
       modal.close();

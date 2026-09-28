@@ -1,7 +1,7 @@
 // Wire protocol between browser and server. Every WebSocket frame is one JSON object.
 
 import type { Look } from './avatar.js';
-import type { WorkerWorkspace } from './workspaces.js';
+import type { WorkerWorkspace, WorkspaceRequest } from './workspaces.js';
 import type { DecorPlacement, Decoration } from './decor.js';
 import type { DogState } from './dog.js';
 import type { JukeboxState } from './jukebox.js';
@@ -152,6 +152,7 @@ export type WorktreeCleanup = 'keep' | 'worktree' | 'all';
 
 /** What a worker's worktree holds, so whoever sends it home knows what deleting it would lose. */
 export interface WorktreeState {
+  repositories?: (WorktreeState & { repository: string })[];
   /** The worktree folder is still there. */
   exists: boolean;
   /** Files with uncommitted changes, new ones included. */
@@ -538,6 +539,10 @@ export interface ChangedFile {
 
 /** What a worker changed in its checkout, against the branch the office was opened on. */
 export interface ChangesState {
+  /** Read-only combined view of direct child repositories in a shared project folder. */
+  repositories?: { path: string; error?: string }[];
+  /** Selected repository inside a multi-repository worker workspace. */
+  repository?: string;
   workerId: string;
   /** The checkout, relative to the office dir ('' is the project folder itself, shared by everyone). */
   dir: string;
@@ -649,7 +654,8 @@ export type ClientMsg =
   /** You sat down in a place on a couch, a beanbag, a chair or the bench (see seatAt in layout), or got up again (no seat). */
   | { t: 'sit'; seat?: string }
   | { t: 'profile'; name: string; color: string; look: Look }
-  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; kind?: WorkerKind; provider?: AgentProvider; model?: string }
+  | { t: 'worker.spawn'; deskId: string; prompt?: string; worktree?: boolean; workspace?: WorkspaceRequest; kind?: WorkerKind; provider?: AgentProvider; model?: string }
+  | { t: 'worker.workspace.add'; workerId: string; workspace: WorkspaceRequest }
   | { t: 'worker.resume'; workerId: string }
   | { t: 'worker.kill'; workerId: string; cleanup?: WorktreeCleanup }
   /** Asks what the worker's worktree holds; answered with a `worker.worktree` message. */
@@ -663,7 +669,7 @@ export type ClientMsg =
    */
   | { t: 'station.prompt'; deskId: string; prompt: string }
   /** Push a worktree worker's branch and open a pull request for it, drafted from its task. */
-  | { t: 'worker.pr'; workerId: string }
+  | { t: 'worker.pr'; workerId: string; repository?: string }
   | { t: 'term.input'; workerId: string; data: string }
   | { t: 'term.resize'; workerId: string; cols: number; rows: number }
   | { t: 'gh.refresh' }
@@ -703,13 +709,13 @@ export type ClientMsg =
   /** Let the shared office password sign people in, or stop it. */
   | { t: 'accounts.shared'; on: boolean }
   /** Follow what a worker changed (the office polls its checkout while anyone watches). */
-  | { t: 'changes.watch'; workerId: string }
-  | { t: 'changes.unwatch'; workerId: string }
-  | { t: 'changes.diff'; workerId: string; path: string }
-  | { t: 'changes.commit'; workerId: string; message: string }
+  | { t: 'changes.watch'; workerId: string; repository?: string }
+  | { t: 'changes.unwatch'; workerId: string; repository?: string }
+  | { t: 'changes.diff'; workerId: string; repository?: string; path: string }
+  | { t: 'changes.commit'; workerId: string; repository?: string; message: string }
   /** Without a path, throws away every uncommitted change in that checkout. */
-  | { t: 'changes.discard'; workerId: string; path?: string }
-  | { t: 'changes.pr'; workerId: string; title: string; body: string }
+  | { t: 'changes.discard'; workerId: string; repository?: string; path?: string }
+  | { t: 'changes.pr'; workerId: string; repository?: string; title: string; body: string }
   | { t: 'upgrade.check' }
   | { t: 'upgrade.start' }
   /** Read the Claude plan limits again now, instead of at the next poll. */
@@ -820,7 +826,7 @@ export type ServerMsg =
   | { t: 'sky'; state: SkyState }
   /** Sent to whoever watches that worker's changes, whenever they change. */
   | { t: 'changes'; state: ChangesState }
-  | { t: 'changes.diff'; workerId: string; path: string; diff: string; truncated: boolean; error?: string }
+  | { t: 'changes.diff'; workerId: string; repository?: string; path: string; diff: string; truncated: boolean; error?: string }
   /** Sent to whoever asked for the invite. */
   | { t: 'team.invited'; github: string; name?: string; keys?: number; error?: string }
   /** Sent to admins, when asked and whenever accounts change. */

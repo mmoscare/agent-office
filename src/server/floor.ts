@@ -10,6 +10,7 @@ import { WorkerManager, type HookEnv } from './workers.js';
 import { GitHub, MergeWatch } from './github.js';
 import { TaskQueue } from './queue.js';
 import { Changes } from './changes.js';
+import { WorkspaceChanges } from './workspace-changes.js';
 import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
@@ -76,6 +77,7 @@ export class Floor {
   readonly github: GitHub;
   readonly queue: TaskQueue;
   readonly changes: Changes;
+  readonly workspaceChanges: WorkspaceChanges;
   readonly decor: Decor;
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
@@ -121,6 +123,7 @@ export class Floor {
         },
         remove: (workerId) => {
           this.changes?.forget(workerId);
+          this.workspaceChanges?.forget(workerId);
           ctx.emit(this, { t: 'worker.remove', workerId });
           this.queue?.onWorkerGone(workerId);
           this.dog.onWorkerGone(workerId);
@@ -179,6 +182,11 @@ export class Floor {
       },
     );
 
+    this.workspaceChanges = new WorkspaceChanges(def.dir, id => this.workers.get(id), {
+      state: (state, ids) => ctx.changes(state, ids),
+      toast: (text, level) => ctx.toast(this, text, level),
+      refreshGitHub: () => {},
+    });
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
@@ -229,7 +237,14 @@ export class Floor {
     this.github.stop();
     this.queue.shutdown();
     this.changes.stop();
+    this.workspaceChanges.stop();
     this.whiteboard.flush();
     this.workers.shutdown(keep);
+  }
+
+  changesFor(workerId: string, repository?: string): Changes | undefined {
+    const w = this.workers.get(workerId);
+    if (w?.workspace) return repository ? this.workspaceChanges.get(workerId, repository) : undefined;
+    return repository === undefined ? this.changes : undefined;
   }
 }
