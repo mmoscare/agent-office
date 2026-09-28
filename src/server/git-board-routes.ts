@@ -1,5 +1,5 @@
 import type { GitDiffMode } from '../shared/git-board.js';
-import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage } from './git-board.js';
+import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeStatus } from './git-board.js';
 
 /** A result that's a string is a failure, said for a person. */
 function reply<T>(r: T | string): [number, unknown] {
@@ -24,6 +24,8 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
   const branch = (q.get('branch') ?? '').slice(0, 255) || undefined;
   try {
     if (p === '/api/git/repos' && method === 'GET') return [200, await gitRepositories(floorDir)];
+    // The office's own code folder, whichever floor asks (see OfficeStatus).
+    if (p === '/api/git/office' && method === 'GET') return [200, { office: (await officeStatus()) ?? null }];
     if (!repo) return [400, { error: 'Choose a repository' }];
     if (method === 'GET') {
       if (p === '/api/git/repo') return [200, await gitRepository(floorDir, repo, branch)];

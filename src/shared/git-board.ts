@@ -106,3 +106,32 @@ export interface GitDiff {
   diff: string;
   truncated: boolean;
 }
+
+/**
+ * The office's own code: the checkout it runs from, and whether what's running is the latest there
+ * is. Unset when the office doesn't run from a Git checkout (an npm install).
+ */
+export interface OfficeStatus {
+  /** The folder the office runs from. */
+  dir: string;
+  branch?: string;
+  /** Its GitHub copy, e.g. origin/personal. */
+  upstream?: string;
+  /** owner/name of origin, when it's on GitHub. */
+  github?: string;
+  ahead: number;
+  behind: number;
+  /** Files with uncommitted changes there. */
+  dirty: number;
+  /** When its code last changed (a pull, a merge, a commit). */
+  changedAt?: number;
+  /** When it was last built. */
+  builtAt?: number;
+  /** When the running office started. */
+  startedAt: number;
+  /** What's left to do: pull the new code, build it, restart onto the build. */
+  needs: { pull: boolean; build: boolean; restart: boolean };
+  /** When GitHub was last fetched from there. */
+  fetchedAt?: number;
+  error?: string;
+}

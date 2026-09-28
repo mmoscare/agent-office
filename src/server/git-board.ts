@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { normalizeRepo } from '../shared/floors.js';
-import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitFileStatus, GitRepoDetail, GitRepoList, GitRepoSummary } from '../shared/git-board.js';
+import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitFileStatus, GitRepoDetail, GitRepoList, GitRepoSummary, OfficeStatus } from '../shared/git-board.js';
 import type { PullRequestRef } from '../shared/protocol.js';
 import { findBranchPr, gh } from './github.js';
 import { floorRepository, workspaceRepositories } from './workspaces.js';
@@ -530,4 +532,79 @@ export function gitOpenPr(floorDir: string, rel: string, title: string, body: st
     if (!/^https?:\/\//.test(url)) throw new GitError(url || 'gh pr create failed');
     return { url };
   });
+}
+
+// ---- The office's own code ----------------------------------------------------------------------
+// Where the running office comes from, so the Git board can say when it's behind GitHub, when it
+// needs building and when it needs restarting, with the commands for each (see OfficeStatus).
+
+const startedAt = Date.now() - process.uptime() * 1000;
+const OFFICE_FETCH_MS = 2 * 60_000;
+let officeFetched = 0;
+
+/** The package the office runs from: up from this file to the agent-office package.json. */
+function officeRoot(): string | undefined {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')) as { name?: string };
+      if (pkg.name === 'agent-office') return dir;
+    } catch {
+      // not here: keep going up
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return undefined;
+}
+
+async function mtime(file: string): Promise<number | undefined> {
+  try {
+    return (await stat(file)).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function officeStatus(): Promise<OfficeStatus | undefined> {
+  const dir = officeRoot();
+  if (!dir) return undefined;
+  const top = await gitMaybe(['rev-parse', '--show-toplevel'], dir);
+  if (!top || path.resolve(top).toLowerCase() !== path.resolve(dir).toLowerCase()) return undefined;
+  const status: OfficeStatus = { dir, ahead: 0, behind: 0, dirty: 0, startedAt, needs: { pull: false, build: false, restart: false } };
+  try {
+    // Keep the GitHub side current here too, now and then: this is how "↓ to pull" knows.
+    if (Date.now() - officeFetched > OFFICE_FETCH_MS) {
+      officeFetched = Date.now();
+      await run(['fetch', '--quiet', 'origin'], dir, 60_000).catch(() => undefined);
+    }
+    const [branch, remotes, github, fetched, dirty, logPath] = await Promise.all([
+      gitMaybe(['symbolic-ref', '--short', '-q', 'HEAD'], dir),
+      remoteRefs(dir),
+      githubOf(dir),
+      fetchedAt(dir),
+      gitMaybe(['status', '--porcelain=v1', '-unormal'], dir),
+      gitMaybe(['rev-parse', '--git-path', 'logs/HEAD'], dir),
+    ]);
+    Object.assign(status, { branch: branch || undefined, github, fetchedAt: fetched, dirty: (dirty ?? '').split('\n').filter(Boolean).length });
+    const up = branch ? await upstreamOf(dir, branch, remotes) : undefined;
+    if (up && !up.gone) {
+      status.upstream = short(up.ref);
+      Object.assign(status, await counts(dir, 'HEAD', up.ref));
+    }
+    // HEAD's reflog moves on every pull, merge and commit: the code changed then.
+    status.changedAt = logPath ? await mtime(path.resolve(dir, logPath)) : undefined;
+    // A build writes both halves; the older one says when it was last complete.
+    const built = await Promise.all([mtime(path.join(dir, 'dist', 'public', 'index.html')), mtime(path.join(dir, 'dist', 'server', 'server', 'server.js'))]);
+    status.builtAt = built.every((t) => t !== undefined) ? Math.min(...(built as number[])) : undefined;
+    status.needs = {
+      pull: status.behind > 0,
+      build: !status.builtAt || (status.changedAt !== undefined && status.changedAt > status.builtAt),
+      restart: status.builtAt !== undefined && status.builtAt > startedAt,
+    };
+  } catch (err) {
+    status.error = message(err);
+  }
+  return status;
 }

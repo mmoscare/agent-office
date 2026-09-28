@@ -1,10 +1,22 @@
 import { h, openModal } from './dom';
+import { codeBox, type CodeBox } from './copy-code';
 import { MANUAL, type ManualBlock, type ManualChapter } from './manual-content';
 
 // The Office Manual: the book on the shelf in the boss office (world/bookshelf.ts), also in the ☰
 // menu. Chapters down the left, one page at a time on the right. It opens where you left off.
 
 const PAGE_KEY = 'agent-office.manualPage';
+const PR_KEY = 'agent-office.manualPr';
+
+/** A page's commands and the PR number filled into them (see `{PR}` in manual-content.ts). */
+interface Page {
+  pr: string;
+  commands: { box: CodeBox; template: string }[];
+}
+
+function fill(template: string, pr: string): string {
+  return template.split('{PR}').join(pr || 'PR_NUMBER');
+}
 
 /** `code` and **bold** in a line of text. */
 function inline(text: string): (Node | string)[] {
@@ -15,7 +27,26 @@ function inline(text: string): (Node | string)[] {
   });
 }
 
-function block(b: ManualBlock): HTMLElement {
+function block(b: ManualBlock, page: Page): HTMLElement {
+  if ('code' in b) {
+    const box = codeBox(fill(b.code, page.pr), b.dir);
+    page.commands.push({ box, template: b.code });
+    return box.el;
+  }
+  if ('prNumber' in b) {
+    const input = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'e.g. 22', 'aria-label': 'PR number', value: page.pr }) as HTMLInputElement;
+    input.addEventListener('input', () => {
+      page.pr = input.value.replace(/\D/g, '').slice(0, 7);
+      if (input.value !== page.pr) input.value = page.pr;
+      for (const c of page.commands) c.box.set(fill(c.template, page.pr));
+      try {
+        localStorage.setItem(PR_KEY, page.pr);
+      } catch {
+        // not remembered then
+      }
+    });
+    return h('label.manual-pr', {}, h('span', {}, 'PR number'), input);
+  }
   if ('p' in b) return h('p', {}, ...inline(b.p));
   if ('h' in b) return h('h4', {}, b.h);
   if ('list' in b) return h('ul', {}, ...b.list.map((t) => h('li', {}, ...inline(t))));
@@ -66,7 +97,14 @@ export function openManual(chapterId?: string) {
         h('button', { type: 'button', class: j === index ? 'on' : '', 'aria-current': j === index ? 'page' : undefined, onclick: () => show(j) }, h('span.manual-icon', {}, c.icon), c.title),
       ),
     );
-    page.replaceChildren(h('h3', {}, `${ch.icon} ${ch.title}`), ...ch.blocks.map(block));
+    let pr = '';
+    try {
+      pr = localStorage.getItem(PR_KEY) ?? '';
+    } catch {
+      pr = '';
+    }
+    const state: Page = { pr, commands: [] };
+    page.replaceChildren(h('h3', {}, `${ch.icon} ${ch.title}`), ...ch.blocks.map((b) => block(b, state)));
     page.scrollTop = 0;
     where.textContent = `Chapter ${index + 1} of ${MANUAL.length}`;
     prev.disabled = index === 0;
@@ -76,6 +114,8 @@ export function openManual(chapterId?: string) {
   prev.addEventListener('click', () => show(index - 1));
   next.addEventListener('click', () => show(index + 1));
   el.addEventListener('keydown', (e) => {
+    // Arrow keys move the cursor in the PR box, not the page.
+    if ((e.target as HTMLElement).tagName === 'INPUT') return;
     if (e.key === 'ArrowLeft') show(index - 1);
     else if (e.key === 'ArrowRight') show(index + 1);
     else return;
