@@ -1,7 +1,7 @@
 import type { UnshippedItem } from '../../shared/protocol';
 import { h, timeAgo } from './dom';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
-import { groupByRepo, showsRepo, sortUnshipped } from './pr-board-model';
+import { groupByRepo, limitNote, showsRepo, sortUnshipped } from './pr-board-model';
 
 /**
  * The Pull Requests board's 🧳 Unshipped work section: office branches holding work that no open or
@@ -30,7 +30,6 @@ export interface UnshippedListProps {
 }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
-const clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 const WORKER_STATE: Record<UnshippedItem['worker'], string> = { active: 'working', idle: 'at its desk', gone: 'gone home' };
 
 export function unshippedSection(p: UnshippedListProps): HTMLElement {
@@ -47,13 +46,6 @@ export function unshippedSection(p: UnshippedListProps): HTMLElement {
   if (!items.length && !p.error) rows.push(...(p.scannedAt ? [emptyRow('🎉', 'Every branch is shipped', 'No office branch holds work without a PR.')] : skeletonRows(1)));
   const rescan = h('button.btn.prb-tool', { type: 'button', title: 'Look through the branches again', 'aria-label': 'Rescan branches', disabled: p.scanning, onclick: () => p.rescan() }, p.scanning ? '⏳' : '🔄');
   return section({ id: 'prb-unshipped', tone: 'unshipped', icon: '🧳', title: 'Unshipped work', count: items.length, hint: 'on a branch, no PR yet', tools: [rescan], rows });
-}
-
-/** Why PR statuses are unknown when it's GitHub's rate limit, in plain words rather than gh's. */
-export function limitNote(limit: { secondary: boolean; resetAt?: number }): string {
-  const why = limit.secondary ? 'GitHub asked the office to slow down for a few minutes' : "The GitHub account's shared hourly API quota ran out";
-  const when = limit.resetAt ? ` It ${limit.secondary ? 'lifts' : 'resets'} at ${clock(limit.resetAt)}.` : '';
-  return `❔ ${why}, so some branches may have a PR after all.${when} Showing what's on disk.`;
 }
 
 function unshippedRow(it: UnshippedItem, p: UnshippedListProps): HTMLElement {
