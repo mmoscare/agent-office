@@ -8,10 +8,11 @@ import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
+import type { TodoItem } from '../shared/todos';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -149,6 +150,10 @@ class Store {
   whiteboard = new Map<string, WbElement>();
   /** Who has the whiteboard open (client ids). */
   drawing: string[] = [];
+  /** Your own 🔥 To Do board, the same on every floor (see ui/todos.ts). */
+  todos: readonly TodoItem[] = [];
+  /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
+  todosPending = 0;
   /** Who's at the arcade cabinet on your floor, and the building's high scores. */
   cabinet: CabinetState = { player: null, scores: [] };
   /** The game on the cabinet as its player last sent it; null while nobody plays. */
@@ -272,6 +277,8 @@ class Store {
   apply(msg: ServerMsg) {
     switch (msg.t) {
       case 'welcome':
+        // A reconnect: what was on its way is lost, and the To Do board the office sends next is the one.
+        this.todosPending = 0;
         this.you = msg.you;
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
         this.floors = msg.floors;
@@ -385,6 +392,12 @@ class Store {
         if (!msg.state.player || msg.state.player.id !== this.cabinet.player?.id) this.cabinetFrame = null;
         this.cabinet = msg.state;
         this.emit('cabinet');
+        break;
+      case 'todos':
+        // Each change of yours gets one answer; the last one has them all in it.
+        if (this.todosPending > 0 && --this.todosPending > 0) break;
+        this.todos = msg.items;
+        this.emit('todos');
         break;
       case 'cabinet.frame':
         this.cabinetFrame = msg.frame;
