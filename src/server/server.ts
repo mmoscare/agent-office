@@ -23,6 +23,8 @@ import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
 import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
+import { TimeCard, timeCardKey } from './timecard.js';
+import { TIMECARD_TICK_MS } from '../shared/timecard.js';
 import { ApiBalances } from './api-balances.js';
 import type { BalanceUpdate } from '../shared/api-balances.js';
 import { PlanLimitsReader } from './limits.js';
@@ -40,6 +42,7 @@ import { Themes } from './theme.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
+import { Todos } from './todos.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
 import { taskStatus, unshippedText } from '../shared/task-status.js';
@@ -49,6 +52,7 @@ import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../s
 import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
+import { checkTodoAction } from '../shared/todos.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
 import { MAX_FLOORS } from '../shared/floors.js';
@@ -109,6 +113,8 @@ interface Client {
   isAlive: boolean;
   /** Since when their tab has been in the background (see 'presence'): long enough, and they're not really here. */
   awaySince?: number;
+  /** Whose 🗂️ time card this window clocks (see TimeCard). */
+  timeKey: string;
 }
 
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
@@ -209,6 +215,10 @@ export async function startServer(cfg: Config) {
     for (const f of floors.values()) cabinetChanged(f);
     if (first) toastFloor(floors.get(first.floor), `🏆 ${first.score.name} set a new arcade high score: ${scoreText(first.score.score)}`);
   });
+  // Everyone's own 🔥 To Do board: one list each for the whole building, so it follows them onto every floor.
+  const todos = new Todos(cfg.dataDir);
+  /** Whose To Do board a connection sees: their account's, or the shared password's one list. */
+  const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
   /** What the office is called where it has no project of its own to go by (webhooks, invites). */
   const officeName = cfg.project ? path.basename(cfg.project) : 'the office';
   const modelCommand = configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentCmd : 'opencode';
@@ -600,6 +610,9 @@ export async function startServer(cfg: Config) {
     toastAll,
   );
   const modelUsage = new ModelUsageLedger(cfg.dataDir);
+  // Everyone's 🗂️ Indirect Time card: when they had the office open, per day.
+  const timecard = new TimeCard(cfg.dataDir);
+  const timecardTimer = setInterval(() => timecard.tick(), TIMECARD_TICK_MS);
   // Pay-as-you-go balances for the sidebar's API balances panel; keys stay on this side.
   const apiBalances = new ApiBalances(cfg.dataDir);
 
@@ -1354,6 +1367,7 @@ export async function startServer(cfg: Config) {
       lastFrameAt: 0,
       typingAt: new Map(),
       isAlive: true,
+      timeKey: timeCardKey(account?.id, name),
       peer: {
         id,
         name,
@@ -1374,6 +1388,7 @@ export async function startServer(cfg: Config) {
     };
     clients.set(id, client);
     if (account) accounts.seen(account.id);
+    timecard.join(client.timeKey, name);
     ws.on('pong', () => (client.isAlive = true));
 
     sendTo(client, {
@@ -1398,6 +1413,8 @@ export async function startServer(cfg: Config) {
       ...(onRoof ? roofView() : floorView(floor)),
     });
     screensOf(client, floor);
+    sendTo(client, { t: 'timecard', state: timecard.state(client.timeKey) });
+    sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -1422,6 +1439,7 @@ export async function startServer(cfg: Config) {
       consoles.close(id);
       consoleStale.delete(id);
       clients.delete(id);
+      timecard.leave(client.timeKey);
       if (client.whiteboard) drawingChanged(floorOf(client));
       stopPlaying(client);
       for (const f of floors.values()) {
@@ -1591,7 +1609,17 @@ export async function startServer(cfg: Config) {
       }
       case 'profile': {
         const name = str(msg.name, 24).trim();
-        if (name && !c.accountId) c.peer.name = name;
+        if (name && !c.accountId) {
+          c.peer.name = name;
+          // On the shared password your name is whose card you clock.
+          const key = timeCardKey(undefined, name);
+          if (key !== c.timeKey) {
+            timecard.leave(c.timeKey);
+            c.timeKey = key;
+            timecard.join(key, name);
+            sendTo(c, { t: 'timecard', state: timecard.state(key) });
+          }
+        }
         if (COLOR_RE.test(msg.color)) c.peer.color = msg.color;
         c.peer.look = sanitizeLook(msg.look, c.peer.look);
         broadcast({ t: 'peer.update', peer: c.peer });
@@ -1674,6 +1702,9 @@ export async function startServer(cfg: Config) {
       }
       case 'dog.pet':
         floorOf(c)?.dog.pet(c.peer);
+        break;
+      case 'timecard':
+        sendTo(c, { t: 'timecard', state: timecard.state(c.timeKey) });
         break;
       case 'dog.name': {
         const floor = here();
@@ -2295,6 +2326,15 @@ export async function startServer(cfg: Config) {
       case 'cabinet.leave':
         stopPlaying(c);
         break;
+      case 'todo': {
+        const change = checkTodoAction(msg.change);
+        const owner = todoOwner(c);
+        const items = change && todos.apply(owner, change);
+        // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
+        if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
+        if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
       case 'cabinet.frame': {
         const floor = floorOf(c);
         const frame = checkFrame(msg.frame);
@@ -2420,10 +2460,11 @@ export async function startServer(cfg: Config) {
   mailroom.start();
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
-  const shutdown = (keep = false) => {
+  const shutdown = (keep = false): Promise<void> => {
     consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
+    clearInterval(timecardTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();
@@ -2433,13 +2474,16 @@ export async function startServer(cfg: Config) {
     machine.stop();
     sky.stop();
     themes.stop();
-    for (const f of floors.values()) f.shutdown(keep);
+    // Each floor saves its workers' uncommitted work (see wip-checkpoint.ts) while the rest closes.
+    const saving = [...floors.values()].map((f) => f.shutdown(keep));
     ledger.flush();
     modelUsage.flush();
+    timecard.flush();
     limits.close();
     for (const c of clients.values()) c.ws.close();
     server.close();
     hookServer.close();
+    return Promise.all(saving).then(() => undefined);
   };
 
   return { server, shutdown, accounts, publicDir, hookPort, floors: () => [...floors.values()], projectsDir: () => building.projectsDir, resolvedAgent: resolveCommand(cfg.agentCmd) };

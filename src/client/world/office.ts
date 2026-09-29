@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, CABINET, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
+import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, CABINET, CALENDAR, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
 import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
@@ -16,6 +16,7 @@ import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
 import { buildPlansBinder } from './plans-binder';
+import { buildTimeCard } from './time-card';
 
 export interface Collider {
   minX: number;
@@ -29,7 +30,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'authorUpdates' | 'manual' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -1387,6 +1388,7 @@ export function buildOffice(): Office {
   const loftZ = (LOFT.minZ + LOFT.maxZ) / 2;
   fixture('east', loftZ, LOFT.y + 0.5, 2.4, 1);
   fixture('south', LOFT.maxX - 3, LOFT.y + 1.9, 2.6, 0.6);
+  fixture('south', CALENDAR.u, CALENDAR.y, CALENDAR.width + 0.16, CALENDAR.height + 0.22);
 
   const setProjectName = projectSigns.setProject;
   const setLook = (p: FloorPalette) => {
@@ -1753,6 +1755,15 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   binder.userData.interact = plans;
   interactables.push(plans);
   desk.add(binder);
+  // The 🗂️ Indirect Time card, front right: when you had the office open, per day.
+  const card = buildTimeCard();
+  card.position.set(0.5, 0.83, 0.3);
+  card.rotation.y = 0.1;
+  // Walked up to at the desk's front edge, between the boss's chair and the manual shelf.
+  const timecard: Interactable = { kind: 'timecard', x: deskX + 0.5, y: floorY, z: deskZ + 0.6, radius: 1.8 };
+  card.userData.interact = timecard;
+  interactables.push(timecard);
+  desk.add(card);
   const bossChair = chair('#2b2d42');
   bossChair.scale.setScalar(1.2);
   bossChair.position.set(0, 0, 1.0);

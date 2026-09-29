@@ -1,13 +1,12 @@
-import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../../shared/floors';
+import { floorNumber, floorPalette, mainFloors } from '../../shared/floors';
 import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { FloorInfo } from '../../shared/protocol';
 import { store } from '../state';
 import { h } from './dom';
 
-// The floor list that drops down from the project in the corner: every floor of the building, top
+// The floor list that drops down from the project in the corner: the main floors of the building, top
 // floor first. Picking one takes you straight there, to the same spot in the office you're standing
-// in now. Adding a project is still the elevator's job. Floors filed in the Back Office sit in a
-// collapsed section at the bottom, so the list stays short.
+// in now. Adding a project and opening the Back Office are the elevator's job.
 
 export interface FloorMenuOptions {
   /** Go to that floor, staying where you are in the office. */
@@ -32,8 +31,6 @@ export function closeFloorMenu() {
 export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): void {
   if (current) return current.close();
   const el = h('div.floor-menu.panel', { role: 'menu', 'aria-label': 'Floors' });
-  /** The Back Office section is open; it starts open when you're on one of its floors. */
-  let backOpen = !!store.currentFloor()?.backOffice;
 
   const item = (f: FloorInfo, i: number, here: number) => {
     const isHere = f.id === store.floor;
@@ -67,25 +64,14 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
   const render = () => {
     const floors = store.floors;
     const main = mainFloors(floors);
-    const back = backOfficeFloors(floors);
     const here = main.findIndex((f) => f.id === store.floor);
-    const add = h('button.floor-item.add', { type: 'button', role: 'menuitem', title: 'The elevator: add another project as a floor' }, h('span.floor-no', {}, '🛗'), h('span.floor-text', {}, h('span.floor-name', {}, 'Elevator'), h('span.floor-sub', {}, 'Add a project…')));
+    const add = h('button.floor-item.add', { type: 'button', role: 'menuitem', title: 'Open the elevator' }, h('span.floor-no', {}, '🛗'), h('span.floor-text', {}, h('span.floor-name', {}, 'Elevator'), h('span.floor-sub', {}, 'Choose a floor or add a project…')));
     add.addEventListener('click', () => {
       close();
       opts.elevator();
     });
     // Top floor first, the way a building's directory reads, and the roof over them.
     const items = main.map((f, i) => item(f, i, here)).reverse();
-    const basement: HTMLElement[] = [];
-    if (back.length) {
-      const toggle = h('button.floor-menu-section', { type: 'button', 'aria-expanded': String(backOpen), title: 'Floors filed in the Back Office' }, h('span', {}, `🗄️ Back Office (${back.length})`), h('span', {}, backOpen ? '▾' : '▸'));
-      toggle.addEventListener('click', () => {
-        backOpen = !backOpen;
-        render();
-      });
-      basement.push(toggle);
-      if (backOpen) basement.push(...back.map((f, i) => item(f, i, -1)));
-    }
     const onRoof = store.floor === ROOF;
     const people = [...store.peers.values()].filter((p) => p.floor === ROOF).length;
     const roof = h(
@@ -100,7 +86,7 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
       close();
       opts.roof();
     });
-    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, ...basement, add);
+    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add);
   };
 
   const place = () => {

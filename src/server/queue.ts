@@ -17,6 +17,8 @@ export interface QueueWorkers {
   spawn(deskId: string, by: string, prompt: string, worktree: boolean, kind: 'agent', provider: AgentProvider, model?: string, effort?: AgentEffort, meeting?: undefined, workspace?: WorkspaceRequest): WorkerInfo | string;
   /** Resolves with a line about what became of the worker's worktree. */
   kill(id: string): Promise<{ note?: string; error?: string }>;
+  /** Its task was requeued: the worker is not to be told to carry on with its WIP commit (see WorkerManager.resume). */
+  forgetCheckpoints?(id: string): void;
 }
 
 export interface QueueEvents {
@@ -158,6 +160,8 @@ export class TaskQueue {
     if (t.status !== 'done') return 'That task is still on the queue';
     if (t.issue !== undefined && this.tasks.some((x) => x !== t && sameIssue(x, t.issue!, t.repo) && x.status !== 'done')) return `Issue ${ghRef({ number: t.issue, repo: t.repo })} is already on the queue`;
     if (t.plan && this.tasks.some((x) => x !== t && x.plan === t.plan && x.status !== 'done')) return 'That To Do Next item is already on the queue';
+    // A new worker takes it on: the old one mustn't be set going on it again by the note it's owed.
+    if (t.workerId) this.workers.forgetCheckpoints?.(t.workerId);
     this.tasks.splice(this.tasks.indexOf(t), 1);
     const fresh: QueueTask = { id: t.id, provider: t.provider, model: t.model, effort: t.effort, issue: t.issue, repo: t.repo, plan: t.plan, workspace: t.workspace, title: t.title, prompt: t.prompt, addedBy: t.addedBy, addedAt: Date.now(), status: 'queued' };
     this.tasks.push(fresh);
@@ -354,6 +358,7 @@ export class TaskQueue {
       t.branch = r.worktree?.branch;
       t.startedAt = Date.now();
       t.error = undefined;
+      t.checkpoint = undefined;
       this.lastStatus.set(r.id, r.status);
       if (t.plan) this.events.startPlan?.(t.plan, { id: r.id, name: r.name }, t.id);
       this.events.toast(`📋 ${r.name} sat down at ${DESK_BY_ID.get(desk)?.label ?? 'a desk'} to work on ${label(t)}`, 'info');
@@ -413,16 +418,21 @@ export class TaskQueue {
           error: s.error,
           pr: s.pr,
           unshipped: s.unshipped && Number.isFinite(s.unshipped.dirty) && Number.isFinite(s.unshipped.commits) ? { dirty: s.unshipped.dirty, commits: s.unshipped.commits } : undefined,
+          checkpoint: typeof s.checkpoint === 'string' && s.checkpoint ? s.checkpoint : undefined,
         };
         // Whatever was running died with the old office process; its worker comes back asleep at best.
         // One whose agent never reported a session is woken with its task again (see WorkerManager.resume),
         // so it's still on it: finishing it here would offer a Requeue that seats a second worker for it.
+        // One with a session comes back with no turn to take: its WIP-commit note is held until someone
+        // asks it to carry on, and a Requeue drops it (see retry), so it's truly stopped, as shown.
         const worker = t.workerId ? workers.get(t.workerId) : undefined;
         if (t.status === 'running' && !(worker && !worker.sessionId)) {
           t.status = 'done';
           t.outcome = 'exited';
           t.finishedAt = Date.now();
           t.error = RESTART_ERROR;
+          // What it left uncommitted was saved as a WIP commit as the office went down (see WorkerManager.checkpoint).
+          t.checkpoint = worker?.checkpoints?.[0]?.hash;
         }
         this.tasks.push(t);
       }

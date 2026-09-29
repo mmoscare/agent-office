@@ -1,0 +1,62 @@
+/* Your own 🔥 To Do board (ui/todos.ts), on the issues board's To Do side. */
+.modal.board .body.todo-body { flex-direction: column; min-height: 0; overflow: hidden; }
+.board-tabs { display: inline-flex; gap: 6px; }
+/* The issues board's own Refresh and status, put away while it shows To Do. */
+.modal.board header [hidden] { display: none; }
+.board-tabs .btn[aria-pressed=true] { background: var(--ink); color: #fff; transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+.todo-board { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+.todo-add { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.todo-input { flex: 1 1 320px; min-width: 0; padding: 10px 14px; font: 800 16px var(--font); color: var(--ink); background: #fff; border: 3px solid var(--ink); border-radius: 12px; box-shadow: 0 3px 0 var(--ink); }
+.todo-input:focus { outline: 3px solid #ef476f; outline-offset: 1px; }
+.todo-hot { background: #ef476f; color: #fff; }
+.todo-hot:hover { background: #d93b61; }
+.todo-undo { display: flex; gap: 8px; align-items: center; font-size: 12px; font-weight: 800; color: var(--ink); }
+.todo-undo:empty { display: none; }
+.todo-undo span { background: var(--paper); border: 2px solid var(--ink); border-radius: 999px; padding: 3px 10px; }
+
+.todo-cols { flex: 1; display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.todo-cols:has(.todo-done.folded) { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(170px, .45fr); }
+.todo-col { display: flex; flex-direction: column; min-height: 0; background: rgba(255, 250, 243, .6); border: 3px solid var(--ink); border-radius: 14px; overflow: hidden; transition: box-shadow .1s; }
+.todo-col h3 { margin: 0; padding: 8px 12px; font-size: 15px; font-weight: 900; background: var(--paper); border-bottom: 3px solid var(--ink); display: flex; gap: 8px; align-items: center; }
+.todo-title { flex: 1; }
+.todo-count { min-width: 24px; padding: 0 7px; text-align: center; border: 2px solid var(--ink); border-radius: 999px; background: #fff; font-size: 12px; }
+.todo-hint { margin: 0; padding: 6px 12px 0; font-size: 11px; font-weight: 800; color: var(--muted); }
+.todo-list { list-style: none; margin: 0; padding: 10px; display: flex; flex-direction: column; gap: 8px; overflow: auto; flex: 1; min-height: 60px; }
+.todo-empty { padding: 14px 10px; border: 2px dashed rgba(43, 45, 66, .35); border-radius: 10px; text-align: center; font-size: 12px; font-weight: 800; color: var(--muted); }
+
+/* Active: red, what you're on right now. */
+.todo-col.todo-active { background: #ffe1e1; border-color: #b3122f; box-shadow: 0 0 0 3px #ef476f55; }
+.todo-col.todo-active h3 { background: #ef476f; color: #fff; border-bottom-color: #b3122f; }
+.todo-col.todo-active .todo-count { color: var(--ink); border-color: #b3122f; }
+.todo-col.todo-active .todo-hint { color: #9b1b30; }
+.todo-col.todo-active .todo-card { border-color: #b3122f; border-left-width: 8px; box-shadow: 0 3px 0 #b3122f; }
+.todo-col.todo-done .todo-card { background: #eef7ee; }
+.todo-col.todo-done .todo-text { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(43, 45, 66, .35); }
+.todo-col.folded .todo-list { display: none; }
+.todo-fold { margin: 10px; padding: 12px; font: 800 13px var(--font); color: var(--ink); background: #fff; border: 2px dashed var(--ink); border-radius: 10px; cursor: pointer; }
+.todo-fold:hover { background: var(--paper-2); }
+
+.todo-card { background: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 8px 10px; box-shadow: 0 3px 0 rgba(43, 45, 66, .6); cursor: grab; display: flex; flex-direction: column; gap: 6px; }
+.todo-card:focus-visible { outline: 3px solid #118ab2; outline-offset: 2px; }
+.todo-card.dragging { opacity: .35; }
+.todo-card.editing { cursor: default; }
+.todo-text { font-weight: 800; font-size: 14px; line-height: 1.3; word-break: break-word; }
+.todo-when { font-size: 11px; font-weight: 700; color: var(--muted); }
+.todo-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.todo-mini { padding: 2px 8px; font-size: 12px; border-width: 2px; border-radius: 8px; box-shadow: 0 2px 0 var(--ink); }
+.todo-complete { background: #06d6a0; }
+.todo-complete:hover { background: #05c091; }
+.todo-start { background: #ffd6de; }
+.todo-x { margin-left: auto; color: var(--muted); }
+.todo-edit { width: 100%; box-sizing: border-box; resize: vertical; font: 800 14px var(--font); color: var(--ink); border: 2px solid var(--ink); border-radius: 8px; padding: 6px 8px; }
+
+/* Where a dragged card will land. */
+.todo-col.todo-over { box-shadow: 0 0 0 4px #118ab2; }
+.todo-card.todo-drop-before { box-shadow: 0 -5px 0 -1px #118ab2, 0 3px 0 rgba(43, 45, 66, .6); }
+.todo-list.todo-drop-end::after { content: ''; display: block; height: 4px; border-radius: 2px; background: #118ab2; flex: none; }
+
+@media (max-width: 760px) {
+  .todo-cols, .todo-cols:has(.todo-done.folded) { grid-template-columns: minmax(0, 1fr); overflow: auto; }
+  .todo-col { min-height: 160px; }
+}

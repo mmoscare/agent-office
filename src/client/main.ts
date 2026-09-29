@@ -50,10 +50,13 @@ import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
+import { activeTodos } from './ui/todos';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { authorUpdates, onAuthorUpdates, openAuthorUpdates } from './ui/author-updates';
 import { mountAuthorUpdatesWall } from './world/author-updates';
+import { mountCalendarWall } from './world/calendar';
+import { choresPending, mountCalendarNag, onCalendarChores, openCalendar } from './ui/calendar';
 import { openManual } from './ui/manual';
 import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
@@ -73,6 +76,7 @@ import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elev
 import { toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { openPlans } from './ui/plans';
+import { openTimeCard, todayText } from './ui/timecard';
 import { openInbox } from './ui/inbox';
 import { mountMailNag, openMailSetup } from './ui/mail';
 import { receptionistLook } from './world/receptionist';
@@ -254,6 +258,15 @@ showPullsWall();
 const renderAuthorUpdatesWall = mountAuthorUpdatesWall(office);
 onAuthorUpdates(() => renderAuthorUpdatesWall(authorUpdates));
 renderAuthorUpdatesWall(authorUpdates);
+const paintCalendar = mountCalendarWall(office);
+const refreshCalendar = () => {
+  const utcOffset = store.sky?.utcOffset ?? -new Date().getTimezoneOffset();
+  paintCalendar(Date.now(), utcOffset, !choresPending());
+};
+store.on('sky', refreshCalendar);
+onCalendarChores(refreshCalendar);
+setInterval(refreshCalendar, 30_000);
+refreshCalendar();
 // PR notes name the desk they came from, or the agent a PR was handed to and how it's going.
 let deskLinks = '';
 store.on('workers', () => {
@@ -1721,6 +1734,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
   else if (target.kind === 'gitToggle') flipPullsWall();
   else if (target.kind === 'manual') openManual();
+  else if (target.kind === 'calendar') openCalendar();
   else if (target.kind === 'authorUpdates') showAuthorUpdates();
   else if (target.kind === 'services') openServices();
   else if (target.kind === 'queue') showQueue();
@@ -1740,6 +1754,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
     }
   } else if (target.kind === 'gong') hitGong();
   else if (target.kind === 'plans') openPlans(plansActions());
+  else if (target.kind === 'timecard') openTimeCard(net);
   else if (target.kind === 'whiteboard') openWhiteboard(net);
   else if (target.kind === 'cabinet') cabinet.play();
   else if (target.kind === 'ladder') grabLadder();
@@ -2198,6 +2213,8 @@ function hintFor(it: Interactable): Hint {
       return board(pullsWallMode() === 'git' ? '🌿 Git board' : '🔀 Pull request board');
     case 'manual':
       return { k: '', parts: [title('📘 Office Manual'), key('E', 'Read it')] };
+    case 'calendar':
+      return { k: '', parts: [title('📅 Calendar'), aside('first of the month'), key('E', 'Open')] };
     case 'authorUpdates':
       return board('Author updates');
     case 'gitToggle':
@@ -2238,6 +2255,10 @@ function hintFor(it: Interactable): Hint {
       return { k: `${left}|${best?.name}|${best?.score}`, parts: [title(`🕹️ ${GAME}`), aside(about), key('E', left !== null ? 'Carry on' : 'Play')] };
     }
     case 'plans': return { k: '', parts: [title('To Do Next'), aside('Your plans for this floor'), key('E', 'Open binder')] };
+    case 'timecard': {
+      const today = todayText();
+      return { k: today, parts: [title('🗂️ Indirect Time'), aside(`Today ${today} in the office`), key('E', 'Read card')] };
+    }
     case 'whiteboard': {
       const names = store.drawing.flatMap((id) => (id === store.you ? [] : (store.peers.get(id)?.name ?? []))).join(', ');
       return { k: names, parts: [title('📝 Whiteboard'), aside(names ? `✏️ ${clip(names, 40)} drawing` : 'draw together, live'), key('E', names ? 'Join in' : 'Draw')] };
@@ -2549,6 +2570,7 @@ store.on('inbox', () => office.setInTray(store.inbox.items.length));
 
 // Until her email is set up, the Receptionist pops up now and then to say so (see ui/mail.ts).
 mountMailNag({ desktop: () => settings.notify });
+mountCalendarNag({ desktop: () => settings.notify });
 
 // Whether you're really here: a tab in the background for a while means "needs you" alerts go by email.
 const sayPresence = () => net.send({ t: 'presence', away: document.hidden });
@@ -2726,7 +2748,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, authorUpdates: 9, manual: 4, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2880,14 +2902,35 @@ const noMedia = () => (window.isSecureContext ? undefined : 'Voice and screen sh
 const hud = mountHud(
   [
     { id: 'terminal', icon: '>_', label: 'Terminal', section: 'Open', key: 'Ctrl+`', status: () => true, title: () => 'Open a standalone terminal anywhere (Ctrl+`); PowerShell on Windows', run: () => openConsole(net) },
-    { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions()) },
+    // Your own To Do board, up on the top bar on every floor, with what you're on right now.
+    {
+      id: 'todo',
+      icon: '🔥',
+      label: 'To Do',
+      section: 'Open',
+      status: () => true,
+      chip: () => {
+        const now = activeTodos()[0]?.text;
+        return now ? (now.length > 32 ? `${now.slice(0, 31)}…` : now) : 'To Do';
+      },
+      count: () => activeTodos().length,
+      tone: () => (activeTodos().length ? 'danger' : undefined),
+      title: () => {
+        const active = activeTodos();
+        return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'Your own to-do list, the same on every floor';
+      },
+      run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
+    },
+    { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions(), { view: 'issues' }) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
     { id: 'manual', icon: '📘', label: 'Manual', section: 'Office', title: () => 'The Office Manual: how work gets to GitHub and back, what to do after a merge, and more', run: () => openManual() },
+    { id: 'calendar', icon: '📅', label: 'Calendar', section: 'Office', count: () => (choresPending() ? 3 : 0), status: () => choresPending(), chip: () => 'Monthly chores', title: () => 'The office calendar: first-of-the-month chores', run: openCalendar },
     { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
     { id: 'author-updates', icon: '🆕', label: 'Author updates', section: 'Office', shown: () => authorUpdates.enabled, count: () => authorUpdates.behind ?? 0, status: () => authorUpdates.enabled && !!(authorUpdates.behind || authorUpdates.merging), chip: () => authorUpdates.merging ? 'Merge needs attention' : 'Author updates', run: showAuthorUpdates },
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
     { id: 'services', icon: '🌐', label: 'Services', section: 'Open', count: () => store.services.items.length, title: () => 'Web servers the workers are running', run: () => openServices() },
     { id: 'plans', icon: '📒', label: 'To Do Next', section: 'Open', count: () => store.plans.items.filter((p) => p.status === 'todo').length, title: () => 'Your plans for this floor: hand them to the workers from here', run: () => openPlans(plansActions()) },
+    { id: 'timecard', icon: '🗂️', label: 'Indirect Time', section: 'Office', title: () => `Your hours with the office open, per day: ${todayText()} today`, run: () => openTimeCard(net) },
     { id: 'inbox', icon: '📥', label: 'In-tray', section: 'Open', key: 'I', count: () => store.inbox.items.length, title: () => 'What came in from outside: notes, forwarded emails and files, to file or queue', run: showInbox },
     { id: 'whiteboard', icon: '📝', label: 'Whiteboard', section: 'Open', title: () => 'Draw together, live', run: () => openWhiteboard(net) },
     // Up on the top bar while a meeting is on: what's being worked through in the meeting room.
@@ -2958,6 +3001,7 @@ const hud = mountHud(
   () => saveSettings(settings),
 );
 onAuthorUpdates(() => hud.refresh());
+onCalendarChores(() => hud.refresh());
 /** F: hang a picture on a wall of this floor. There are no walls for them up on the roof. */
 function startHanging() {
   if (upTop) return toast('No walls to hang pictures on up here — take the elevator down to a floor', 'warn');
