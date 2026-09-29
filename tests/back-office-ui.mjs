@@ -14,6 +14,7 @@ const codeDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const root = await mkdtemp(path.join(os.tmpdir(), 'agent-office-ui-'));
 const officeDir = path.join(root, 'office');
 const projectDir = path.join(root, 'back office project');
+const mainProjectDir = path.join(root, 'main project');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 let host;
 let browser;
@@ -28,6 +29,7 @@ try {
   ] }));
   await mkdir(path.join(projectDir, 'frontend'), { recursive: true });
   await mkdir(path.join(projectDir, 'backend'));
+  await mkdir(mainProjectDir);
   await writeFile(path.join(projectDir, 'keep.txt'), 'Unchanged project file');
   const socket = net.createServer();
   await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
@@ -83,20 +85,39 @@ try {
   const screenshotDir = path.join(codeDir, 'tmp/screenshots');
   await mkdir(screenshotDir, { recursive: true });
   const officeFloor = await page.evaluate(() => window.__office.store.floor);
+  const assertSingleEntrance = async () => {
+    assert.equal(await elevator.getByRole('button', { name: /Back Office/ }).count(), 1, 'only the bottom button opens Back Office');
+    assert.equal(await elevator.locator('.floors > :last-child.basement').count(), 1, 'Back Office is last in the floor list');
+    assert.equal(await elevator.locator('.floor-move, .back-office-toggle, .basement-manage').count(), 0, 'no filing controls on the main list');
+  };
 
-  // Add a local folder straight into the Back Office.
+  // Ordinary additions stay on the main list without any Back Office controls.
   await openElevator();
+  await assertSingleEntrance();
   assert.match(await elevator.locator('.floor-btn.basement').innerText(), /Back Office \(0\)/);
   await elevator.getByRole('button', { name: /Add a project/ }).click();
-  const toggle = page.getByLabel(/File it in the Back Office/);
-  assert.equal(await toggle.isChecked(), false, 'new projects go on the main list by default');
-  await toggle.check();
+  assert.equal(await elevator.getByRole('checkbox').count(), 0);
+  await page.locator('#local-floor-path').fill(mainProjectDir);
+  await page.getByRole('button', { name: 'Open folder', exact: true }).click();
+  await page.waitForFunction(() => window.__office?.store.project?.name === 'main project');
+  const mainProjectFloor = await page.evaluate(() => window.__office.store.floor);
+  assert.equal((await floors()).find(d => d.id === mainProjectFloor).backOffice, undefined);
+
+  // Open the single entrance, then add directly to the Back Office.
+  await openElevator();
+  await assertSingleEntrance();
+  await elevator.getByRole('button', { name: /Add a project/ }).click();
   await page.locator('#local-floor-path').fill(projectDir);
+  await elevator.locator('.floor-btn.basement').click();
+  assert.equal(await page.locator('#local-floor-path').inputValue(), projectDir, 'switching lists preserves the typed folder');
+  assert.equal(await elevator.getByRole('heading', { name: 'Add a project to Back Office' }).count(), 1);
+  assert.equal(await elevator.getByRole('checkbox').count(), 0);
+  assert.equal(await elevator.getByRole('button', { name: 'Move here', exact: true }).isDisabled(), true, 'moving requires choosing a project');
   await elevator.screenshot({ path: path.join(screenshotDir, 'back-office-add.png') });
   await page.getByRole('button', { name: 'Open folder', exact: true }).click();
   await page.waitForFunction(() => window.__office?.store.project?.name === 'back office project');
   const saved = await floors();
-  assert.equal(saved.length, 2);
+  assert.equal(saved.length, 3);
   assert.equal(saved.find(d => d.name === 'back office project').backOffice, true);
   assert.equal(saved.find(d => d.id === officeFloor).backOffice, undefined);
   // The header counts floors the way the elevator numbers them.
@@ -109,9 +130,9 @@ try {
     window.__office.office.elevator.group.getObjectByName('elevator-floor-tiles').traverse(o => { if (o.userData.interact?.floorId) ids.push(o.userData.interact.floorId); });
     return JSON.stringify(ids) === JSON.stringify(expected);
   }, expected, { timeout: 5000 });
-  await tilesAre([officeFloor, '@roof', backFloor]);
+  await tilesAre([officeFloor, mainProjectFloor, '@roof', backFloor]);
   // So does the Needs you panel.
-  assert.deepEqual(await page.locator('#attention-floors .attention-floor-number').allTextContents(), ['1', 'B1']);
+  assert.deepEqual(await page.locator('#attention-floors .attention-floor-number').allTextContents(), ['1', '2', 'B1']);
 
   // On a Back Office floor, the elevator opens in the basement.
   await openElevator();
@@ -119,14 +140,18 @@ try {
   assert.match(await elevator.locator('.floor-btn.here').innerText(), /B1[\s\S]*back office project[\s\S]*you are here/);
   await elevator.screenshot({ path: path.join(screenshotDir, 'back-office-basement.png') });
   await elevator.getByRole('button', { name: /back to the floors/ }).click();
-  // The main list shrank by one: only the office's own floor, numbered 1, and the basement button.
-  assert.equal(await elevator.locator('.floor-row').count(), 1);
-  assert.match(await elevator.locator('.floor-row').innerText(), /^1\b/);
+  // Main floors have one ride button each, followed by the single basement button.
+  await assertSingleEntrance();
+  assert.deepEqual(await elevator.locator('.floors > .floor-btn .floor-no').allTextContents(), ['🍸', '1', '2', 'B']);
   assert.match(await elevator.locator('.floor-btn.basement').innerText(), /Back Office \(1\)[\s\S]*you are down here/);
   await elevator.screenshot({ path: path.join(screenshotDir, 'back-office-main.png') });
-  await elevator.locator('.floor-row .floor-btn').first().click();
+  await page.setViewportSize({ width: 480, height: 900 });
+  await assertSingleEntrance();
+  await elevator.screenshot({ path: path.join(screenshotDir, 'back-office-main-narrow.png') });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await elevator.getByTitle('Ride to office', { exact: true }).click();
   await page.waitForFunction(id => window.__office?.store.floor === id, officeFloor);
-  assert.match(await projectMeta(), /🛗 floor 1 of 1\b/, 'the Back Office floor is not counted among the main floors');
+  assert.match(await projectMeta(), /🛗 floor 1 of 2\b/, 'the Back Office floor is not counted among the main floors');
 
   // Down to B and pick the Back Office floor.
   await openElevator();
@@ -134,34 +159,42 @@ try {
   await elevator.locator('.floor-btn').filter({ hasText: 'back office project' }).click();
   await page.waitForFunction(() => window.__office?.store.project?.name === 'back office project');
 
-  // Move the office's floor down and back up without re-adding it.
+  // Filing is only available inside Back Office, in a single project picker.
   await openElevator();
-  await elevator.getByRole('button', { name: /back to the floors/ }).click();
-  await elevator.locator('.floor-move').first().click();
+  const moveProject = elevator.getByLabel('Move an existing project');
+  assert.equal(await elevator.locator('.floor-move').count(), 0, 'Back Office rows also have no per-floor filing buttons');
+  for (const id of [officeFloor, mainProjectFloor]) {
+    await moveProject.selectOption(id);
+    await elevator.getByRole('button', { name: 'Move here', exact: true }).click();
+    await page.waitForFunction(id => window.__office.store.floors.find(f => f.id === id).backOffice, id);
+  }
   await page.waitForFunction(() => window.__office.store.floors.every(f => f.backOffice));
   assert.ok((await floors()).every(d => d.backOffice === true));
+  await elevator.getByRole('button', { name: /back to the floors/ }).click();
+  await assertSingleEntrance();
   assert.match(await elevator.innerText(), /Every floor is filed in the Back Office/);
-  await tilesAre(['@roof', officeFloor, backFloor]);
+  await tilesAre(['@roof', officeFloor, mainProjectFloor, backFloor]);
   await elevator.locator('.floor-btn.basement').click();
-  await elevator.locator('.floor-row').filter({ hasText: /^B1/ }).locator('.floor-move').click();
-  await page.waitForFunction(id => !window.__office.store.floors.find(f => f.id === id).backOffice, officeFloor);
+  for (const id of [officeFloor, mainProjectFloor]) {
+    await moveProject.selectOption(id);
+    await elevator.getByRole('button', { name: 'Move upstairs', exact: true }).click();
+    await page.waitForFunction(id => !window.__office.store.floors.find(f => f.id === id).backOffice, id);
+  }
   assert.equal((await floors()).find(d => d.id === officeFloor).backOffice, undefined);
-  await tilesAre([officeFloor, '@roof', backFloor]);
+  await tilesAre([officeFloor, mainProjectFloor, '@roof', backFloor]);
   await elevator.getByRole('button', { name: 'Close', exact: true }).click();
 
-  // The corner floor menu keeps the Back Office in its own section, open while you're down there.
+  // The corner floor menu has no second Back Office entrance, even from a Back Office floor.
   await page.evaluate(() => document.exitPointerLock());
   await page.locator('#project').click();
   const menu = page.getByRole('menu', { name: 'Floors' });
   await menu.waitFor({ state: 'visible' });
-  assert.match(await menu.innerText(), /Back Office \(1\)/i);
-  const backItem = menu.locator('.floor-item').filter({ hasText: 'back office project' });
-  assert.match(await backItem.innerText(), /B1[\s\S]*you are here/);
+  assert.doesNotMatch(await menu.innerText(), /back office/i);
+  assert.equal(await menu.getByRole('menuitem', { name: /Elevator/ }).count(), 1, 'the regular elevator shortcut stays available');
+  assert.equal(await menu.locator('.floor-menu-section').count(), 0);
   await menu.screenshot({ path: path.join(screenshotDir, 'back-office-floor-menu.png') });
-  await menu.getByRole('button', { name: /Back Office/ }).click();
-  assert.equal(await backItem.count(), 0, 'the section collapses');
   await page.keyboard.press('Escape');
-  // A look at the back-wall tiles: floor 1, the roof, then B1 (you are here).
+  // A look at the back-wall tiles: floors 1 and 2, the roof, then B1 (you are here).
   await page.evaluate(() => {
     const { player } = window.__office;
     player.view = 'third';
@@ -182,7 +215,7 @@ try {
   });
   assert.equal(host.exitCode, 0);
   assert.equal(await fetch(url + '/api/health').then(r => r.ok, () => false), false);
-  console.log('PASS: added a local folder into the Back Office, rode to B1 and back up, moved a floor down and back, and floors.json kept the flag.');
+  console.log('PASS: exactly one Back Office entrance at the bottom of the elevator on desktop and narrow screens; no per-floor or corner-menu controls; local additions, rides and centralized project moves persist correctly.');
 } finally {
   if (browser) await browser.close();
   if (host && host.exitCode === null) {
