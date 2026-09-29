@@ -9,6 +9,7 @@ import { usageLabel, usageTitle } from './usage';
 import { openModelUsage } from './model-usage';
 import { testChangesButton } from './test-changes';
 import { terminalBranches } from './terminal-branches';
+import { terminalBrief } from './terminal-brief';
 import { clipboardAction, isMac } from './terminal-clipboard';
 import { copyText } from './copy-code';
 import type { ServerMsg, WorkerInfo } from '../../shared/protocol';
@@ -66,6 +67,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   if (!info) return;
 
   const branches = terminalBranches();
+  const brief = terminalBrief(() => (onSide ? side?.term : term)?.focus());
   const dot = h('span.dot', { style: `background:${info.color}` });
   const title = h('h2', {}, info.kind === 'agent' ? `${providerLabel(info.provider, store.project)} · ${info.name}` : info.name);
   const pill = h('span.pill', {}, '');
@@ -89,7 +91,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const shellTab = h('button.gh-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', title: "A shell in this worker's checkout, beside it: check the branch, git status, run the tests (Ctrl+Shift+` switches tabs)" }, '🐚 Shell');
   const tabs = info.kind === 'agent' ? h('nav.gh-tabs.term-tabs', { role: 'tablist' }, agentTab, shellTab) : null;
   const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), branches.element, tabs, host, sideHost);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), brief.element, branches.element, tabs, host, sideHost);
 
   const { term, fit } = newTerm();
 
@@ -182,6 +184,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       return;
     }
     title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title].filter(Boolean).join(' · ');
+    brief.refresh(w);
     branches.refresh(w, store.project?.branch);
     pill.className = `pill ${w.status}`;
     pill.textContent = STATUS_LABEL[w.status] ?? w.status;
@@ -386,6 +389,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       clearInterval(typingTimer);
       ro.disconnect();
       branches.dispose();
+      brief.dispose();
       sideRo.disconnect();
       net.send({ t: 'worker.detach', workerId });
       term.dispose();
@@ -411,6 +415,10 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     modal.close();
   });
 
+  el.addEventListener('mousedown', (e) => {
+    if ((e.target as HTMLElement).closest('button, input, select, a')) return;
+    (onSide ? side?.term : term)?.focus();
+  });
   term.open(host);
   term.attachCustomKeyEventHandler(keysFor(term));
   term.onData((data) => {

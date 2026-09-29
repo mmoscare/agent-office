@@ -17,7 +17,7 @@ test('standalone shell uses PowerShell with profiles on Windows and preserves Un
   assert.deepEqual(consoleShellLaunch('darwin', {}), { file: '/bin/bash', args: ['-l'] });
 });
 
-test('standalone shells navigate outside the floor, keep their directory on reopen, and isolate clients', async t => {
+test('standalone shells navigate outside the floor, keep their directory on reopen, follow a floor change, and isolate clients', async t => {
   const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'office-console-test-')));
   const floor = path.join(root, 'floor');
   const other = path.join(root, 'folder with spaces');
@@ -66,10 +66,15 @@ test('standalone shells navigate outside the floor, keep their directory on reop
   write('alice', win ? "cd ..; cd 'folder with spaces'; $global:officeConsoleValue = 'ALICE_ONLY'; Write-Output ('PATH_' + (Get-Location).Path)" : "cd ..; cd 'folder with spaces'; officeConsoleValue=ALICE_ONLY; printf 'PATH_%s\\n' \"$PWD\"");
   await until(() => (output.get('alice') ?? '').includes('PATH_' + other));
   shells.handle('alice', { t: 'console.detach' }, floor);
-  attach('alice', root);
+  attach('alice');
   output.set('alice', '');
   write('alice', win ? "Write-Output ('AGAIN_' + (Get-Location).Path + $officeConsoleValue)" : "printf 'AGAIN_%s%s\\n' \"$PWD\" \"$officeConsoleValue\"");
   await until(() => (output.get('alice') ?? '').includes('AGAIN_' + other + 'ALICE_ONLY'));
+  attach('alice', root);
+  output.set('alice', '');
+  write('alice', win ? "Write-Output ('FLOOR_' + (Get-Location).Path + '_' + [string]::IsNullOrEmpty($officeConsoleValue))" : "printf 'FLOOR_%s_%s\\n' \"$PWD\" \"$officeConsoleValue\"");
+  await until(() => (output.get('alice') ?? '').includes('FLOOR_' + root + '_'));
+  assert.ok(!(output.get('alice') ?? '').includes('ALICE_ONLY'));
   attach('bob');
   write('bob', marker);
   await until(() => (output.get('bob') ?? '').includes('HELLO_SHELL'));

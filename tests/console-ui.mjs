@@ -66,7 +66,15 @@ try {
   await dialog.getByText(`Started in: ${floor}`, { exact: true }).waitFor();
   async function command(text, expected) {
     await page.waitForFunction(() => /PS [^>]+>/.test(document.querySelector('[aria-label="Standalone terminal"] .xterm-screen')?.textContent ?? ''));
-    await dialog.locator('.xterm-helper-textarea').focus();
+    await dialog.locator('.xterm-screen').click();
+    assert.equal(await page.evaluate(() => {
+      const dialog = document.querySelector('[aria-label="Standalone terminal"]');
+      const ta = dialog?.querySelector('.xterm-helper-textarea');
+      if (!dialog || !(ta instanceof HTMLElement)) return false;
+      const box = dialog.getBoundingClientRect();
+      const input = ta.getBoundingClientRect();
+      return document.activeElement === ta && input.left >= box.left - 2 && input.top >= box.top - 2 && input.left <= box.right && input.top <= box.bottom;
+    }), true);
     await page.keyboard.insertText(text);
     await page.keyboard.press('Enter');
     try {
@@ -90,7 +98,7 @@ try {
   await dialog.getByText(`Started in: ${floor}`, { exact: true }).waitFor();
   await command("Write-Output ('RESET_' + (Get-Location).Path)", 'RESET_' + floor);
   await command("Write-Output ('ISOLATED_' + [string]::IsNullOrEmpty($officeConsoleTest))", 'ISOLATED_True');
-  await dialog.locator('.xterm-helper-textarea').focus();
+  await dialog.locator('.xterm-screen').click();
   await page.keyboard.insertText('exit');
   await page.keyboard.press('Enter');
   await dialog.getByText('Shell exited. Press Enter to start a new shell in the current floor folder.', { exact: true }).waitFor();
