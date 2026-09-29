@@ -6,7 +6,7 @@ Double-click **Agent Office** on your Desktop, or search for it in Start. Right-
 
 The shortcut opens your personal version and the building containing Personal-Portfolio and MFT-Trading-Dashboard. If the old PowerShell copy is running, let its workers finish and press Ctrl+C once before using the shortcut. The launcher may ask for your usual office password once, then remembers it encrypted for your Windows account.
 
-The icon near the Windows clock has **Open**, **Restart**, and **Stop** options. Closing the browser leaves the office running. More details: [Windows launcher](personal/windows/README.md).
+The icon near the Windows clock has **Open**, **Restart**, and **Stop** options. Starting the office also opens a server terminal and Chrome. Closing Chrome leaves the office running; close the server terminal (or Ctrl+C in it) to stop the backend. More details: [Windows launcher](personal/windows/README.md).
 
 ## Start using the Windows fix
 
