@@ -127,6 +127,8 @@ export interface CardOpts {
   bg: string;
   /** A thick band of colour down the card's left edge, e.g. the kind of work a worker is on. */
   stripe?: string;
+  /** The outline's color, when it isn't the usual ink. */
+  border?: string;
   /** Widest a line of text may get, in textSprite `size` pixels. */
   maxWidth?: number;
 }
@@ -210,7 +212,7 @@ export function cardSprite(o: CardOpts): THREE.Sprite {
   }
   ctx.lineWidth = lw;
   ctx.lineJoin = 'round';
-  ctx.strokeStyle = INK;
+  ctx.strokeStyle = o.border ?? INK;
   ctx.stroke();
 
   ctx.textAlign = 'center';
