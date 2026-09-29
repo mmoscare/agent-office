@@ -125,12 +125,17 @@ export class BoardRequests {
 
   /** A newer reading of the quota, from a response's headers or its rateLimit field. */
   note(q?: GhQuota) {
-    if (q) this.quota = q;
+    if (q) this.quota = { remaining: q.remaining, resetAt: q.resetAt };
+  }
+
+  /** Throws the pause, if reads are paused: before a window sets off several calls at once. */
+  guard() {
+    const pause = this.paused();
+    if (pause) throw new QuotaPause(pause, this.now());
   }
 
   private async attempt(args: string[], cwd: string, source?: string, timeout?: number): Promise<string> {
-    const pause = this.paused();
-    if (pause) throw new QuotaPause(pause, this.now());
+    this.guard();
     try {
       const { headers, body } = splitHeaders(await this.query(args, cwd, source, timeout));
       this.note(headerQuota(headers));

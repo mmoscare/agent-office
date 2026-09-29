@@ -20,7 +20,7 @@ const BOARDS: Board[] = ['issues', 'pulls'];
 export const ghSpend = new GhSpend();
 
 /** Turns gh's stderr into something a person standing at the board can act on. */
-function friendly(raw: string): string {
+export function friendly(raw: string): string {
   if (RATE_LIMIT.test(raw)) return quotaMessage({ why: /secondary|abuse/i.test(raw) ? 'secondary' : 'limit', until: boardRequests.resetHint() });
   if (/no git remotes found|none of the git remotes/i.test(raw)) return 'This project has no GitHub remote yet. Push it to GitHub (git remote add origin <url>) to fill the boards.';
   if (/not a git repository/i.test(raw)) return "This folder isn't a git repository";
@@ -321,6 +321,7 @@ export class GitHub {
 
   /** A PR's description, conversation, line comments, checks and whether it can merge. */
   async pullDetail(n: number, repo?: string): Promise<GhPullDetail> {
+    this.requests.guard();
     const { dir } = await this.source(repo);
     const fields = 'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
@@ -373,6 +374,7 @@ export class GitHub {
   }
 
   async issueDetail(n: number, repo?: string): Promise<GhIssueDetail> {
+    this.requests.guard();
     const { dir } = await this.source(repo);
     const [view, viewer] = await Promise.all([this.requests.direct(['issue', 'view', String(n), '--json', 'number,state,body,comments'], dir, 'detail windows'), this.viewer()]);
     const i = JSON.parse(view);

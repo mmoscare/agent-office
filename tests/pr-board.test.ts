@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GhPull, UnshippedItem } from '../src/shared/protocol.js';
-import { comparePulls, ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo, sortUnshipped } from '../src/client/ui/pr-board-model.js';
+import { comparePulls, ghTrouble, groupByRepo, liftsAt, pauseNote, pullSections, pullStatus, showsRepo, sortUnshipped } from '../src/client/ui/pr-board-model.js';
 
 function pr(number: number, over: Partial<GhPull> = {}): GhPull {
   return {
@@ -83,6 +83,20 @@ test('ghTrouble tells rate limits, setup and network trouble apart', () => {
   assert.equal(ghTrouble('spawn gh ENOENT'), 'setup');
   assert.equal(ghTrouble('error connecting to api.github.com: dial tcp: lookup api.github.com: ENOTFOUND'), 'offline');
   assert.equal(ghTrouble('something else broke'), 'other');
+  // The office's own rate-limit wording is still a rate limit.
+  assert.equal(ghTrouble("GitHub's API rate limit: this account's shared hourly API quota ran out"), 'rate-limit');
+});
+
+test("a paused board says whose quota ran out and when it resets, in the viewer's own time", () => {
+  const until = Date.now() + 6 * 60_000;
+  const out = pauseNote({ until, why: 'limit' });
+  assert.equal(out.text, "This GitHub account's shared hourly API quota ran out.");
+  assert.ok(out.sub.startsWith(`It resets at ${liftsAt(until)};`), out.sub);
+  assert.match(out.sub, /tries again by itself.*Signing in again won't/);
+  const saving = pauseNote({ until, why: 'reserve', remaining: 480 });
+  assert.match(saving.text, /480 points left this hour/);
+  assert.match(saving.sub, /Background refreshes wait until .* Refresh still works/);
+  assert.match(pauseNote({ until, why: 'secondary' }).text, /secondary rate limit/);
 });
 
 test('sortUnshipped: actionable first, then recovering, then still-working; newest within each', () => {

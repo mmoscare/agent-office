@@ -1,4 +1,4 @@
-import type { GhPull, UnshippedItem } from '../../shared/protocol';
+import type { GhPause, GhPull, UnshippedItem } from '../../shared/protocol';
 
 /**
  * What the Pull Requests board shows, worked out without the DOM (ui/boards.ts draws it, and the 3D
@@ -108,6 +108,27 @@ export function ghTrouble(error: string): GhTrouble {
   if (/auth login|not logged|authentication|HTTP 401|bad credentials|ENOENT|not recognized|command not found/i.test(error)) return 'setup';
   if (/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|could not resolve host|network|timed? ?out/i.test(error)) return 'offline';
   return 'other';
+}
+
+/** When a rate-limit pause lifts, in the viewer's own clock: "9:15 PM". */
+export function liftsAt(until: number): string {
+  return new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+/** What a board says while GitHub's rate limit holds the office's reads back, and until when. */
+export function pauseNote(p: GhPause): { text: string; sub: string } {
+  const at = liftsAt(p.until);
+  if (p.why === 'reserve') {
+    return {
+      text: `Saving GitHub quota${p.remaining !== undefined ? `: ${p.remaining} points left this hour` : ''}.`,
+      sub: `Background refreshes wait until ${at} so workers can still open pull requests; 🔄 Refresh still works.`,
+    };
+  }
+  if (p.why === 'secondary') return { text: 'GitHub asked the office to slow down (secondary rate limit).', sub: `It lifts at ${at}; the office tries again by itself then.` };
+  return {
+    text: "This GitHub account's shared hourly API quota ran out.",
+    sub: `It resets at ${at}; the office tries again by itself then. Signing in again won't bring it back.`,
+  };
 }
 
 /**

@@ -1,4 +1,4 @@
-import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type GhIssue, type GhIssueDetail, type GhMergeMethod, type GhPull, type GhPullDetail, type GhReviewComment, type GhWhere, type PullWork, type ServerMsg } from '../../shared/protocol';
+import { ghKey, ghRef, type GhCheck, type GhCloseReason, type GhComment, type GhIssue, type GhIssueDetail, type GhMergeMethod, type GhPause, type GhPull, type GhPullDetail, type GhReviewComment, type GhWhere, type PullWork, type ServerMsg } from '../../shared/protocol';
 import type { Net } from '../net';
 import { AVATAR_COLORS, store, workerForPull } from '../state';
 import { checkoutNote, issuePrompt, repoFlag, type BoardActions } from './boards';
@@ -8,6 +8,7 @@ import { markdown, repoUrlOf } from './markdown';
 import { buildTree, looksGenerated, parseDiff, renderFileDiff, renderThread, repliesOf, Reviewed, STATUS_WORD, treeOrder, type DiffFile, type TreeDir } from './pulldiff';
 import { providerPicker } from './provider';
 import { pullWorkIndicators } from './pull-work';
+import { liftsAt } from './pr-board-model';
 
 // The windows behind the board cards. A PR opens on its conversation (description, comments,
 // reviews, line comments, checks) with a Files tab for the diff, where you tick files off as
@@ -23,15 +24,23 @@ function itemQuery(it: { number: number } & GhWhere): string {
   return `number=${it.number}${it.repo ? `&repo=${encodeURIComponent(it.repo)}` : ''}`;
 }
 
+/** Why a window couldn't load: what the server said, and GitHub's rate-limit pause when that's why. */
+type LoadError = Error & { paused?: GhPause };
+
+async function failure(r: Response): Promise<LoadError> {
+  const body = await r.json().catch(() => null);
+  return Object.assign(new Error(body?.error ?? `HTTP ${r.status}`), { paused: body?.paused as GhPause | undefined });
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const r = await fetch(onFloor(url), { credentials: 'same-origin' });
-  if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw await failure(r);
   return r.json() as Promise<T>;
 }
 
 async function getText(url: string): Promise<string> {
   const r = await fetch(onFloor(url), { credentials: 'same-origin' });
-  if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `HTTP ${r.status}`);
+  if (!r.ok) throw await failure(r);
   return r.text();
 }
 
@@ -132,8 +141,19 @@ function spinnerRow(text: string) {
   return h('div.gh-loading', {}, h('span.spinner'), text);
 }
 
-function errorBox(text: string, retry?: () => void) {
-  return h('div.gh-error', {}, `Couldn't load from GitHub: ${text}`, retry ? h('button.btn', { type: 'button', onclick: retry }, 'Try again') : null);
+function errorBox(err: LoadError, retry?: () => void) {
+  const paused = err.paused;
+  if (!paused || paused.until <= Date.now()) return h('div.gh-error', {}, `Couldn't load from GitHub: ${err.message}`, retry ? h('button.btn', { type: 'button', onclick: retry }, 'Try again') : null);
+  // Trying again before the quota resets would only be refused: the window loads by itself once it has.
+  const box = h(
+    'div.gh-error',
+    {},
+    paused.why === 'secondary'
+      ? `GitHub asked the office to slow down (secondary rate limit). This window loads by itself at ${liftsAt(paused.until)}.`
+      : `This GitHub account's shared hourly API quota ran out. It resets at ${liftsAt(paused.until)}, and this window loads by itself then.`,
+  );
+  if (retry) setTimeout(() => box.isConnected && retry(), paused.until - Date.now() + 1500);
+  return box;
 }
 
 const CHECK_ICON: Record<GhCheck['state'], string> = { pass: '✅', fail: '❌', pending: '🟡', skip: '⚪' };
@@ -517,9 +537,9 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
   const itemUrl = it.url;
   const reviewed = new Reviewed(it.url);
   let detail: GhPullDetail | null = null;
-  let detailError = '';
+  let detailError: LoadError | undefined;
   let files: DiffFile[] | null = null;
-  let diffError = '';
+  let diffError: LoadError | undefined;
   let tab: 'conversation' | 'files' = pref<string>(TAB_KEY, '') === 'files' ? 'files' : 'conversation';
   let mode: 'tree' | 'list' = pref<string>(FILES_KEY, '') === 'list' ? 'list' : 'tree';
   let filter = '';
@@ -971,8 +991,8 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
   let generation = 0;
   function loadAll() {
     const g = ++generation;
-    detailError = '';
-    diffError = '';
+    detailError = undefined;
+    diffError = undefined;
     renderConv();
     getJson<GhPullDetail>(`/api/gh/pull?${itemQuery(it)}`)
       .then((d) => {
@@ -983,14 +1003,14 @@ export function openPull(first: GhPull, net: Net, actions: BoardActions) {
         // Line comments go into the diff, so draw it again with them.
         if (files) setupFiles();
       })
-      .catch((err) => g === generation && (detailError = (err as Error).message))
+      .catch((err) => g === generation && (detailError = err as LoadError))
       .finally(() => g === generation && (renderFrame(), renderConv()));
     getText(`/api/gh/pull/diff?${itemQuery(it)}`)
       .then((text) => {
         if (g !== generation) return;
         files = parseDiff(text);
       })
-      .catch((err) => g === generation && (diffError = (err as Error).message))
+      .catch((err) => g === generation && (diffError = err as LoadError))
       .finally(() => g === generation && (setupFiles(), renderFrame()));
     renderFrame();
   }
@@ -1027,7 +1047,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   let it = first;
   const itemUrl = it.url;
   let detail: GhIssueDetail | null = null;
-  let error = '';
+  let error: LoadError | undefined;
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const pill = h('span.pill');
   const conv = h('div.gh-conv');
@@ -1100,7 +1120,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
   let generation = 0;
   function load() {
     const g = ++generation;
-    error = '';
+    error = undefined;
     render();
     getJson<GhIssueDetail>(`/api/gh/issue?${itemQuery(it)}`)
       .then((d) => {
@@ -1109,7 +1129,7 @@ export function openIssue(first: GhIssue, net: Net, actions: BoardActions) {
         it = { ...it, state: d.state };
         comment.setViewer(d.viewer);
       })
-      .catch((err) => g === generation && (error = (err as Error).message))
+      .catch((err) => g === generation && (error = err as LoadError))
       .finally(() => g === generation && (renderFrame(), render()));
   }
   const unsubs = [

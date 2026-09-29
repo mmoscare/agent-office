@@ -1,5 +1,5 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
+import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhState, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
 import { pullWorkers } from '../../shared/pull-work';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
@@ -9,7 +9,7 @@ import { labelChip, openIssue, openPull } from './pull';
 import { providerLabel } from './provider';
 import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
-import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './pr-board-model';
+import { ghTrouble, groupByRepo, pauseNote, pullSections, pullStatus, showsRepo } from './pr-board-model';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows, submitterChip } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
 import { mountTodoBoard, type TodoBoard } from './todos';
@@ -122,9 +122,16 @@ function unshipped(net: Net, actions: BoardActions): HTMLElement {
   });
 }
 
-/** What to say when GitHub didn't answer, by why. */
-function troubleText(error: string, haveItems: boolean): { icon: string; text: string; sub: string } {
-  const kept = haveItems ? ' Showing the last list it gave.' : '';
+/** What to say when GitHub didn't answer, by why; nothing when it did. */
+function troubleText(st: GhState<unknown>): { icon: string; text: string; sub: string } | undefined {
+  const kept = st.items.length ? ' Showing the last list it gave.' : '';
+  // The rate limit, with when it lifts: the office knows, so the board can say.
+  if (st.paused && st.paused.until > Date.now()) {
+    const note = pauseNote(st.paused);
+    return { icon: '⏳', text: `${note.text}${kept}`, sub: `${note.sub} Unshipped work is read from disk and still shows.` };
+  }
+  const error = st.error;
+  if (!error) return undefined;
   switch (ghTrouble(error)) {
     case 'rate-limit':
       return { icon: '⏳', text: `GitHub's rate limit is reached.${kept}`, sub: 'The board tries again by itself; unshipped work is read from disk and still shows.' };
@@ -189,7 +196,7 @@ function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net
   const unavailable = !!st.error && !st.items.length;
   const showRepo = showsRepo(st.items.map((p) => p.repo));
   const s = pullSections(st.items, view.doneAll ? Infinity : 10);
-  const trouble = st.error ? troubleText(st.error, st.items.length > 0) : undefined;
+  const trouble = troubleText(st);
 
   const jump = (id: string, icon: string, n: number | string, what: string, tone: string) =>
     h('button.prb-chip', { type: 'button', class: `tone-${tone}`, 'data-focus': `tally-${id}`, title: `Go to ${what}`, onclick: () => body.querySelector(`#${id}`)?.scrollIntoView({ block: 'start' }) }, h('span', { 'aria-hidden': 'true' }, icon), h('b', {}, String(n)), what);
@@ -199,7 +206,7 @@ function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net
     jump('prb-unshipped', '🧳', store.unshipped.scannedAt ? store.unshipped.items.length : '…', 'unshipped', 'unshipped'),
     jump('prb-progress', '🚧', pending ?? s.inProgress.length, 'in progress', 'progress'),
     jump('prb-done', '🎉', pending ?? s.doneTotal, 'done', 'done'),
-    trouble ? h('div.prb-banner', { role: 'status', title: st.error }, h('span.big', { 'aria-hidden': 'true' }, trouble.icon), h('div', {}, h('b', {}, trouble.text), h('small', {}, trouble.sub))) : '',
+    trouble ? h('div.prb-banner', { role: 'status', title: st.error ?? '' }, h('span.big', { 'aria-hidden': 'true' }, trouble.icon), h('div', {}, h('b', {}, trouble.text), h('small', {}, trouble.sub))) : '',
   );
 
   const blank = (icon: string, text: string, sub?: string): Node[] => (loading ? skeletonRows(2) : unavailable ? [emptyRow(trouble!.icon, 'GitHub unavailable', 'Pull requests show up here once it answers.')] : [emptyRow(icon, text, sub)]);
@@ -316,8 +323,10 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     const scrolled = [...body.querySelectorAll('.column > ul')].map((ul) => ul.scrollTop);
     const { scrollLeft, scrollTop } = body;
     body.replaceChildren();
-    warning.hidden = !st.error;
-    if (st.error) warning.textContent = `${st.items.length ? 'Some GitHub data may be out of date' : "Couldn't load from GitHub"}: ${st.error}`;
+    const paused = st.paused && st.paused.until > Date.now() ? pauseNote(st.paused) : undefined;
+    warning.hidden = !st.error && !paused;
+    if (paused) warning.textContent = `⏳ ${paused.text} ${paused.sub}`;
+    else if (st.error) warning.textContent = `${st.items.length ? 'Some GitHub data may be out of date' : "Couldn't load from GitHub"}: ${st.error}`;
     if (st.error && !st.items.length) return;
     for (const col of issueColumns(store.issues.items)) {
       const ul = h('ul');
