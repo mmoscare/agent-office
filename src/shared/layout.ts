@@ -116,6 +116,11 @@ export const STATION_AGENT: Record<StationKind, { name: string; color: string }>
 export const LOFT = { minX: 9, maxX: FLOOR.maxX, minZ: 8, maxZ: FLOOR.maxZ, y: 3, height: 2.8 } as const;
 /** Its stairs climb east along the south wall and arrive at the loft's west door. */
 export const STAIRS = { fromX: 3, toX: LOFT.minX, minZ: 11.2, maxZ: FLOOR.maxZ, steps: 15 } as const;
+/**
+ * The wall calendar in the boss office: south wall, west of the bookshelf. `u` is x along that wall,
+ * `y` the centre above the loft floor.
+ */
+export const CALENDAR = { wall: 'south' as const, u: 12.25, y: LOFT.y + 1.48, width: 0.88, height: 1.12 } as const;
 
 /**
  * The meeting room: glass walls round the space under the boss office, from the loft's posts to the
