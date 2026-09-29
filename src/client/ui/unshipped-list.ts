@@ -16,6 +16,8 @@ export interface UnshippedListProps {
   error?: string;
   /** Why some PR statuses are unknown (GitHub rate-limited or offline). */
   prNote?: string;
+  /** Set when GitHub's rate limit is why, instead of gh's words in prNote. */
+  prLimit?: { secondary: boolean; resetAt?: number };
   /** A recovery task already on the queue for it. */
   recovery(it: UnshippedItem): { running: boolean; workerName?: string } | undefined;
   /** Its worker's colour, while that worker is still in the office. */
@@ -28,13 +30,15 @@ export interface UnshippedListProps {
 }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+const clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 const WORKER_STATE: Record<UnshippedItem['worker'], string> = { active: 'working', idle: 'at its desk', gone: 'gone home' };
 
 export function unshippedSection(p: UnshippedListProps): HTMLElement {
   const items = sortUnshipped(p.items, (it) => !!p.recovery(it));
   const rows: Node[] = [];
   if (p.error) rows.push(h('li.prb-note.bad', {}, `⚠️ Couldn't look through the branches: ${p.error}`));
-  if (p.prNote) rows.push(h('li.prb-note', {}, `❔ GitHub couldn't be asked about some branches (${p.prNote}), so they may have a PR after all. Showing what's on disk.`));
+  if (p.prLimit) rows.push(h('li.prb-note', {}, limitNote(p.prLimit)));
+  else if (p.prNote) rows.push(h('li.prb-note', {}, `❔ GitHub couldn't be asked about some branches (${p.prNote}), so they may have a PR after all. Showing what's on disk.`));
   const many = showsRepo(items.map((it) => it.repository));
   for (const g of groupByRepo(items, (it) => (many ? it.repository : undefined))) {
     if (many) rows.push(repoHeading(g.repo || 'this folder', g.items.length));
@@ -43,6 +47,13 @@ export function unshippedSection(p: UnshippedListProps): HTMLElement {
   if (!items.length && !p.error) rows.push(...(p.scannedAt ? [emptyRow('🎉', 'Every branch is shipped', 'No office branch holds work without a PR.')] : skeletonRows(1)));
   const rescan = h('button.btn.prb-tool', { type: 'button', title: 'Look through the branches again', 'aria-label': 'Rescan branches', disabled: p.scanning, onclick: () => p.rescan() }, p.scanning ? '⏳' : '🔄');
   return section({ id: 'prb-unshipped', tone: 'unshipped', icon: '🧳', title: 'Unshipped work', count: items.length, hint: 'on a branch, no PR yet', tools: [rescan], rows });
+}
+
+/** Why PR statuses are unknown when it's GitHub's rate limit, in plain words rather than gh's. */
+export function limitNote(limit: { secondary: boolean; resetAt?: number }): string {
+  const why = limit.secondary ? 'GitHub asked the office to slow down for a few minutes' : "The GitHub account's shared hourly API quota ran out";
+  const when = limit.resetAt ? ` It ${limit.secondary ? 'lifts' : 'resets'} at ${clock(limit.resetAt)}.` : '';
+  return `❔ ${why}, so some branches may have a PR after all.${when} Showing what's on disk.`;
 }
 
 function unshippedRow(it: UnshippedItem, p: UnshippedListProps): HTMLElement {

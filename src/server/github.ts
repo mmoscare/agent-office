@@ -6,6 +6,7 @@ import { ghKey } from '../shared/protocol.js';
 import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
 import { pullForBranch } from '../shared/pulls.js';
 import { BoardRequests, boardList } from './github-board.js';
+import { branchPulls } from './github-rest.js';
 
 const REFRESH_MS = 90_000;
 
@@ -23,7 +24,8 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
     execFile('gh', args, { cwd, maxBuffer: 32 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
       if (err) {
         const msg = (stderr || err.message || '').trim().split('\n').slice(-2).join(' ');
-        reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'GitHub CLI (gh) is not installed on the server' : friendly(msg)));
+        // stdout rides along: `gh api -i` prints the failed response's headers there (its rate limit's reset).
+        reject(Object.assign(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'GitHub CLI (gh) is not installed on the server' : friendly(msg)), { stdout }));
       } else resolve(stdout);
     });
   });
@@ -31,10 +33,13 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
 
 const boardRequests = new BoardRequests(gh);
 
-/** Check all states before offering to create another PR for an existing worker branch. */
-export async function findBranchPr(branch: string, cwd: string, query = gh) {
-  const out = await query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,url,state,headRefName'], cwd);
-  return pullForBranch(JSON.parse(out || '[]'), branch);
+/**
+ * Check all states before offering to create another PR for an existing worker branch. Asked over
+ * REST (github-rest.ts), of `repository` or else the checkout's origin, so it still answers when the
+ * GraphQL quota is gone.
+ */
+export async function findBranchPr(branch: string, cwd: string, query = gh, repository?: string) {
+  return pullForBranch(await branchPulls(branch, cwd, query, repository), branch);
 }
 
 function git(args: string[], cwd: string): Promise<string | undefined> {

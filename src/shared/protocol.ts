@@ -443,6 +443,8 @@ export interface UnshippedState {
   error?: string;
   /** Why some PR statuses are unknown. */
   prNote?: string;
+  /** Set when that's GitHub's rate limit: its hourly quota ran out (or a secondary limit), lifting at `resetAt` (ms) when GitHub said. */
+  prLimit?: { secondary: boolean; resetAt?: number };
 }
 
 export interface QueueState {
