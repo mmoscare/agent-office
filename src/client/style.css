@@ -1464,7 +1464,6 @@ a.when:hover { text-decoration: underline; }
 /* "Done, next step" under a step done by hand, and why it isn't done yet. */
 .update-next { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; margin-top: 2px; }
 .update-now .update-next .btn { align-self: center; }
-.update-now .btn[aria-disabled="true"] { opacity: .6; cursor: progress; }
 .update-now .update-why { flex: 1 1 280px; color: #b5651d; }
 .update-ok { color: #2a9d4b; }
 .update-warn { color: #b5651d; }

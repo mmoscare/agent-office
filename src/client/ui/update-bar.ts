@@ -178,7 +178,7 @@ function nextRow(s: OfficeStatus, i: number): HTMLElement {
   const waiting = checking === i;
   const b = h(
     'button.btn.primary.update-done',
-    { type: 'button', 'data-focus': 'done', 'aria-disabled': waiting ? 'true' : undefined },
+    { type: 'button', disabled: waiting },
     waiting ? 'Checking…' : notYet === i ? '↻ Check again' : '✓ Done, next step',
   );
   b.addEventListener('click', () => {
@@ -186,7 +186,7 @@ function nextRow(s: OfficeStatus, i: number): HTMLElement {
   });
   const row = h('div.update-next', {}, b);
   if (notYet === i && !waiting) {
-    const anyway = h('button.update-link', { type: 'button', 'data-focus': 'anyway' }, 'Show me the next step anyway →');
+    const anyway = h('button.update-link', { type: 'button' }, 'Show me the next step anyway →');
     anyway.addEventListener('click', () => {
       viewing = i + 1;
       notYet = null;
@@ -238,7 +238,7 @@ function render() {
     ...list.map((st, i) => {
       const chip = h(
         'button',
-        { type: 'button', 'data-focus': `chip${i}`, 'aria-current': i === shown ? 'step' : undefined, title: i === shown ? undefined : `Show step ${i + 1}` },
+        { type: 'button', 'aria-current': i === shown ? 'step' : undefined, title: i === shown ? undefined : `Show step ${i + 1}` },
         h('span.update-num', {}, i < current ? '✓' : String(i + 1)),
         st.title,
       );
@@ -254,16 +254,13 @@ function render() {
   const doneAlready = shown < current || (BY_HAND.has(shown) && st.done);
   const title = h('div.update-now-head', {}, h('b.update-now-title', {}, `Step ${shown + 1}: ${st.title}`));
   if (shown !== current) {
-    const back = h('button.update-link', { type: 'button', 'data-focus': 'back' }, `← Back to the current step (${current + 1})`);
+    const back = h('button.update-link', { type: 'button' }, `← Back to the current step (${current + 1})`);
     back.addEventListener('click', () => {
       viewing = null;
       render();
     });
     title.append(back);
   }
-  // The bar is rebuilt on every check: keep the keyboard on the same control (or the step on show).
-  const active = document.activeElement;
-  const focused = active instanceof HTMLElement && bar.contains(active) ? active.dataset.focus : undefined;
   bar.hidden = false;
   bar.replaceChildren(
     h('div.update-head', {}, h('b', {}, current === 4 ? '✨ The office was updated' : s.needs.pull || current === 0 ? '🔀 New Agent Office code on GitHub' : '🛠 The office’s code changed'), h('span.update-sub', {}, current === 4 ? '' : 'To run it:'), chips, hide),
@@ -276,7 +273,6 @@ function render() {
       ...(BY_HAND.has(shown) && !doneAlready ? [nextRow(s, shown)] : []),
     ),
   );
-  if (focused) (bar.querySelector<HTMLElement>(`[data-focus="${focused}"]`) ?? bar.querySelector<HTMLElement>('[aria-current="step"]'))?.focus();
 }
 
 /** Starts watching; call once when the page is up. */
