@@ -411,6 +411,10 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     modal.close();
   });
 
+  el.addEventListener('mousedown', (e) => {
+    if ((e.target as HTMLElement).closest('button, input, select, a')) return;
+    (onSide ? side?.term : term)?.focus();
+  });
   term.open(host);
   term.attachCustomKeyEventHandler(keysFor(term));
   term.onData((data) => {
