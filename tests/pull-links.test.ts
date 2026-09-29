@@ -62,12 +62,12 @@ test('branch matching retains completed PRs and prefers an open PR when a branch
 test('pre-creation lookup checks all PR states and propagates failed lookups', async () => {
   const found = await findBranchPr(branch, '/project', async (args, cwd) => {
     assert.equal(cwd, '/project');
-    assert.equal(args[args.indexOf('--state') + 1], 'all');
-    assert.equal(args[args.indexOf('--head') + 1], branch);
-    return JSON.stringify([pull(1, 'MERGED')]);
-  });
+    // Over REST, every state, of the named repository.
+    assert.deepEqual(args, ['api', '-i', 'repos/example/project/pulls?state=all&head=example:office%2Ftest&per_page=100']);
+    return JSON.stringify([{ number: 1, state: 'closed', merged_at: '2026-09-28T21:54:54Z', html_url: pull(1, 'MERGED').url, head: { ref: branch, sha: 'abc' } }]);
+  }, 'example/project');
   assert.equal(found?.state, 'MERGED');
-  await assert.rejects(findBranchPr(branch, '/project', async () => { throw new Error('GitHub unavailable'); }), /GitHub unavailable/);
+  await assert.rejects(findBranchPr(branch, '/project', async () => { throw new Error('GitHub unavailable'); }, 'example/project'), /GitHub unavailable/);
 });
 
 test('external PRs attach to desks, update through merge, and persist across restarts', (t) => {
