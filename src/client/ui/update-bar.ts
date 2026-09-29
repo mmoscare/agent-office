@@ -114,7 +114,7 @@ function steps(s: OfficeStatus): Step[] {
 function stillToDo(s: OfficeStatus, i: number): string {
   if (i >= 1 && s.needs.pull) return `The app folder is still ${s.behind} commit${s.behind === 1 ? '' : 's'} behind ${s.upstream ?? 'GitHub'}. Did git pull finish? Look for an error in PowerShell.`;
   if (i >= 2 && s.needs.build) return 'There’s no new build yet. Is npm run build still running, or did it stop with an error? Look in PowerShell, then check again once it has finished.';
-  if (i >= 3 && s.needs.restart) return 'The office hasn’t restarted since the build. Press Ctrl+C in its window, start it again, then check again.';
+  if (i >= 3 && s.needs.restart) return 'The office hasn’t restarted since the build. Restart it as above, then check again.';
   return '';
 }
 
