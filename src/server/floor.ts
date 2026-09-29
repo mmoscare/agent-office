@@ -20,6 +20,8 @@ import { Decor } from './decor.js';
 import { Dog } from './dog.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { ContentKanban } from './content-kanban.js';
+import { hasContentKanban } from '../shared/content-kanban.js';
 import { Plans } from './plans.js';
 import { Inbox } from './inbox.js';
 import { MeetingRoom } from './meetings.js';
@@ -105,6 +107,8 @@ export class Floor {
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
   readonly whiteboard: Whiteboard;
+  /** The 🎬 Content Kanban on the whiteboard's stand, on the floors that have one (see shared/content-kanban.ts). */
+  readonly content?: ContentKanban;
   readonly plans: Plans;
   /** The 📥 in-tray: what came into the office from outside (see inbox.ts). */
   readonly inbox: Inbox;
@@ -275,6 +279,7 @@ export class Floor {
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
+    if (hasContentKanban(def.id)) this.content = new ContentKanban(dataDir);
     // The 📥 in-tray watches its folder for what comes in from outside.
     this.inbox = new Inbox(dataDir, {
       update: (state) => ctx.emit(this, { t: 'inbox', state }),

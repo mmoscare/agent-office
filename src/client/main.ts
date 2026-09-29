@@ -84,6 +84,8 @@ import { receptionistLook } from './world/receptionist';
 import { mailNeedsYou } from '../shared/mail';
 import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
+import { contentGlance, openContentKanban } from './ui/content-kanban';
+import { ContentKanbanTexture } from './world/content-kanban';
 import { renderLimits } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
@@ -324,6 +326,14 @@ mountUpdateBar();
 
 // The whiteboard shows what everyone's drawn on it.
 mirrorWhiteboard(office.whiteboard.show, office.whiteboard.fit.width, office.whiteboard.fit.height);
+// On a floor with a 🎬 Content Kanban (shared/content-kanban.ts), that stands on the whiteboard's wheels instead.
+const contentTex = new ContentKanbanTexture(office.whiteboard.size.width, office.whiteboard.size.height);
+const showStand = () => {
+  if (store.content) contentTex.render(store.content);
+  office.whiteboard.cover(store.content ? { texture: contentTex.texture, plaque: '🎬 Content Kanban' } : null);
+};
+store.on('content', showStand);
+showStand();
 
 // Confetti for merges, landing on whatever it falls on
 const confetti = new Confetti((x, z, y) => groundAt(office.colliders, x, z, y, false));
@@ -1790,7 +1800,10 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   } else if (target.kind === 'gong') hitGong();
   else if (target.kind === 'plans') openPlans(plansActions());
   else if (target.kind === 'timecard') openTimeCard(net);
-  else if (target.kind === 'whiteboard') openWhiteboard(net);
+  else if (target.kind === 'whiteboard') {
+    if (store.content) openContentKanban(net);
+    else openWhiteboard(net);
+  }
   else if (target.kind === 'cabinet') cabinet.play();
   else if (target.kind === 'ladder') grabLadder();
   else if (target.kind === 'pole' && target.pole !== undefined) usePole(target.pole);
@@ -2301,6 +2314,10 @@ function hintFor(it: Interactable): Hint {
       return { k: today, parts: [title('🗂️ Indirect Time'), aside(`Today ${today} in the office`), key('E', 'Read card')] };
     }
     case 'whiteboard': {
+      if (store.content) {
+        const glance = contentGlance(store.content);
+        return { k: `content:${glance}`, parts: [title('🎬 Content Kanban'), aside(glance), key('E', 'Open')] };
+      }
       const names = store.drawing.flatMap((id) => (id === store.you ? [] : (store.peers.get(id)?.name ?? []))).join(', ');
       return { k: names, parts: [title('📝 Whiteboard'), aside(names ? `✏️ ${clip(names, 40)} drawing` : 'draw together, live'), key('E', names ? 'Join in' : 'Draw')] };
     }
@@ -2974,6 +2991,8 @@ const hud = mountHud(
     { id: 'timecard', icon: '🗂️', label: 'Indirect Time', section: 'Office', title: () => `Your hours with the office open, per day: ${todayText()} today`, run: () => openTimeCard(net) },
     { id: 'inbox', icon: '📥', label: 'In-tray', section: 'Open', key: 'I', count: () => store.inbox.items.length, title: () => 'What came in from outside: notes, forwarded emails and files, to file or queue', run: showInbox },
     { id: 'whiteboard', icon: '📝', label: 'Whiteboard', section: 'Open', title: () => 'Draw together, live', run: () => openWhiteboard(net) },
+    // This floor's content pipeline, where it has one: it's on the whiteboard's stand.
+    { id: 'content', icon: '🎬', label: 'Content Kanban', section: 'Open', shown: () => !!store.content, count: () => (store.content ?? []).filter((t) => t.stage !== 'published').length, title: () => 'This floor’s content pipeline: dump ideas, pick what you’ll make of them, tick each one off', run: () => openContentKanban(net) },
     // Up on the top bar while a meeting is on: what's being worked through in the meeting room.
     {
       id: 'meeting',
@@ -3336,7 +3355,7 @@ void whoami().then(() => {
 });
 
 // Debug handle for quick checks from the console / headless screenshots.
-(window as any).__office = { issuesWall: () => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote };
+(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;
