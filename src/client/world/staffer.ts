@@ -175,12 +175,12 @@ export class StafferSummon {
     if (!o) return;
     o.model.walking = false;
     o.model.stopDancing();
-    if (o.home.parent) {
-      o.home.add(o.model.root);
-      o.model.root.position.set(0, 0, 0);
-      o.model.root.rotation.set(0, 0, 0);
-      o.model.root.scale.setScalar(1);
-    }
+    // Back on the stand even if that stand isn't in the scene yet (a floor swap, a test). Leaving him
+    // on the office would be a second queue agent once the kiosk shows again.
+    o.home.add(o.model.root);
+    o.model.root.position.set(0, 0, 0);
+    o.model.root.rotation.set(0, 0, 0);
+    o.model.root.scale.setScalar(1);
     this.out = null;
   }
 
