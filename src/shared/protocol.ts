@@ -634,6 +634,21 @@ export interface GhState<T> {
   error?: string;
   fetchedAt: number;
   loading: boolean;
+  /** GitHub's rate limit is holding this board's refreshes back, until when. */
+  paused?: GhPause;
+}
+
+/**
+ * Why the office isn't asking GitHub for now: its hourly GraphQL quota ran out (`limit`), it asked
+ * too fast (`secondary`), or so little is left that background refreshes leave it to the workers
+ * (`reserve`, when a person's Refresh still works).
+ */
+export interface GhPause {
+  /** When it lifts (ms). */
+  until: number;
+  why: 'limit' | 'secondary' | 'reserve';
+  /** Points left in the hour, for `reserve`. */
+  remaining?: number;
 }
 
 export type GhMergeMethod = 'squash' | 'merge' | 'rebase';
