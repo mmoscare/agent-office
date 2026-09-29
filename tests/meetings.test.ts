@@ -149,7 +149,7 @@ test('a worker that ends its part without writing the file is reminded once, the
   assert.equal(f.start({ rounds: 2, output: 'decision.md' }), undefined);
   for (const i of [0, 1, 2]) f.take(i);
   f.take(0, '', true);
-  assert.match(f.prompts.at(-1)!.text, /without writing \S*\/decision\.md,/);
+  assert.match(f.prompts.at(-1)!.text, /without writing \S*[/\\]decision\.md,/);
   assert.equal(f.room.state().current!.status, 'running');
   f.take(0, '', true);
   const m = f.room.state().current!;

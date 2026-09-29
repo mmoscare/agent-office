@@ -6,6 +6,7 @@ import path from 'node:path';
 import { PROMPTS, PROMPT_IDS, PROMPT_MAX, fillPrompt, placeholders, promptText } from '../src/shared/prompts.js';
 import { OfficePrompts, officePrompt, type PromptSource } from '../src/server/prompts.js';
 import { stationBrief } from '../src/server/stations.js';
+import { CHECKPOINT_NOTE } from '../src/server/handoff.js';
 import { TaskQueue, type QueueWorkers } from '../src/server/queue.js';
 import type { AgentChoice, PromptsState, WorkerInfo } from '../src/shared/protocol.js';
 
@@ -147,11 +148,11 @@ test('a task nobody picked a worker for runs on the office default; one that did
 test('the worktree note the queue adds can be rewritten, or left off', (t) => {
   const standard = queueFixture(t, undefined);
   standard.queue.add('Fix it', 'Ada');
-  assert.equal(standard.workers[0].prompt, `Fix it\n\n${PROMPTS['queue.worktree'].text}`);
+  assert.equal(standard.workers[0].prompt, `Fix it\n\n${PROMPTS['queue.worktree'].text}${CHECKPOINT_NOTE}`);
   const rewritten = queueFixture(t, undefined, 'Push to your branch.');
   rewritten.queue.add('Fix it', 'Ada');
-  assert.equal(rewritten.workers[0].prompt, 'Fix it\n\nPush to your branch.');
+  assert.equal(rewritten.workers[0].prompt, `Fix it\n\nPush to your branch.${CHECKPOINT_NOTE}`);
   const none = queueFixture(t, undefined, '');
   none.queue.add('Fix it', 'Ada');
-  assert.equal(none.workers[0].prompt, 'Fix it');
+  assert.equal(none.workers[0].prompt, `Fix it${CHECKPOINT_NOTE}`);
 });
