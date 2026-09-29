@@ -341,8 +341,8 @@ button { font-family: inherit; }
 .modal .body { padding: 16px; overflow: auto; }
 .modal footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 3px solid var(--ink); background: var(--paper-2); align-items: center; }
 .modal footer .grow { flex: 1; font-size: 12px; color: var(--muted); font-weight: 700; }
-.modal textarea, .modal input[type=text] { width: 100%; font: inherit; font-size: 15px; border: 3px solid var(--ink); border-radius: 12px; padding: 10px 12px; background: #fff; outline: none; resize: vertical; }
-.modal textarea:focus, .modal input[type=text]:focus { border-color: var(--accent); }
+.modal textarea:not(.xterm-helper-textarea), .modal input[type=text] { width: 100%; font: inherit; font-size: 15px; border: 3px solid var(--ink); border-radius: 12px; padding: 10px 12px; background: #fff; outline: none; resize: vertical; }
+.modal textarea:not(.xterm-helper-textarea):focus, .modal input[type=text]:focus { border-color: var(--accent); }
 .modal label { font-weight: 800; font-size: 14px; display: block; margin-bottom: 6px; }
 .close { width: 34px; height: 34px; padding: 0; justify-content: center; }
 /* The ✕ openModal gives a window without a header of its own. */
@@ -414,8 +414,25 @@ button { font-family: inherit; }
 /* Terminal modal */
 .modal.term { width: min(1200px, 100%); height: min(820px, calc(100vh - 32px)); background: #1e1f2e; }
 .modal.term header { background: var(--paper); }
-.modal.term .term-host { flex: 1; min-height: 0; padding: 8px 4px 4px 10px; background: #1e1f2e; }
-.modal.term .term-host .xterm { height: 100%; }
+.modal.term .term-host { flex: 1; min-height: 0; padding: 8px 4px 4px 10px; background: #1e1f2e; position: relative; }
+.modal.term .term-host .xterm { height: 100%; position: relative; }
+/* Keep xterm's hidden input inside the overflow:hidden modal. Off-screen + form styles
+   make Chromium drop keystrokes, so typing never reaches the shell. */
+.modal.term .xterm-helper-textarea {
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  opacity: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  z-index: 10;
+}
 /* Who's in the terminal: a face per person, and a pencil on whoever's typing. */
 .viewers { display: flex; align-items: center; gap: 4px; }
 .avatar { position: relative; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--ink); display: grid; place-items: center; flex: none; font-size: 10px; font-weight: 900; letter-spacing: -.02em; color: var(--ink); cursor: default; }
