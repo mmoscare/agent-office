@@ -14,7 +14,7 @@ export function consoleShellLaunch(platform: NodeJS.Platform, env: NodeJS.Proces
 
 type ConsoleMessage = Extract<ClientMsg, { t: `console.${string}` }>;
 
-/** One private shell per browser connection, independent of workers and floor changes. */
+/** One private shell per browser connection, independent of workers. Changing floor starts a new shell in that folder. */
 export class ConsoleShells {
   private sessions = new Map<string, { cwd: string; cols: number; rows: number; attached: boolean }>();
   private shells: SideShells;
@@ -38,7 +38,8 @@ export class ConsoleShells {
     const session = this.sessions.get(id);
     switch (msg.t) {
       case 'console.attach': {
-        if (msg.fresh === true) this.close(id);
+        const previous = this.sessions.get(id);
+        if (msg.fresh === true || (previous && !sameDir(previous.cwd, cwd))) this.close(id);
         const current = this.sessions.get(id);
         const cols = dimension(msg.cols, 80, 20, 400);
         const rows = dimension(msg.rows, 24, 5, 200);
@@ -87,4 +88,10 @@ export class ConsoleShells {
 
 function dimension(value: number, fallback: number, min: number, max: number) {
   return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.floor(value))) : fallback;
+}
+
+function sameDir(a: string, b: string) {
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
 }

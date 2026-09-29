@@ -99,14 +99,18 @@ export function openConsole(net: Net) {
   };
   close.addEventListener('click', () => modal.close());
   fresh.addEventListener('click', () => { attach(true); term.focus(); });
+  el.addEventListener('mousedown', (e) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    term.focus();
+  });
   term.open(host);
   const mac = isMac();
   term.attachCustomKeyEventHandler((e) => (clipboardAction(e, term.hasSelection(), mac) ? false : true));
   term.onData(data => {
     if (retry && data === '\r') attach();
-    else if (ready) net.send({ t: 'console.input', data });
+    else net.send({ t: 'console.input', data });
   });
   observer.observe(host);
   attach();
-  term.focus();
+  setTimeout(() => term.focus(), 50);
 }

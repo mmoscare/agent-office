@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Todos } from '../src/server/todos.js';
-import { applyTodo, checkTodoAction, TODO_LIMIT, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoItem } from '../src/shared/todos.js';
+import { applyTodo, checkTodoAction, checkTodoItem, TODO_COLUMNS, TODO_LIMIT, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoItem } from '../src/shared/todos.js';
 
 const id = (n: number) => `item${String(n).padStart(4, '0')}`;
 const run = (...changes: TodoAction[]) => changes.reduce<readonly TodoItem[]>((items, a) => applyTodo(items, a, 1000), []);
@@ -48,6 +48,27 @@ test('completing an item stamps when, and reopening it clears that', () => {
   items = applyTodo(items, { action: 'move', id: id(1), column: 'todo' });
   assert.equal(items[0].column, 'todo');
   assert.equal(items[0].doneAt, undefined);
+});
+
+test('four columns: Active, Urgent, Not urgent and Completed, in that order', () => {
+  assert.deepEqual(Object.keys(TODO_COLUMNS), ['active', 'urgent', 'todo', 'done']);
+  assert.deepEqual(Object.values(TODO_COLUMNS), ['Active', 'Urgent', 'Not urgent', 'Completed']);
+  const items = run({ action: 'add', id: id(1), text: 'soon', column: 'urgent' });
+  assert.deepEqual(texts(items, 'urgent'), ['soon']);
+  assert.deepEqual(checkTodoAction({ action: 'move', id: id(1), column: 'urgent' }), { action: 'move', id: id(1), column: 'urgent' });
+});
+
+test('a completed item remembers where it came from, for Reopen, and forgets once reopened', () => {
+  let items = run({ action: 'add', id: id(1), text: 'pay the bill', column: 'urgent' });
+  items = applyTodo(items, { action: 'move', id: id(1), column: 'done', index: 0 }, 5000);
+  assert.equal(items[0].from, 'urgent');
+  items = applyTodo(items, { action: 'move', id: id(1), column: 'done', index: 0 }, 6000);
+  assert.equal(items[0].from, 'urgent', 'moved about within Completed');
+  items = applyTodo(items, { action: 'move', id: id(1), column: 'urgent' });
+  assert.equal(items[0].from, undefined);
+  assert.deepEqual(checkTodoItem({ id: id(2), text: 'x', column: 'done', at: 1, doneAt: 2, from: 'active' })?.from, 'active');
+  assert.equal(checkTodoItem({ id: id(2), text: 'x', column: 'done', at: 1, from: 'someday' })?.from, undefined);
+  assert.equal(checkTodoItem({ id: id(2), text: 'x', column: 'todo', at: 1, from: 'active' })?.from, undefined);
 });
 
 test('changes that change nothing give back the same list', () => {
