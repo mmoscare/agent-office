@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { branchNeedsWorktree, cleanupLocked, cleanupLosses, type CleanupChoice, type CleanupItem, type CleanupPr, type CleanupRun, type CleanupScan, type CleanupStep, type CleanupVerdict, type CleanupWorktree } from '../shared/cleanup.js';
@@ -422,7 +422,8 @@ async function survey(o: CleanupOptions): Promise<{ scan: CleanupScan; found: Ma
     const home = homeOf(wt.abs);
     f.abs = wt.abs;
     f.home = home;
-    f.item.worktree = { path: show(wt.abs), exists: !wt.prunable && existsSync(wt.abs), ...(home ? {} : { external: true }), ...(wt.detached || !wt.branch ? { detached: true } : {}), ...(live.desks.has(pathKey(wt.abs)) ? { desk: live.desks.get(pathKey(wt.abs)) } : {}) };
+    const desk = live.desks.get(pathKey(wt.abs));
+    f.item.worktree = { path: show(wt.abs), exists: !wt.prunable && existsSync(wt.abs), ...(home || desk ? {} : { external: true }), ...(wt.detached || !wt.branch ? { detached: true } : {}), ...(desk ? { desk } : {}) };
     f.locked = wt.locked;
     if (!wt.branch) f.head = wt.head;
   }
@@ -518,9 +519,15 @@ async function judge(f: Found, c: Context) {
         if (dirty) it.loses.worktree.push(`${plural(dirty, 'edited file')} in ${wt.path} that git doesn't have: ${listed(edits.unknown, dirty)}`);
         note = edits.edited.length ? `half-deleted folder; its ${plural(edits.edited.length, 'edited file')} ${edits.edited.length === 1 ? 'is' : 'are'} already in git` : 'half-deleted folder, nothing edited';
       } else if (wt && state?.dirty) {
-        dirty = state.dirty;
-        const names = (await git(['status', '--porcelain=v1', '-z', '-unormal'], f.abs!)).split('\0').filter((r) => /^.. /.test(r)).map((r) => r.slice(3));
-        it.loses.worktree.push(`${plural(dirty, 'uncommitted change')} in ${wt.path}: ${listed(names, dirty)}`);
+        const names: string[] = [];
+        for (const r of (await git(['status', '--porcelain=v1', '-z', '-unormal'], f.abs!)).split('\0').filter((r) => /^.. /.test(r))) {
+          // A link (node_modules linked in from another checkout) isn't work: it's unlinked, never followed.
+          const link = r.startsWith('??') && (await lstat(path.join(f.abs!, r.slice(3).replace(/\/$/, ''))).then((s) => s.isSymbolicLink(), () => false));
+          if (!link) names.push(r.slice(3));
+        }
+        dirty = names.length;
+        if (dirty) it.loses.worktree.push(`${plural(dirty, 'uncommitted change')} in ${wt.path}: ${listed(names, dirty)}`);
+        else note = 'only a linked folder in it, which is unlinked, not followed';
       } else if (wt && !wt.exists) note = 'its folder is already gone; git worktree prune forgets it';
       if (ref && state) {
         const u = await unpushedOf(c, ref, state.unpushed);
