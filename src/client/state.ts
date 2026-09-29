@@ -7,11 +7,12 @@ import type { DogState } from '../shared/dog';
 import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
+import type { TimeCardState } from '../shared/timecard';
 import type { TodoItem } from '../shared/todos';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'todos';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -165,6 +166,8 @@ class Store {
   unshipped: UnshippedState = { items: [], scannedAt: 0, scanning: false };
   /** The floor's 📒 To Do Next board. */
   plans: PlansState = { revision: 0, items: [] };
+  /** Your 🗂️ Indirect Time card: when you had the office open, per day (the whole building's, not the floor's). */
+  timecard: TimeCardState = { name: '', stints: [], open: false };
   /** The floor's 📥 in-tray: what came in from outside. */
   inbox: InboxState = { revision: 0, items: [], dir: '', door: false };
   /** The meeting room: the meeting at the table, and the ones before. */
@@ -444,6 +447,10 @@ class Store {
       case 'mail':
         this.mail = msg.state;
         this.emit('mail');
+        break;
+      case 'timecard':
+        this.timecard = msg.state;
+        this.emit('timecard');
         break;
       case 'meeting':
         this.meeting = msg.state;

@@ -1234,6 +1234,27 @@ a.when:hover { text-decoration: underline; }
 .plan-actions select { border: 1px solid var(--ink); border-radius: 6px; background: white; font: inherit; max-width: 100%; }
 @media (max-width: 700px) { .plans-board { grid-template-columns: 1fr; } .plans-add { align-items: stretch; flex-direction: column; } }
 
+/* The Indirect Time index card on the boss's desk (ui/timecard.ts): ruled blue under a red heading line. */
+.timecard-modal { width: min(640px, 96vw); }
+.timecard-modal header { display: flex; align-items: center; gap: 12px; }
+.timecard-modal header h2 { flex: 1; }
+.timecard-who { font-weight: 800; margin: 0; }
+.timecard-modal .note { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.timecard-totals { display: flex; gap: 12px; margin: 12px 0; }
+.timecard-total { flex: 1; display: flex; flex-direction: column; padding: 10px 14px; background: var(--paper-2); border-radius: 12px; }
+.timecard-total span { font-size: 13px; color: var(--muted); font-weight: 700; }
+.timecard-total strong { font-size: 24px; }
+.timecard-total small { color: var(--muted); }
+.timecard-days { list-style: none; margin: 0; padding: 0; background: #fffdf6; border: 1px solid #d8d2c4; border-top: 3px solid #e5484d; border-radius: 4px; }
+.timecard-day { display: grid; grid-template-columns: 9em 1fr auto; gap: 10px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid #b9d3f2; font-size: 14px; }
+.timecard-day:last-child { border-bottom: 0; }
+.timecard-day.today { background: #fff6d6; }
+.timecard-day.empty { color: var(--muted); }
+.timecard-date { font-weight: 800; }
+.timecard-spans { overflow-wrap: anywhere; }
+.timecard-hours { font-weight: 800; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { .timecard-day { grid-template-columns: 1fr auto; } .timecard-spans { grid-column: 1 / -1; grid-row: 2; font-size: 13px; } }
+
 /* The Git board: the PR board's other side (ui/git-board.ts) */
 .modal.git-board header .btn { padding: 4px 10px; font-size: 13px; }
 .modal.git-board header .close { width: 34px; padding: 0; }
@@ -1492,6 +1513,35 @@ a.when:hover { text-decoration: underline; }
 .inbox-mail-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .inbox-mail-actions .btn { padding: 3px 10px; font-size: 13px; }
 @media (max-width: 600px) { .mail-grid { grid-template-columns: 1fr; } .mail-nag { right: 8px; bottom: 8px; } }
+
+.modal.calendar { width: min(560px, 100%); }
+.cal-nav { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.cal-nav h3 { margin: 0; flex: 1; text-align: center; font-size: 18px; font-weight: 900; }
+.cal-weekdays, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+.cal-weekdays { margin-bottom: 6px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.cal-day { position: relative; min-height: 42px; border: 2px solid transparent; border-radius: 10px; background: var(--paper-2); font: 800 14px Nunito, system-ui, sans-serif; cursor: pointer; }
+.cal-day.empty { background: none; pointer-events: none; }
+.cal-day.today { border-color: #c1121f; background: #fee2e2; color: #c1121f; }
+.cal-day.selected { border-color: var(--ink); }
+.cal-day.has-chores { background: #fff3cd; }
+.cal-day.has-chores.today { background: #fee2e2; }
+.cal-dots { display: flex; justify-content: center; gap: 3px; position: absolute; left: 0; right: 0; bottom: 4px; }
+.cal-dots i { width: 6px; height: 6px; border-radius: 50%; background: #c1121f; }
+.cal-dots i:nth-child(1) { background: #06d6a0; }
+.cal-dots i:nth-child(2) { background: #118ab2; }
+.cal-dots i:nth-child(3) { background: #ffd166; }
+.cal-chores { margin-top: 16px; padding-top: 12px; border-top: 3px solid var(--ink); }
+.cal-chores h3 { margin: 0 0 8px; font-size: 15px; }
+.cal-chores ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cal-chores li { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; background: var(--paper-2); border-radius: 12px; border: 2px solid var(--ink); }
+.cal-chores .cal-icon { font-size: 22px; line-height: 1; }
+.cal-chores b { display: block; font-size: 14px; }
+.cal-chores p { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--muted); }
+.cal-empty { margin: 0; font-size: 13px; font-weight: 700; color: var(--muted); }
+.calendar-nag { position: absolute; right: 16px; bottom: 16px; z-index: 30; width: min(380px, calc(100vw - 32px)); padding: 12px 14px; background: #fff6e8; border: 3px solid var(--ink); border-radius: 16px; box-shadow: var(--shadow); pointer-events: auto; animation: mail-nag-in .45s cubic-bezier(.2, 1.6, .4, 1); }
+.calendar-nag ul { margin: 8px 0 10px; padding: 0 0 0 4px; list-style: none; font-size: 14px; font-weight: 700; line-height: 1.45; }
+.calendar-nag li { margin: 4px 0; }
+@media (max-width: 600px) { .calendar-nag { right: 8px; bottom: 8px; } }
 .pr-work-banner { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 18px 12px; }
 .pr-work { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border: 2px solid var(--ink); border-radius: 9px; background: #e6eaf0; color: #243044; font: 800 12px/1.4 Nunito, sans-serif; text-align: left; cursor: pointer; }
 .pr-work.active { background: #d9f3e5; color: #145634; }

@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { loadConfig, ensureSelfSigned } from './config.js';
 import { startServer } from './server.js';
+import { CHECKPOINT_DEADLINE_MS } from './wip-checkpoint.js';
 
 const argv = process.argv.slice(2);
 if (argv[0] === 'prune') {
@@ -69,8 +70,16 @@ const stop = (signal: NodeJS.Signals) => {
   closing = true;
   const keep = signal === 'SIGTERM';
   console.log(keep ? '\n  closing the office — workers keep running for the next one…' : '\n  closing the office…');
-  office.shutdown(keep);
-  setTimeout(() => process.exit(0), 300);
+  // Wait while each worker's uncommitted work is saved as a WIP commit (they have their own
+  // deadline); the timer is the hard stop should anything hang. A second Ctrl+C still quits at once.
+  const force = setTimeout(() => process.exit(0), CHECKPOINT_DEADLINE_MS + 2000);
+  void office
+    .shutdown(keep)
+    .catch((err) => console.error('agent-office: shutdown', err))
+    .finally(() => {
+      clearTimeout(force);
+      setTimeout(() => process.exit(0), 300);
+    });
 };
 // Last line of defense: one bad request must never take down every running worker.
 process.on('unhandledRejection', (err) => console.error('agent-office: unhandled rejection', err));
