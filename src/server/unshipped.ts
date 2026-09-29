@@ -8,7 +8,7 @@ import type { WorkerWorkspace, WorkspaceRequest } from '../shared/workspaces.js'
 import { isBusy } from '../shared/status.js';
 import { recoveryTitle } from '../shared/task-status.js';
 import { gh } from './github.js';
-import { branchPulls, rateLimitOf } from './github-rest.js';
+import { branchPulls, rateLimitOf, type RateLimit } from './github-rest.js';
 import { WORKSPACES_DIR, floorRepository, workspaceRepositories } from './workspaces.js';
 import { Worktrees, gitError } from './worktrees.js';
 
@@ -139,7 +139,7 @@ export class BranchPulls {
   /** Why GitHub couldn't be asked, while it's being left alone. */
   error?: string;
   /** Set when that was its rate limit: whether a secondary one, and when it lifts (ms), when GitHub said. */
-  limit?: { secondary: boolean; resetAt?: number };
+  limit?: RateLimit;
   private cache = new Map<string, { at: number; has: boolean; revision: string }>();
   private backoffUntil = 0;
 
