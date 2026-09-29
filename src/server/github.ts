@@ -248,7 +248,8 @@ export class GitHub {
     // Looked for again each time, so a repository cloned into the folder shows up on the boards.
     this.sources = undefined;
     await Promise.all(want.map((b) => (b === 'issues' ? this.refreshIssues() : this.refreshPulls())));
-    for (const b of want) this.nextFolderRefresh[b] = Date.now() + FOLDER_REFRESH_MS;
+    // A board the rate limit refused may go again as soon as it lifts.
+    for (const b of want) if (!this[b].paused) this.nextFolderRefresh[b] = Date.now() + FOLDER_REFRESH_MS;
   }
 
   /** Background refreshes the rate limit holds back: the boards keep their cards and say until when. */

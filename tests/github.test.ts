@@ -222,3 +222,32 @@ test('points per floor-hour at the measured cost fall where nobody is watching',
   assert.equal(perHour(boardCadence({ people: false, busy: true, checkouts: 1 })), 50, 'workers only: was 320');
   assert.equal(perHour(boardCadence({ people: false, busy: false, checkouts: 1 })), 10, 'nobody: was 48');
 });
+
+test('on a folder floor, a background refresh the rate limit refused goes again as soon as it lifts', async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), 'office-folder-limit-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const name of ['a', 'b']) {
+    const dir = path.join(root, name);
+    mkdirSync(dir);
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['remote', 'add', 'origin', `https://github.com/me/${name}`], { cwd: dir });
+  }
+  let now = Date.now();
+  const resetAt = Math.ceil(now / 1000) * 1000 + 60_000;
+  let refusing = true;
+  let calls = 0;
+  const github = new GitHub(root, () => {}, () => {}, new BoardRequests(async () => {
+    calls++;
+    if (refusing) throw Object.assign(new Error('GraphQL: API rate limit already exceeded for user ID 1.'), { stdout: `HTTP/2.0 200 OK\r\nX-Ratelimit-Remaining: 0\r\nX-Ratelimit-Reset: ${resetAt / 1000}\r\n\r\n{}` });
+    return page(4000, resetAt + 3600_000);
+  }, () => now));
+  await github.refresh(false, ['pulls']);
+  assert.equal(github.pulls.paused?.until, resetAt + 1000);
+  assert.equal(calls, 1);
+  now = resetAt + 2000;
+  refusing = false;
+  await github.refresh(false, ['pulls']);
+  assert.equal(calls, 3, 'both checkouts are asked again at once, not five minutes after the refusal');
+  assert.equal(github.pulls.paused, undefined);
+  assert.equal(github.pulls.items.length, 2);
+});
