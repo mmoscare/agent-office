@@ -7,7 +7,9 @@ import type { CabinetFrame, CabinetState, CabinetView } from './cabinet.js';
 import type { DecorPlacement, Decoration } from './decor.js';
 import type { DogState } from './dog.js';
 import type { EmoteId } from './emotes.js';
+import type { BallState } from './hoop.js';
 import type { JukeboxState } from './jukebox.js';
+import type { PromptId } from './prompts.js';
 import type { DrinkId } from './rooftop.js';
 import type { WbElement, WbPointer, WhiteboardView } from './whiteboard.js';
 import type { WorkKind } from './work-kind.js';
@@ -16,6 +18,7 @@ import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
 import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
+import type { ContentAction, ContentItem } from './content-kanban.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -54,6 +57,28 @@ export type AgentEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export const AGENT_EFFORTS: readonly AgentEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export function isAgentEffort(value: unknown): value is AgentEffort {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max';
+}
+
+/** Which agent a worker runs: its provider, and optionally the model and (Claude only) the reasoning effort. */
+export interface AgentChoice {
+  provider: AgentProvider;
+  /** An OpenCode provider/model id, or a Claude model alias; unset for the provider's own default. */
+  model?: string;
+  effort?: AgentEffort;
+}
+
+/**
+ * The prompts the office writes for workers by itself (shared/prompts.ts) and the worker everyone
+ * starts on, as set in ⚙️ Settings: the same on every floor.
+ */
+export interface PromptsState {
+  /** Prompts someone rewrote, by id; the rest are the defaults. */
+  custom: Partial<Record<PromptId, { text: string; by: string; at: number }>>;
+  /**
+   * What a worker starts on unless whoever starts it picks another. Unset: the agent the office was
+   * started with (--agent), on its own default model.
+   */
+  agent?: AgentChoice & { by: string; at: number };
 }
 
 /** What a worker is on, for the card above its head: "Fix Login Redirect" + what it's doing now. */
@@ -294,6 +319,8 @@ export interface PeerInfo {
   sharing: boolean;
   /** On a smoke break, cigarette in hand. */
   smoking?: boolean;
+  /** At the golf tee on the balcony, club in hand. */
+  golfing?: boolean;
   /** Sitting down: the place they're in (see seatAt in layout), like "couch:1". */
   seat?: string;
   /** An issue card they took off the issues board, on its way to a desk or the queue. */
@@ -306,6 +333,8 @@ export interface PeerInfo {
   floor?: string;
   /** What they have open, in their own words: "in Pixel's terminal", "reading PR #12". */
   doing?: string;
+  /** Reading something off the bookshelf: an open book in their hands, its pages turning. */
+  reading?: boolean;
 }
 
 /** A styled run of text on a terminal row: [text, fg, bg, flags]. */
@@ -335,13 +364,21 @@ export function ghRef(it: { number: number; repo?: string }): string {
   return `${it.repo ? it.repo.split('/')[1] : ''}#${it.number}`;
 }
 
+/** A GitHub label; `color` is a CSS color ("#d73a4a"). */
+export interface GhLabel {
+  name: string;
+  color: string;
+  /** What it's for, in the repo's list of labels (the label picker's /api/gh/labels). */
+  description?: string;
+}
+
 export interface GhIssue extends GhWhere {
   number: number;
   title: string;
   state: string;
   url: string;
   author: string;
-  labels: { name: string; color: string }[];
+  labels: GhLabel[];
   assignees: string[];
   createdAt: string;
   updatedAt: string;
@@ -356,9 +393,10 @@ export interface GhPull extends GhWhere {
   isDraft: boolean;
   url: string;
   author: string;
-  labels: { name: string; color: string }[];
+  labels: GhLabel[];
   reviewDecision: string;
   headRefName: string;
+  /** The commit its branch is at on GitHub (for a merged PR, the last one merged). */
   headRefOid?: string;
   baseRefName: string;
   createdAt: string;
@@ -716,6 +754,8 @@ export interface GhIssueDetail {
 
 /** GitHub turns away comments longer than this. */
 export const GH_COMMENT_MAX = 65536;
+/** Longer than any label name: GitHub stops at 50 characters, and JS counts an emoji as two. */
+export const GH_LABEL_MAX = 100;
 
 export interface ProjectInfo {
   name: string;
@@ -754,6 +794,8 @@ export interface FloorInfo {
   palette: number;
   /** Being cloned: on the elevator panel, but nobody can go there yet. */
   cloning?: boolean;
+  /** The project the office was started in (`agent-office <dir>`): the office keeps its own data in its checkout. */
+  local?: boolean;
   addedBy: string;
   addedAt: number;
   /** Filed in the basement's Back Office: grouped apart in the elevator and floor menu, an ordinary floor otherwise. */
@@ -820,6 +862,10 @@ export interface FloorView {
   plans: PlansState;
   /** The 📥 in-tray: what came in from outside. */
   inbox: InboxState;
+  /** The 🎬 Content Kanban on the whiteboard's stand; null (or missing) on a floor without one (see shared/content-kanban.ts). */
+  content?: ContentItem[] | null;
+  /** The basketball by the hoop: who has it, or how it was last thrown. */
+  ball: BallState;
 }
 
 export type AccountRole = 'admin' | 'member';
@@ -1038,6 +1084,17 @@ export interface ThemeState {
   at?: number;
 }
 
+/**
+ * Whether a worker whose pull request merged goes home by itself (⚙️ Settings), for every floor:
+ * once it's at rest and nobody has its terminal open, it leaves and its worktree and branch are deleted.
+ */
+export interface LeaveOnMergeState {
+  on: boolean;
+  /** Who set it, and when. Unset for the default (off). */
+  by?: string;
+  at?: number;
+}
+
 export interface ChatLine {
   from: string;
   name: string;
@@ -1074,10 +1131,15 @@ export type ClientMsg =
   | { t: 'move'; x: number; y: number; z: number; rotY: number; moving: boolean }
   /**
    * You reached out to use something; everyone else sees your character's arm do it. With `smoke`,
-   * you lit a cigarette (or put it out) on the balcony instead; with `drink`, you took a drink from
-   * the rooftop bar (or finished it, null).
+   * you lit a cigarette (or put it out) on the balcony instead; with `golf`, you took a club out at
+   * the tee (or put it back); with `drink`, you took a drink from the rooftop bar (or finished it, null).
    */
-  | { t: 'act'; smoke?: boolean; drink?: DrinkId | null }
+  | { t: 'act'; smoke?: boolean; golf?: boolean; drink?: DrinkId | null }
+  /**
+   * You hit a golf ball off the tee: its heading (0 is south, toward +x from there), loft (radians)
+   * and power (0–1). Everyone on your floor works out where it goes the same way (world/golf.ts fly).
+   */
+  | { t: 'golf'; yaw: number; loft: number; power: number }
   /** You sat down in a place on a couch, a beanbag, a chair or the bench (see seatAt in layout), or got up again (no seat). */
   | { t: 'sit'; seat?: string }
   /** You picked an issue card up off the board (or put it down again, no issue): everyone sees it in your hands. */
@@ -1110,8 +1172,8 @@ export type ClientMsg =
   /** You're typing into that terminal (a keystroke or a paste, not the terminal answering itself); sent about once a second. */
   | { t: 'term.typing'; workerId: string }
   | { t: 'term.resize'; workerId: string; cols: number; rows: number }
-  /** What you have open now (see PeerInfo.doing); none when you're back in the office. */
-  | { t: 'doing'; what?: string }
+  /** What you have open now (see PeerInfo.doing and PeerInfo.reading); none when you're back in the office. */
+  | { t: 'doing'; what?: string; reading?: boolean }
   /**
    * Open a worker's side shell (the Shell tab of its terminal window): a plain shell in its
    * checkout, started if none runs, shared by everyone with the tab open. Answered with side.snapshot.
@@ -1136,7 +1198,9 @@ export type ClientMsg =
   | { t: 'horn' }
   /** Close an issue, or a pull request without merging it; the answer comes back as gh.closed. */
   | { t: 'gh.close'; kind: 'issue' | 'pull'; number: number; repo?: string; comment?: string; reason?: GhCloseReason; deleteBranch?: boolean }
-  /** With `plan`, the task is for that 📒 To Do Next item, which the office moves along as the task runs. */
+  /** Put labels on an issue or PR and take others off, as the server's gh account; answered with gh.labeled. `repo` picks which checkout on a folder floor. */
+  | { t: 'gh.labels'; kind: 'issue' | 'pull'; number: number; repo?: string; add: string[]; remove: string[] }
+  /** With `plan`, the task is for that 📒 To Do Next item, which the office moves along as the task runs. `repo` picks which checkout on a folder floor. */
   | { t: 'queue.add'; prompt: string; title?: string; issue?: number; repo?: string; plan?: string; provider?: AgentProvider; model?: string; effort?: AgentEffort }
   | { t: 'queue.remove'; taskId: string }
   /** Move a queued task up (-1) or down (+1) the queue. */
@@ -1239,10 +1303,22 @@ export type ClientMsg =
   | { t: 'floor.add'; repo: string; backOffice?: boolean }
   /** File a floor in the basement's Back Office (`on`), or bring it back up to the main floors. */
   | { t: 'floor.backOffice'; floor: string; on: boolean }
+  /** Take a floor off the building (admins only). Its checkout stays on disk; everyone on it rides to another floor. */
+  | { t: 'floor.remove'; floor: string }
   /** Dress the building up for a holiday, take the decorations down ('off'), or follow the calendar ('auto'). */
   | { t: 'theme.set'; pick: ThemePick }
+  /** Workers whose pull request merged go home by themselves (true), or wait to be sent home. */
+  | { t: 'leaveOnMerge.set'; on: boolean }
   /** Where new floors are cloned from now on (admins only); '' goes back to the default. */
   | { t: 'floor.projectsDir'; dir: string }
+  /** Rewrite one of the office's prompts (admins only); null puts the default back. */
+  | { t: 'prompts.set'; id: PromptId; text: string | null }
+  /** Pick the worker everyone starts on (admins only); null goes back to the office's --agent. */
+  | { t: 'prompts.agent'; choice: AgentChoice | null }
+  /** Pick up the floor's basketball (or catch it): yours if nobody else has it. */
+  | { t: 'ball.take' }
+  /** Throw the basketball in your hands from (x, y, z) at (vx, vy, vz) m/s, or drop it; everyone on the floor sees it fly. */
+  | { t: 'ball.throw'; x: number; y: number; z: number; vx: number; vy: number; vz: number }
   /** Give the dog on your floor a pat; it has to be within reach. */
   | { t: 'dog.pet' }
   /** Name the dog on your floor ('' gives it back its first name). */
@@ -1251,7 +1327,9 @@ export type ClientMsg =
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
   /** A change to your own 🔥 To Do board (see shared/todos.ts), or to the office's 🏢 Autonomous Tasks board. */
-  | { t: 'todo'; change: TodoAction; board?: TodoBoardId };
+  | { t: 'todo'; change: TodoAction; board?: TodoBoardId }
+  /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
+  | { t: 'content'; change: ContentAction };
 
 export type ServerMsg =
   | ({
@@ -1280,6 +1358,9 @@ export type ServerMsg =
       theme: ThemeState;
       /** The Receptionist's mailbox: the same on every floor. */
       mail: MailState;
+      /** The office's prompts and the worker everyone starts on. */
+      prompts: PromptsState;
+      leaveOnMerge: LeaveOnMergeState;
     } & FloorView)
   /** You arrived on another floor: everything on it, replacing the last one's, and where everyone is now. */
   | ({ t: 'floor.enter'; peers: PeerInfo[] } & FloorView)
@@ -1294,7 +1375,9 @@ export type ServerMsg =
   | { t: 'peer.update'; peer: PeerInfo }
   | { t: 'peer.move'; id: string; x: number; y: number; z: number; rotY: number; moving: boolean }
   | { t: 'peer.leave'; id: string }
-  | { t: 'peer.act'; id: string; smoke?: boolean; drink?: DrinkId | null }
+  | { t: 'peer.act'; id: string; smoke?: boolean; golf?: boolean; drink?: DrinkId | null }
+  /** Someone on your floor hit a golf ball off the tee (see the client's 'golf'). */
+  | { t: 'golf'; id: string; yaw: number; loft: number; power: number }
   | { t: 'peer.emote'; id: string; emote: EmoteId }
   | { t: 'worker.update'; worker: WorkerInfo }
   | { t: 'worker.remove'; workerId: string }
@@ -1333,6 +1416,8 @@ export type ServerMsg =
   | { t: 'phone'; floor: string; name: string; worker: string; task?: string }
   /** Sent to whoever asked to close it. */
   | { t: 'gh.closed'; kind: 'issue' | 'pull'; number: number; repo?: string; error?: string }
+  /** Sent to whoever changed them: the labels it has now, or why they didn't change. */
+  | { t: 'gh.labeled'; kind: 'issue' | 'pull'; number: number; repo?: string; labels?: GhLabel[]; error?: string }
   | { t: 'rtc'; from: string; data: unknown }
   | ({ t: 'chat' } & ChatLine)
   | { t: 'toast'; text: string; level: 'info' | 'warn' | 'error' }
@@ -1342,6 +1427,8 @@ export type ServerMsg =
   | { t: 'decor'; items: Decoration[] }
   /** What the dog on your floor is up to now: sent at the start of each leg of its day. */
   | { t: 'dog'; dog: DogState }
+  /** The basketball on your floor was picked up, thrown, or put back under the hoop. */
+  | { t: 'ball'; ball: BallState }
   | { t: 'jukebox'; state: JukeboxState }
   /** Who's at the arcade cabinet on your floor now, and the building's high scores. */
   | { t: 'cabinet'; state: CabinetState }
@@ -1369,6 +1456,8 @@ export type ServerMsg =
   | { t: 'machine'; state: MachineState }
   | { t: 'sky'; state: SkyState }
   | { t: 'theme'; state: ThemeState }
+  | { t: 'prompts'; state: PromptsState }
+  | { t: 'leaveOnMerge'; state: LeaveOnMergeState }
   /** Sent to whoever watches that worker's changes, whenever they change. */
   | { t: 'changes'; state: ChangesState }
   | { t: 'changes.diff'; workerId: string; repository?: string; path: string; diff: string; truncated: boolean; error?: string }
@@ -1382,5 +1471,10 @@ export type ServerMsg =
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
   | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId }
+  /**
+   * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
+   * answer to your own change (every one gets exactly one), so your window knows which are done.
+   */
+  | { t: 'content'; floor: string; items: ContentItem[]; mine?: boolean }
   /** `now` is the office's clock as it answered, which the jukebox keeps time by. */
   | { t: 'pong'; at: number; now: number };

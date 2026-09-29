@@ -23,6 +23,10 @@ export interface WhiteboardStand {
   show(drawing: HTMLCanvasElement | null): void;
   /** How big a drawing fills the face, in pixels. */
   fit: { width: number; height: number };
+  /** The face's canvas size, in pixels, for another board drawn to cover it. */
+  size: { width: number; height: number };
+  /** Puts another board on the stand in the drawing's place, under its own plaque (the 🎬 Content Kanban, on its floor), or the drawing back with null. */
+  cover(board: { texture: THREE.Texture; plaque: string } | null): void;
 }
 
 export function buildWhiteboard(): WhiteboardStand {
@@ -116,5 +120,20 @@ export function buildWhiteboard(): WhiteboardStand {
   };
   show(null);
 
-  return { group, colliders, interactable, show, fit: { width: canvas.width - PAD * 2, height: canvas.height - PAD * 2 } };
+  const plaques = new Map<string, THREE.Mesh>([['', plaque]]);
+  const cover = (board: { texture: THREE.Texture; plaque: string } | null) => {
+    face.material.map = board?.texture ?? texture;
+    face.material.needsUpdate = true;
+    const label = board?.plaque ?? '';
+    if (!plaques.has(label)) {
+      const p = textPlane(label, { bg: '#fffaf3', size: 48 });
+      p.scale.multiplyScalar(0.55);
+      p.position.copy(plaque.position);
+      group.add(p);
+      plaques.set(label, p);
+    }
+    for (const [key, p] of plaques) p.visible = key === label;
+  };
+
+  return { group, colliders, interactable, show, fit: { width: canvas.width - PAD * 2, height: canvas.height - PAD * 2 }, size: { width: canvas.width, height: canvas.height }, cover };
 }
