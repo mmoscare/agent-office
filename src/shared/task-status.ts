@@ -26,12 +26,17 @@ export function stoppedByRestart(t: Pick<QueueTask, 'outcome' | 'error'>): boole
   return t.outcome === 'exited' && t.error === RESTART_ERROR;
 }
 
+/** "stopped by restart", saying so when the office saved the worker's uncommitted work as a WIP commit. */
+export function restartText(t: Pick<QueueTask, 'checkpoint'>): string {
+  return t.checkpoint ? 'stopped by restart (work saved as WIP commit)' : 'stopped by restart';
+}
+
 /** Where a task stands, honestly: a finished task whose worktree still holds work without a PR says so. */
-export function taskStatus(t: Pick<QueueTask, 'status' | 'outcome' | 'error' | 'pr' | 'unshipped'>): TaskStatusView {
+export function taskStatus(t: Pick<QueueTask, 'status' | 'outcome' | 'error' | 'pr' | 'unshipped' | 'checkpoint'>): TaskStatusView {
   if (t.status !== 'done') return { text: t.status, warn: false };
   const work = !!t.unshipped && (t.unshipped.dirty > 0 || t.unshipped.commits > 0);
   const warning = t.pr ? 'work outside PR (unshipped work)' : 'no PR (unshipped work)';
-  if (stoppedByRestart(t)) return { text: `stopped by restart${work ? ` — ${warning}` : ''}`, warn: true };
+  if (stoppedByRestart(t)) return { text: `${restartText(t)}${work ? ` — ${warning}` : ''}`, warn: true };
   const base = t.outcome && t.outcome !== 'done' ? `done (${t.outcome})` : 'done';
   return work ? { text: `${base} — ${warning}`, warn: true } : { text: base, warn: false };
 }

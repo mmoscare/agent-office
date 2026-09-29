@@ -313,7 +313,7 @@ export class QueueBoardTexture {
       ...done.map((t) => ({
         icon: t.outcome === 'done' && !taskStatus(t).warn ? '✅' : '⚠️',
         text: name(t),
-        side: taskStatus(t).warn ? (stoppedByRestart(t) ? 'stopped by restart' : t.pr ? 'work outside PR' : 'no PR · unshipped') : t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
+        side: taskStatus(t).warn ? (stoppedByRestart(t) ? (t.checkpoint ? 'stopped by restart · WIP saved' : 'stopped by restart') : t.pr ? 'work outside PR' : 'no PR · unshipped') : t.pr ? `PR #${t.pr.number}${t.pr.state === 'MERGED' ? ' · merged' : ''}` : t.outcome === 'done' ? 'done' : t.outcome === 'failed' ? "didn't start" : t.outcome === 'killed' ? 'sent home' : 'stopped',
         color: taskStatus(t).warn ? '#c2410c' : '#8a8f98',
       })),
     ];
