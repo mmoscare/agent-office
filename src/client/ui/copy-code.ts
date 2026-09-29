@@ -1,26 +1,17 @@
 import { h, toast } from './dom';
+import { copyTextNow } from './terminal-clipboard';
 
 // A command to paste into PowerShell: the command in a dark box with a Copy button, and which
 // folder to run it in when that matters. Used by the manual and the Git board.
 
-/** Puts text on the clipboard; the old way where the async clipboard isn't allowed (plain http off localhost). */
+/** Puts text on the clipboard. The synchronous copy runs first: awaiting the async API spends the user gesture, and plain http off localhost never had that API. */
 export async function copyText(text: string): Promise<boolean> {
+  if (copyTextNow(text)) return true;
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    const ta = h('textarea', { style: 'position:fixed;left:-9999px;top:0', 'aria-hidden': 'true' }) as HTMLTextAreaElement;
-    ta.value = text;
-    document.body.append(ta);
-    ta.select();
-    let ok = false;
-    try {
-      ok = document.execCommand('copy');
-    } catch {
-      ok = false;
-    }
-    ta.remove();
-    return ok;
+    return false;
   }
 }
 
