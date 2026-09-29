@@ -33,7 +33,8 @@ Run in `C:\Users\Owner\AppData\Local\Temp\opencode\sync-upstream-2026-09-29` on 
 
 - Author mirror: `44aecc1` on `main`.
 - Merge: `4eb300b` on `sync/upstream-2026-09-29`.
-- Follow-up on that branch: Receptionist prompt, Windows/checkpoint test fixes, this handoff.
+- Follow-up: `2263b38` (Receptionist prompt, Windows/checkpoint test fixes, this handoff).
+- Merged to `personal` as `93576bf` via https://github.com/mmoscare/agent-office/pull/72
 - Upstream: https://github.com/AgentSystemLabs/agent-office
 - Fork: https://github.com/mmoscare/agent-office
 - Branch: https://github.com/mmoscare/agent-office/tree/sync/upstream-2026-09-29
