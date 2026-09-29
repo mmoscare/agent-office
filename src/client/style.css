@@ -14,6 +14,27 @@
   --shadow: 0 4px 0 var(--ink);
   --radius: 16px;
   --font: 'Nunito', ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, sans-serif;
+  /* Diff counts, and text that warns (unshipped work, stopped tasks). */
+  --diff-add: #2a9d4b;
+  --diff-del: #c3423f;
+  --warn-ink: #a4461b;
+  /* Where a pull request or branch stands (Pull Requests board, ui/pr-board-model.ts). */
+  --st-conflict: #ff7b00;
+  --st-failing: var(--bad);
+  --st-ready: var(--good);
+  --st-review: var(--info);
+  --st-changes: #ff99c8;
+  --st-running: var(--warn);
+  --st-draft: #b8bcc6;
+  --st-merged: #9b5de5;
+  --st-closed: #a39a92;
+  --st-unshipped: #f4a259;
+  --st-unknown: #c9c3bb;
+  /* Sticky-note tints for the board's sections. */
+  --tone-needs: #ffd6e0;
+  --tone-unshipped: #ffe5b4;
+  --tone-progress: #bde0fe;
+  --tone-done: #caffbf;
 }
 
 * { box-sizing: border-box; }
@@ -123,9 +144,9 @@ button { font-family: inherit; }
 .attention-reason { flex: none; padding: 2px 5px; border-radius: 6px; background: #ffe4ad; font-size: 10px; font-weight: 900; }
 .attention-reason.done { background: #c9f4e7; }
 .attention-reason.error { background: #ffe0e7; }
-/* Spend: today, the budget and all time. Its panel only shows once there's something to say. */
+/* Spend: today's budget and saved provider usage history. */
 .side .spend { flex: none; }
-.spend:has(> .usage.hidden) { display: none; }
+/* Saved provider usage remains reachable even when the Claude budget has no spend. */
 .usage { font-size: 12px; font-weight: 700; display: flex; flex-direction: column; gap: 5px; }
 .usage .row { display: flex; align-items: baseline; gap: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usage .row.muted { display: block; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
@@ -485,18 +506,122 @@ button { font-family: inherit; }
 /* The desk a PR came from, with a dot in the worker's color. */
 .desk-link { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; color: var(--ink); font-weight: 800; white-space: nowrap; }
 .desk-link::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); border: 1px solid var(--ink); }
+/* The worker whose desk a PR came from, once it has left the desk. */
+.pr-submitter { font-size: 10px; font-weight: 700; opacity: 0.8; white-space: nowrap; }
 .label { padding: 1px 6px; border-radius: 999px; border: 1.5px solid var(--ink); color: var(--ink); font-size: 10px; font-weight: 800; }
 .board-status { font-size: 12px; font-weight: 700; color: var(--muted); }
-/* The PR board's Unshipped work column: work left in office branches with no PR. */
-.column.unshipped h4 { background: #ffe0b8; }
-.column.unshipped h4 > span { display: flex; align-items: center; gap: 4px; }
-.unshipped-rescan { padding: 0 6px; font-size: 11px; min-height: 0; }
-.card.unshipped-card { background: #ffe8cc; transform: none; cursor: default; }
-.card.unshipped-card:hover { transform: none; }
-.unshipped-count { color: #a4461b; }
-.unshipped-action { margin-top: 6px; display: flex; justify-content: flex-end; }
-.unshipped-note { font-size: 11px; font-weight: 700; background: #fff3c4; border: 2px solid var(--ink); border-radius: 8px; padding: 6px 8px; }
-.queue-warn { color: #a4461b; font-weight: 900; }
+.queue-warn { color: var(--warn-ink); font-weight: 900; }
+
+/* Pull Requests board (ui/boards.ts, ui/pr-board-parts.ts, ui/unshipped-list.ts): paper sections pinned to
+   the cork, most urgent on the left. Type: 16 section titles, 14 row titles, 12 meta, 11 pills and counts.
+   Spacing steps of 4. Status colours are the --st-* tokens. */
+.st-conflict { --st: var(--st-conflict); }
+.st-failing { --st: var(--st-failing); }
+.st-ready { --st: var(--st-ready); }
+.st-review { --st: var(--st-review); }
+.st-changes { --st: var(--st-changes); }
+.st-running { --st: var(--st-running); }
+.st-draft { --st: var(--st-draft); }
+.st-merged { --st: var(--st-merged); }
+.st-closed { --st: var(--st-closed); }
+.st-unshipped { --st: var(--st-unshipped); }
+.st-unknown { --st: var(--st-unknown); }
+.tone-needs { --tone: var(--tone-needs); }
+.tone-unshipped { --tone: var(--tone-unshipped); }
+.tone-progress { --tone: var(--tone-progress); }
+.tone-done { --tone: var(--tone-done); }
+
+.modal.pr-board header .btn { padding: 4px 10px; font-size: 13px; }
+.modal.pr-board header .close { width: 34px; padding: 0; justify-content: center; }
+.prb-tally { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 3px solid var(--ink); background: var(--paper); }
+.prb-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 8px; font: inherit; font-size: 13px; font-weight: 800; color: var(--ink); background: var(--tone, #fff); border: 2px solid var(--ink); border-radius: 999px; box-shadow: 0 2px 0 var(--ink); cursor: pointer; }
+.prb-chip b { font-size: 15px; font-weight: 900; }
+.prb-chip:hover { filter: brightness(1.04); }
+.prb-chip:active { transform: translateY(2px); box-shadow: none; }
+.prb-banner { flex: 1 1 320px; display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 12px; background: #fff3c4; border: 2px solid var(--ink); border-radius: 12px; font-size: 13px; }
+.prb-banner > div { min-width: 0; }
+.prb-banner .big { font-size: 20px; }
+.prb-banner b { display: block; }
+.prb-banner small { display: block; color: var(--muted); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.modal.board .body.prb-body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; gap: 16px; padding: 16px; overflow: auto; min-height: 0; }
+.prb-main, .prb-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.prb-section { background: var(--paper); border: 3px solid var(--ink); border-radius: 14px; box-shadow: 0 4px 0 rgba(43,45,66,.55); position: relative; scroll-margin-top: 8px; }
+/* A pin at the top, like the notes on the old board. */
+.prb-section::before { content: ''; position: absolute; top: -8px; left: 22px; width: 12px; height: 12px; border-radius: 50%; background: var(--st-failing); border: 2px solid var(--ink); }
+.prb-section.tone-unshipped::before { background: var(--st-unshipped); }
+.prb-section.tone-progress::before { background: var(--info); }
+.prb-section.tone-done::before { background: var(--good); }
+.prb-section h3 { margin: 0; display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 16px; font-weight: 900; background: var(--tone); border-bottom: 3px solid var(--ink); border-radius: 11px 11px 0 0; }
+.prb-section.folded h3 { border-bottom: 0; border-radius: 11px; }
+.prb-section.folded .prb-rows { display: none; }
+.prb-name { white-space: nowrap; }
+.prb-count { min-width: 22px; padding: 0 7px; text-align: center; font-size: 12px; font-weight: 900; background: #fff; border: 2px solid var(--ink); border-radius: 999px; }
+.prb-hint { flex: 1; min-width: 0; font-size: 12px; font-weight: 700; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.prb-tool { padding: 2px 8px; font-size: 12px; border-width: 2px; border-radius: 9px; box-shadow: 0 2px 0 var(--ink); }
+.prb-rows { list-style: none; margin: 0; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+
+/* A row: status stripe down the left, pill and title, meta below, time and action on the right. */
+.prb-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: start; padding: 8px 12px 8px 16px; background: #fff; border: 2px solid var(--ink); border-radius: 10px; box-shadow: inset 6px 0 0 var(--st, var(--muted)), 0 2px 0 rgba(43,45,66,.35); }
+.prb-row.openable { cursor: pointer; transition: transform .08s; }
+.prb-row.openable:hover { transform: translateY(-1px); background: var(--paper); }
+.prb-row:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.prb-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.prb-ref { font-size: 12px; font-weight: 900; color: var(--muted); white-space: nowrap; }
+.prb-title { font-size: 14px; font-weight: 800; line-height: 1.3; word-break: break-word; }
+.prb-when { font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.prb-meta { grid-column: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.prb-action { grid-column: 2; grid-row: 2; align-self: end; display: flex; justify-content: flex-end; }
+.prb-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; font-size: 11px; font-weight: 900; color: var(--ink); white-space: nowrap; background: color-mix(in srgb, var(--st) 30%, #fff); border: 1.5px solid var(--ink); border-radius: 999px; }
+.prb-branch { font: 700 11.5px ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--ink); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prb-base { color: var(--muted); }
+.prb-diff { display: inline-flex; gap: 4px; font-weight: 800; }
+.prb-diff .add { color: var(--diff-add); }
+.prb-diff .del { color: var(--diff-del); }
+.prb-warn { color: var(--warn-ink); font-weight: 800; }
+.prb-worker { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); font-weight: 800; }
+.prb-worker::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--st-unknown)); border: 1px solid var(--ink); }
+.prb-worker.gone { color: var(--muted); }
+.prb-state { font-size: 12px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.btn.prb-act { padding: 4px 10px; font-size: 12px; border-width: 2px; box-shadow: 0 2px 0 var(--ink); }
+/* Finished ones: one line each. */
+.prb-row.compact { padding-top: 6px; padding-bottom: 6px; box-shadow: inset 6px 0 0 var(--st, var(--muted)); background: rgba(255,255,255,.7); }
+.prb-row.compact .prb-title { font-size: 13px; font-weight: 700; }
+.prb-repo { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.prb-repo:first-child { margin-top: 0; }
+.prb-repo::after { content: ''; flex: 1; border-top: 2px dashed rgba(43,45,66,.25); }
+.prb-repo .prb-count { order: 2; font-size: 11px; }
+.prb-empty { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px; text-align: center; font-size: 14px; color: var(--ink); }
+.prb-empty .big { font-size: 28px; line-height: 1.1; }
+.prb-empty small { font-size: 12px; font-weight: 700; color: var(--muted); }
+.prb-note { font-size: 12px; font-weight: 700; background: #fff3c4; border: 2px solid var(--ink); border-radius: 10px; padding: 6px 10px; }
+.prb-note.bad { background: #ffe3ea; }
+.prb-more { display: flex; justify-content: center; }
+.prb-skel { box-shadow: inset 6px 0 0 #e9e4dc; }
+.prb-skel .bar { display: inline-block; height: 12px; width: 60%; border-radius: 6px; background: linear-gradient(90deg, #eeeae4 25%, #f8f5f0 50%, #eeeae4 75%); background-size: 200% 100%; animation: prb-shimmer 1.2s linear infinite; }
+.prb-skel .bar.short { width: 64px; }
+.prb-skel .bar.tiny { width: 35%; height: 9px; }
+@keyframes prb-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .prb-skel .bar { animation: none; } .prb-row.openable { transition: none; } }
+/* Narrow: one column, in order of urgency. */
+@media (max-width: 900px) {
+  .modal.board .body.prb-body { display: flex; flex-direction: column; align-items: stretch; padding: 12px; gap: 14px; }
+  .prb-main, .prb-side { display: contents; }
+  #prb-needs { order: 1; }
+  #prb-unshipped { order: 2; }
+  #prb-progress { order: 3; }
+  #prb-done { order: 4; }
+  .prb-tally { padding: 8px 12px; }
+  .prb-hint { display: none; }
+}
+@media (max-width: 520px) {
+  .prb-row { grid-template-columns: minmax(0, 1fr); }
+  .prb-when { grid-row: 1; justify-self: end; }
+  .prb-head { grid-row: 2; }
+  .prb-action { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+  .prb-chip { padding: 3px 10px 3px 6px; font-size: 12px; }
+  .modal.pr-board header .board-status { display: none; }
+}
 
 .board-error { margin: auto; background: var(--paper); border: 3px solid var(--ink); border-radius: 14px; padding: 18px 22px; font-weight: 800; max-width: 520px; text-align: center; }
 .detail pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Menlo, monospace; background: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 10px; max-height: 45vh; overflow: auto; margin: 10px 0 0; }

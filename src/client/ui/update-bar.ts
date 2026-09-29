@@ -130,7 +130,7 @@ export function mergedJustNow(): void {
 
 function render() {
   const s = status;
-  bar ??= document.body.appendChild(h('div.update-bar', { role: 'region', 'aria-label': 'Update the office' }));
+  bar ??= (document.getElementById('app') ?? document.body).appendChild(h('div.update-bar', { role: 'region', 'aria-label': 'Update the office' }));
   const list = s ? steps(s) : [];
   const current = list.findIndex((st) => !st.done);
   // Everything's done up to the reload, or the reload itself: which update this is, for "Hide".

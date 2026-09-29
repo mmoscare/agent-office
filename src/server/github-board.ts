@@ -46,12 +46,15 @@ const issueFields = `${common} assignees(first:100) { nodes { login } } comments
 const pullFields = `${common} isDraft reviewDecision headRefName headRefOid baseRefName additions deletions
   closingIssuesReferences(first:100) { nodes { number } }
   commits(last:1) { nodes { commit { statusCheckRollup { state } } } }`;
+/** Only an open PR can conflict. `mergeable` is a scalar, so it adds nothing to the query's cost. */
+const openPullFields = `${pullFields} mergeable`;
 
 /** Keep the existing board limits without fetching full comment threads or every CI check. */
 export async function boardList(kind: 'issues' | 'pulls', cwd: string, query: Query): Promise<any[]> {
   const issue = kind === 'issues';
   const connection = issue ? 'issues' : 'pullRequests';
   const fields = issue ? issueFields : pullFields;
+  const openFields = issue ? issueFields : openPullFields;
   const limit = issue ? 300 : 150;
   const items: any[] = [];
   let cursor: string | undefined;
@@ -63,7 +66,7 @@ export async function boardList(kind: 'issues' | 'pulls', cwd: string, query: Qu
       repository(owner:$owner, name:$name) {
         ${issue ? 'hasIssuesEnabled' : ''}
         open: ${connection}(first:${Math.min(100, limit - count)}, after:$cursor, states:OPEN, orderBy:{field:CREATED_AT,direction:DESC}) {
-          nodes { ${fields} } pageInfo { hasNextPage endCursor }
+          nodes { ${openFields} } pageInfo { hasNextPage endCursor }
         }
         ${recent}
       }

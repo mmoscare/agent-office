@@ -355,6 +355,8 @@ export interface GhPull extends GhWhere {
   additions: number;
   deletions: number;
   checks: 'pass' | 'fail' | 'pending' | 'none';
+  /** MERGEABLE, CONFLICTING or UNKNOWN (GitHub still working it out); missing from an older office. */
+  mergeable?: string;
   body: string;
   /** Issues it closes ("closes #12" in its description), as GitHub links them. */
   closes: number[];

@@ -284,7 +284,7 @@ export function mountMailNag(opts: { desktop: () => boolean }) {
         h('button.btn', { type: 'button', onclick: () => { store_(SNOOZE_KEY, Date.now() + MAIL_NAG_SNOOZE_MS); hide(); toast('💁‍♀️ Okay, I’ll ask again tomorrow'); } }, 'Remind me tomorrow'),
       ),
     );
-    document.getElementById('hud')?.append(card) ?? document.body.append(card);
+    (document.getElementById('hud') ?? document.body).append(card);
   };
   const check = () => {
     const why = mailNeedsYou(store.mail);

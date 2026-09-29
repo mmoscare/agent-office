@@ -81,7 +81,7 @@ test('folder boards keep failed repositories, throttle background reads, and rec
     return JSON.stringify({ data: { repository: {
       hasIssuesEnabled: true,
       open: { nodes: [{ number: 1, title: 'Keep me', state: 'OPEN', createdAt: '', updatedAt: '',
-        labels: { nodes: [] }, comments: { totalCount: 123 },
+        labels: { nodes: [] }, comments: { totalCount: 123 }, headRefOid: 'abc123', mergeable: 'CONFLICTING',
         commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] },
       }], pageInfo: { hasNextPage: false } },
     } } });
@@ -90,6 +90,8 @@ test('folder boards keep failed repositories, throttle background reads, and rec
   assert.equal(github.issues.items.length, 2);
   assert.equal(github.issues.items[0].comments, 123);
   assert.equal(github.pulls.items[0].checks, 'pending');
+  assert.equal(github.pulls.items[0].mergeable, 'CONFLICTING');
+  assert.equal(github.pulls.items[0].headRefOid, 'abc123');
   assert.equal(github.pulls.items[0].repoDir, 'a');
   const initialCalls = calls;
   await github.refresh(false);

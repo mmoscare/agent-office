@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { WorkerManager } from '../src/server/workers.js';
+import { IDLE_DONE_GRACE_MS, WorkerManager } from '../src/server/workers.js';
+import { TaskQueue, type QueueWorkers } from '../src/server/queue.js';
+import { Plans } from '../src/server/plans.js';
 import { isAsleep, isBusy, isStopped } from '../src/shared/status.js';
 import { workerAttention } from '../src/shared/attention.js';
-import type { AgentProvider } from '../src/shared/protocol.js';
+import type { AgentProvider, WorkerInfo } from '../src/shared/protocol.js';
 
 function fixture(provider: AgentProvider) {
   const updates: string[] = [];
@@ -169,6 +171,224 @@ test('Claude terminal OSC progress really pauses and resumes the worker', async 
   }
 });
 
+/** A real headless screen for a Claude worker, and a way to print to it. */
+function claudeScreen() {
+  const f = fixture('claude');
+  f.w.info.cols = 80;
+  f.w.info.rows = 24;
+  const term = f.manager.newTerm(f.w);
+  const output = (text: string) => new Promise<void>(resolve => term.write(text, resolve));
+  return { ...f, term, output };
+}
+
+// Claude's input box at the foot of its screen, with the cursor left on its last row.
+const INPUT_BOX = '\r\n╭────────╮\r\n│ >      │\r\n╰────────╯\r\n  ? for shortcuts';
+// Claude redraws in place: back up over the input box and print the turn where it stood.
+const OVER_INPUT_BOX = '\x1b[3A\r\x1b[J';
+const ESC_NOTICE = '  ⎿  Interrupted · What should Claude do instead?';
+
+test('Claude Esc with no tool running reads as interrupted from its screen notice, until a new prompt', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`● Ready.${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    // Esc while Claude thinks: no hook at all, just the notice, printed above where the cursor was.
+    await f.output(`${OVER_INPUT_BOX}> fix it\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('UserPromptSubmit', { prompt: 'try again' });
+    assert.equal(f.w.info.status, 'working');
+    assert.ok(!f.updates.includes('done'));
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('an interrupt notice from an earlier turn, or quoted in the output, leaves a quiet turn paused until Stop', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`> first\r\n${ESC_NOTICE}${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'second' });
+    await f.output(`${OVER_INPUT_BOX}> second\r\n● Claude prints "Interrupted by user" when you press Esc.\r\n`
+      + `+const NOTICE = /Interrupted · What should Claude do instead?/;${INPUT_BOX}\x1b]9;4;0\x07`);
+    assert.equal(f.w.info.status, 'paused');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused', 'the notice above the turn start belongs to the first turn');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'done');
+    // Claude redraws its whole screen (a resize, say), reprinting the first turn's notice below the
+    // row this turn started on: that start is gone, so the notice can't be placed.
+    f.hook('UserPromptSubmit', { prompt: 'third' });
+    await f.output(`\x1b[H\x1b[2J> first\r\n${ESC_NOTICE}\r\n> second\r\n> third${INPUT_BOX}\x1b]9;4;0\x07`);
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused');
+  } finally {
+    f.term.dispose();
+  }
+});
+
+/** Past the wait before Claude's idle notification counts as a finished turn. */
+const afterIdleGrace = () => new Promise<void>(resolve => setTimeout(resolve, IDLE_DONE_GRACE_MS + 200));
+
+/** A turn under way, reported busy on the screen, whose idle notification has just come in. */
+async function idleNotified(f: ReturnType<typeof claudeScreen>, prompt = 'fix it') {
+  f.hook('UserPromptSubmit', { prompt });
+  await f.output(`> ${prompt}\x1b]9;4;3\x07`);
+  // Hooks and terminal output travel separately, so the idle notification can be handled first.
+  f.hook('Notification', { notification_type: 'idle_prompt' });
+}
+
+test('Claude idle notification that beats the progress marker publishes nothing, so an Esc never reads as done', async () => {
+  // Whichever reads the notice first: the screen check (every 250 ms) or the waiting notification.
+  const flushed = claudeScreen();
+  const waited = claudeScreen();
+  try {
+    for (const f of [flushed, waited]) {
+      await idleNotified(f);
+      assert.equal(f.w.info.status, 'working');
+      await f.output(`\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+      assert.equal(f.w.info.status, 'paused');
+    }
+    flushed.manager.checkBlocked(flushed.w);
+    assert.equal(flushed.w.info.status, 'interrupted');
+    await afterIdleGrace();
+    for (const f of [flushed, waited]) {
+      assert.equal(f.w.info.status, 'interrupted');
+      assert.ok(!f.updates.includes('done'), 'the queue and plans never see a finished turn');
+      f.hook('Stop');
+      assert.equal(f.w.info.status, 'interrupted');
+    }
+  } finally {
+    flushed.term.dispose();
+    waited.term.dispose();
+  }
+});
+
+test('a finished turn whose idle notification beats its idle marker still ends done with no Stop', async () => {
+  const f = claudeScreen();
+  try {
+    await idleNotified(f);
+    await f.output(`\r\n● Fixed.${INPUT_BOX}\x1b]9;4;0\x07`);
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused', 'nothing shows it finished yet');
+    await afterIdleGrace();
+    assert.equal(f.w.info.status, 'done', 'the notification stands in for the Stop that never came');
+    f.hook('Stop');
+    assert.deepEqual(f.updates.filter((s) => s === 'done'), ['done']);
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('a Stop, more work or a new prompt while the idle notification waits wins over it', async () => {
+  const stopped = claudeScreen();
+  const tool = claudeScreen();
+  const busy = claudeScreen();
+  const prompted = claudeScreen();
+  const all = [stopped, tool, busy, prompted];
+  try {
+    for (const f of all) await idleNotified(f);
+    stopped.hook('Stop');
+    assert.equal(stopped.w.info.status, 'done');
+    tool.hook('PreToolUse', { tool_name: 'Bash', tool_input: { command: 'npm test' } });
+    await busy.output('\x1b]9;4;0\x07\x1b]9;4;3\x07');
+    prompted.hook('UserPromptSubmit', { prompt: 'and one more thing' });
+    await afterIdleGrace();
+    assert.deepEqual(stopped.updates.filter((s) => s === 'done'), ['done'], 'a Stop reports done once, right away');
+    for (const f of [tool, busy, prompted]) {
+      assert.equal(f.w.info.status, 'working');
+      assert.ok(!f.updates.includes('done'));
+    }
+  } finally {
+    for (const f of all) f.term.dispose();
+  }
+});
+
+test('with no progress reports from Claude, the idle notification reads an Esc off the screen and otherwise completes the turn', async () => {
+  const f = claudeScreen();
+  try {
+    await f.output(`● Ready.${INPUT_BOX}`);
+    f.hook('UserPromptSubmit', { prompt: 'fix it' });
+    await f.output(`${OVER_INPUT_BOX}> fix it\r\n${ESC_NOTICE}${INPUT_BOX}`);
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    assert.equal(f.w.info.status, 'working');
+    await afterIdleGrace();
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('UserPromptSubmit', { prompt: 'again' });
+    await f.output(`${OVER_INPUT_BOX}> again\r\n● Done.${INPUT_BOX}`);
+    f.hook('Notification', { notification_type: 'idle_prompt' });
+    await afterIdleGrace();
+    assert.equal(f.w.info.status, 'done', 'with no Stop and no progress marker, the notification still stands in for Stop');
+    assert.equal(f.updates.filter((s) => s === 'done').length, 1);
+  } finally {
+    f.term.dispose();
+  }
+});
+
+test('an Esc-cancelled queue worker whose idle notification beats its idle marker keeps its task and its plan', async (t) => {
+  const f = claudeScreen();
+  const dir = mkdtempSync(path.join(tmpdir(), 'office-stopped-queue-'));
+  const plans = new Plans(dir);
+  const plan = plans.apply({ action: 'add', text: 'Fix the login' }).items[0].id;
+  // Wired the way Floor wires them: every worker update goes straight to the queue and the plans.
+  let queue: TaskQueue | undefined;
+  f.manager.events = {
+    update: (info: WorkerInfo) => {
+      f.updates.push(info.status);
+      queue?.onWorker(info);
+      plans.onWorker(info);
+    },
+  };
+  f.manager.workers.clear();
+  const workers: QueueWorkers = {
+    defaultProvider: 'claude',
+    list: () => f.manager.list(),
+    deskOccupied: (desk) => f.manager.list().some((w: WorkerInfo) => w.deskId === desk),
+    spawn(deskId) {
+      Object.assign(f.w.info, { deskId, name: 'Test' });
+      f.manager.workers.set(f.w.info.id, f.w);
+      return f.w.info;
+    },
+    kill: () => Promise.resolve({}),
+  };
+  queue = new TaskQueue(dir, workers, false, {
+    update() {}, toast() {}, claimIssue: async () => undefined, refreshGitHub() {}, hiringPaused: () => undefined, emptied() {},
+    startPlan: (id, worker, task) => void plans.start(id, worker, task),
+    endPlan: (id, outcome) => plans.end(id, outcome),
+  });
+  t.after(() => {
+    queue?.shutdown();
+    f.term.dispose();
+    assert.equal(path.dirname(path.resolve(dir)), path.resolve(tmpdir()));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  assert.equal(queue.add('Fix the login', 'Tester', undefined, undefined, 'claude', undefined, undefined, undefined, plan), undefined);
+  const task = () => queue!.state().tasks[0];
+  const planStatus = () => plans.state().items[0].status;
+  assert.equal(task().status, 'running');
+  assert.equal(planStatus(), 'progress');
+
+  await idleNotified(f, 'Fix the login');
+  await f.output(`\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+  f.manager.checkBlocked(f.w);
+  await afterIdleGrace();
+  assert.equal(f.w.info.status, 'interrupted');
+  assert.equal(task().status, 'running', 'the Esc did not finish the queue task');
+  assert.equal(task().outcome, undefined);
+  assert.equal(planStatus(), 'progress', 'nor its To Do Next item');
+
+  // Told to carry on, it finishes for real: that is what completes the task and the plan.
+  f.hook('UserPromptSubmit', { prompt: 'carry on' });
+  f.hook('Stop');
+  assert.equal(task().outcome, 'done');
+  assert.equal(planStatus(), 'finished');
+});
+
 test('a child Claude cancellation does not stop its parent', () => {
   const f = fixture('claude');
   f.hook('PostToolUseFailure', { is_interrupt: true, agent_id: 'child' });
@@ -202,5 +422,35 @@ test('stopped workers restore offline and retain their stopped state when a live
   } finally {
     assert.equal(path.dirname(path.resolve(dir)), path.resolve(tmpdir()));
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('an adopted active Claude turn ignores old notices and recognizes a new Esc', async () => {
+  const f = fixture('claude');
+  f.manager.follow = () => {};
+  f.w.info.status = 'offline';
+  f.manager.adopt(f.w, {
+    pty: { id: 'live-terminal' }, cols: 80, rows: 24, title: '', busy: true,
+    snapshot: `> earlier\r\n${ESC_NOTICE}\r\n> current${INPUT_BOX}`,
+  }, { status: 'working', acked: true });
+  const term = f.w.term;
+  const output = (text: string) => new Promise<void>(resolve => term.write(text, resolve));
+  try {
+    await output('');
+    assert.ok(f.w.turnStart && f.w.turnStart.line >= 0);
+    await output('\x1b]9;4;0\x07');
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'paused', 'the restored notice belongs to an earlier turn');
+    await output(`\x1b]9;4;3\x07${OVER_INPUT_BOX}> current\r\n${ESC_NOTICE}${INPUT_BOX}\x1b]9;4;0\x07`);
+    f.manager.checkBlocked(f.w);
+    assert.equal(f.w.info.status, 'interrupted');
+    f.hook('Stop');
+    assert.equal(f.w.info.status, 'interrupted');
+    assert.ok(!f.updates.includes('done'));
+    f.hook('UserPromptSubmit', { prompt: 'continue' });
+    assert.equal(f.w.info.status, 'working');
+  } finally {
+    term.dispose();
   }
 });
