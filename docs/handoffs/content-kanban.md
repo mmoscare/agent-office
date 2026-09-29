@@ -47,3 +47,18 @@ On the Autonomous-Dev-Projects floor only, put a second kanban in place of the w
 - Review and merge this PR into `personal`.
 - Then, in `C:\Users\Owner\Documents\Development\Agent-Office\agent-office`: pull, run `npm run build`, and restart the office. A restart stops running workers, so pick a quiet moment.
 - Not verified in the live office yet: that the real floor id is `autonomous-dev-projects`. It is, per the office's `floors.json` on 2026-09-28.
+
+## Follow-up (2026-09-29): don't lose edits while the office is out of reach
+PR #70 merged. Its Codex review (P1) found that while the socket was reconnecting, changes still showed on screen. `Net.send` dropped them, and the board the office sent on reconnect wiped them, so a dump of ideas could vanish.
+
+**Fix:** `changeContent` in `src/client/ui/content-kanban.ts` refuses changes while `net.up` is false. It shows a "Not connected" toast and redraws, which un-ticks a box that was just clicked. It now returns whether the change went through. After a refusal:
+- the dump box keeps its ideas and format toggles;
+- Remove shows no false "Undo", and Undo keeps its card;
+- the card editor stays open with what's typed in it.
+
+**Checks:**
+- `npm run build` and the client typecheck: clean.
+- `node tests/content-kanban-ui.mjs`: ok. It has a new offline step, which sets `__office.net.up = false` and checks that nothing is sent and nothing is lost.
+- `tests/content-kanban.test.ts`: 12/12 pass.
+
+**Remaining:** merge the follow-up PR. Then pull, build and restart the app folder, as above.

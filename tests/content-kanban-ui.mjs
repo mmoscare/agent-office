@@ -155,6 +155,26 @@ try {
   assert.deepEqual((await titles('idea'))[0], 'The office manual, as a blog post');
   assert.deepEqual(await checklist('idea', 'office manual'), ['🧵 X thread', '📰 Article']);
 
+  // Out of reach of the office (reconnecting): nothing changes or is sent, the dump stays in its box
+  // with its toggles to try again, and a ticked box springs back.
+  const sent = changes.length;
+  await page.evaluate(() => (window.__office.net.up = false));
+  await dump.fill('An idea while offline');
+  await toggle('Podcast').click();
+  await dump.press('Control+Enter');
+  await page.locator('.toast', { hasText: 'Not connected' }).first().waitFor();
+  assert.equal(await dump.inputValue(), 'An idea while offline');
+  assert.equal(await toggle('Podcast').getAttribute('aria-pressed'), 'true');
+  await card('idea', 'Why AI agents').getByRole('checkbox', { name: 'YouTube video made' }).click();
+  assert.equal(await card('idea', 'Why AI agents').getByRole('checkbox', { name: 'YouTube video made' }).isChecked(), false);
+  await card('idea', 'Claude vs Codex').getByRole('button', { name: 'Remove' }).click();
+  assert.equal(await win.getByRole('button', { name: 'Undo', exact: true }).count(), 0);
+  assert.equal(await titles('idea').then((t) => t.length), 4);
+  assert.equal(changes.length, sent);
+  await page.evaluate(() => (window.__office.net.up = true));
+  await dump.fill('');
+  await toggle('Podcast').click();
+
   // Ticking the Short: the card says 1/2 made.
   await card('idea', 'Why AI agents').getByRole('checkbox', { name: 'YouTube Short made' }).check();
   await page.waitForFunction(() => [...document.querySelectorAll('.ck-card')].some((c) => c.textContent.includes('Why AI agents') && c.querySelector('.ck-progress')?.textContent === '1/2 made'));
