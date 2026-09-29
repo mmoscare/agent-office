@@ -245,7 +245,11 @@ export function openCleanup(opts: CleanupOpen = {}) {
         'td.cleanup-verdict',
         {},
         h('span.cleanup-chip', { class: it.verdict.kind }, it.verdict.text),
-        lost.length ? h('label.cleanup-force', {}, force, h('span', {}, h('b', {}, 'Delete anyway, losing: '), lost.join('; '))) : null,
+        lost.length
+          ? h('label.cleanup-force', {}, force, h('span', {}, h('b', {}, 'Delete anyway, losing: '), lost.join('; ')))
+          : cleanupLosses(it, { worktree: true, branch: true, remote: true }).length
+            ? h('div.cleanup-loses', {}, cleanupLosses(it, { worktree: true, branch: true, remote: true }).join('; '))
+            : null,
       ),
       h('td.cleanup-pin', {}, cleanupLocked(it) ? null : h('button.btn.cleanup-pinbtn', { type: 'button', 'aria-pressed': String(it.pinned), title: it.pinned ? 'Unpin: let cleanups offer it again' : 'Always keep it: every cleanup leaves it alone', onclick: () => void pin(it) }, '📌')),
     );
@@ -337,8 +341,8 @@ export function openCleanup(opts: CleanupOpen = {}) {
     );
     const refused = r.refused.map((x) => h('li', {}, h('span.cleanup-mark', {}, '✋'), h('span', {}, h('b', {}, nameOf(x.id)), `: ${x.why}`)));
     const title = r.dryRun
-      ? r.steps.length ? `This deletes exactly these ${plural(r.steps.length, 'thing')} from ${scan?.name ?? repo} on ${floorName}:` : 'Nothing would be deleted.'
-      : `Results on ${scan?.name ?? repo}, ${floorName}:`;
+      ? r.steps.length ? `This deletes exactly these ${plural(r.steps.length, 'thing')} from ${scan?.name ?? repo} (${floorName} floor):` : 'Nothing would be deleted.'
+      : `Results for ${scan?.name ?? repo} (${floorName} floor):`;
     body.replaceChildren(
       h(
         'div.cleanup-run',
