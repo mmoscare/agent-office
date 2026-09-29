@@ -61,6 +61,12 @@ try {
     Date.now = () => browserNow.call(Date) + 3 * 3_600_000;
   });
   const page = await context.newPage();
+  // Keep both notices present: they previously escaped the HUD and could cover dialog controls.
+  await page.route('**/api/git/office**', route => route.fulfill({ json: { office: {
+    dir: codeDir, branch: 'personal', ahead: 0, behind: 0, dirty: 0,
+    startedAt: Date.now(), target: 'timecard-ui-fixture', floors: [],
+    needs: { pull: false, build: true, restart: false },
+  } } }));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
@@ -94,6 +100,9 @@ try {
   assert.equal(await dialog.locator('.timecard-day').count(), 14);
   assert.equal(await dialog.locator('.timecard-total strong').first().textContent(), '0m');
 
+  // The CSV remains clickable with the delayed Receptionist reminder and update banner showing.
+  await page.waitForFunction(() => document.querySelector('.mail-nag')?.parentElement?.id === 'hud');
+  await page.waitForFunction(() => document.querySelector('.update-bar:not([hidden])')?.parentElement?.id === 'app');
   // The CSV is one row per stint, for a timesheet.
   const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: '⬇️ CSV' }).click()]);
   const csv = readFileSync(await download.path(), 'utf8').trim().split(/\r\n/);
@@ -102,6 +111,8 @@ try {
   if (process.argv[2]) await page.screenshot({ path: process.argv[2] });
   await page.setViewportSize({ width: 480, height: 800 });
   assert.equal(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+  const [mobileDownload] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: /CSV/ }).click()]);
+  assert.equal(readFileSync(await mobileDownload.path(), 'utf8').split(/\r\n/)[0], 'Date,Clock in,Clock out,Hours');
   await page.setViewportSize({ width: 1440, height: 1000 });
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
 
