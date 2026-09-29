@@ -47,12 +47,14 @@ export function openElevator(opts: ElevatorOptions): void {
   let source: 'local' | 'github' = 'local';
   /** Showing the basement's Back Office list instead of the main floors. Opens there when you're on one of its floors. */
   let basement = !!store.currentFloor()?.backOffice;
-  /** New projects go into the Back Office (remembered while the panel is open). */
-  let fileInBack = false;
+  let openingLocal = false;
+  let movingFloor = '';
+  let managementKey = '';
   /** The search box and list are in place (rebuilding them would lose the focus mid-typing). */
   let built = false;
 
   const floorsEl = h('div.floors');
+  const managementEl = h('div');
   const addEl = h('div.add');
   const input = h('input', { type: 'text', placeholder: 'Search your repositories, or type owner/name', 'aria-label': 'Repository', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
   const listEl = h('div.repo-list', { role: 'listbox', 'aria-label': 'Repositories' });
@@ -63,12 +65,11 @@ export function openElevator(opts: ElevatorOptions): void {
   const localTab = h('button.btn', { type: 'button', 'aria-pressed': 'true' }, 'Local folder');
   const githubTab = h('button.btn', { type: 'button', 'aria-pressed': 'false' }, 'Clone from GitHub');
   const sourceChoice = h('div.floor-source', { role: 'group', 'aria-label': 'Project source' }, localTab, githubTab);
-  const backBox = h('input', { type: 'checkbox' }) as HTMLInputElement;
-  backBox.addEventListener('change', () => { fileInBack = backBox.checked; });
-  const backToggle = h('label.back-office-toggle', { title: 'Keep the main floor list short: the project goes on the basement list' }, backBox, ' 🗄️ File it in the Back Office');
   const local = localFloorPicker((floor) => { modal.close(); opts.ride(floor); }, (busy) => {
-    localTab.disabled = githubTab.disabled = backBox.disabled = busy;
-  }, () => fileInBack);
+    openingLocal = busy;
+    localTab.disabled = githubTab.disabled = busy;
+    renderFloors();
+  }, () => basement);
   const focusSource = () => source === 'local' ? local.focus() : input.focus();
 
   const needRepos = () => {
@@ -104,15 +105,31 @@ export function openElevator(opts: ElevatorOptions): void {
       modal.close();
       opts.ride(f.id);
     });
-    if (f.cloning) return h('div.floor-row', {}, btn);
-    // Filing a floor away (or bringing it back) keeps it exactly as it is: only the list it's on changes.
-    const move = h(
-      'button.btn.floor-move',
-      { type: 'button', title: f.backOffice ? `Move ${f.name} back up to the main floors` : `Move ${f.name} down to the Back Office` },
-      f.backOffice ? '⬆ Upstairs' : '🗄️ Back Office',
+    return btn;
+  };
+
+  /** Project filing lives inside the Back Office, never beside the main floor buttons. */
+  const manageFloors = () => {
+    const available = store.floors.filter((f) => !f.cloning);
+    if (!available.some((f) => f.id === movingFloor)) movingFloor = '';
+    const select = h('select', { id: 'back-office-project', disabled: !!adding || openingLocal },
+      h('option', { value: '' }, 'Choose a project…'),
+      ...available.map((f) => h('option', { value: f.id }, `${floorNumber(store.floors, f.id)} · ${f.name}`)),
     );
-    move.addEventListener('click', () => net.send({ t: 'floor.backOffice', floor: f.id, on: !f.backOffice }));
-    return h('div.floor-row', {}, btn, move);
+    select.value = movingFloor;
+    const move = h('button.btn', { type: 'button' });
+    const update = () => {
+      const floor = available.find((f) => f.id === movingFloor);
+      move.disabled = !floor || !!adding || openingLocal;
+      move.textContent = floor?.backOffice ? 'Move upstairs' : 'Move here';
+    };
+    select.addEventListener('change', () => { movingFloor = select.value; update(); });
+    move.addEventListener('click', () => {
+      const floor = store.floors.find((f) => f.id === movingFloor);
+      if (floor && !floor.cloning) net.send({ t: 'floor.backOffice', floor: floor.id, on: !floor.backOffice });
+    });
+    update();
+    return h('div.basement-manage', {}, h('label', { for: select.id }, 'Move an existing project'), h('div', {}, select, move));
   };
 
   /** The basement: the Back Office's floors, behind one button so the main list stays short. */
@@ -121,19 +138,21 @@ export function openElevator(opts: ElevatorOptions): void {
     const waiting = back.reduce((n, f) => n + f.waiting, 0);
     const btn = h(
       'button.floor-btn.basement',
-      { type: 'button', title: 'Down to the basement: projects filed in the Back Office' },
+      { type: 'button', disabled: !!adding || openingLocal, title: 'Down to the basement: projects filed in the Back Office' },
       h('span.floor-no', { style: 'background:#5c5f6e' }, 'B'),
       h(
         'span.floor-text',
         {},
         h('span.floor-name', {}, `Back Office (${back.length})`, hereDown ? h('span.here-tag', {}, 'you are down here') : null),
-        h('span.floor-sub', {}, back.length ? back.map((f) => f.name).join(' · ') : 'Nothing filed yet. Move a floor here, or tick "File it in the Back Office" when adding one.'),
+        h('span.floor-sub', {}, back.length ? back.map((f) => f.name).join(' · ') : 'Open to add or move projects here.'),
       ),
       h('span.floor-stats', {}, waiting ? h('span.waiting', { title: 'Waiting on someone' }, `🙋 ${waiting} `) : '', '⬇'),
     );
     btn.addEventListener('click', () => {
       basement = true;
+      built = false;
       renderFloors();
+      renderAdd();
     });
     return btn;
   };
@@ -161,11 +180,19 @@ export function openElevator(opts: ElevatorOptions): void {
     const floors = store.floors;
     const main = mainFloors(floors);
     const back = backOfficeFloors(floors);
+    // People and worker counts refresh often; keep an open project picker in place during those updates.
+    const key = basement ? JSON.stringify([!!adding, openingLocal, floors.map((f) => [f.id, f.name, f.backOffice, f.cloning])]) : '';
+    if (key !== managementKey) {
+      managementKey = key;
+      managementEl.replaceChildren(...(basement ? [manageFloors()] : []));
+    }
     if (basement) {
-      const up = h('button.btn.basement-up', { type: 'button' }, '↑ back to the floors');
+      const up = h('button.btn.basement-up', { type: 'button', disabled: !!adding || openingLocal }, '↑ back to the floors');
       up.addEventListener('click', () => {
         basement = false;
+        built = false;
         renderFloors();
+        renderAdd();
       });
       floorsEl.replaceChildren(
         h('div.basement-head', {}, up, h('span', {}, '🗄️ Back Office · basement')),
@@ -229,7 +256,7 @@ export function openElevator(opts: ElevatorOptions): void {
     if (source === 'local') {
       if (!built) {
         built = true;
-        addEl.replaceChildren(h('h3', {}, setup && !store.floors.length ? 'Open your first project' : 'Add a project'), sourceChoice, backToggle, local.element);
+        addEl.replaceChildren(h('h3', {}, setup && !store.floors.length ? 'Open your first project' : basement ? 'Add a project to Back Office' : 'Add a project'), sourceChoice, local.element);
       }
       return;
     }
@@ -259,9 +286,8 @@ export function openElevator(opts: ElevatorOptions): void {
     if (!built) {
       built = true;
       addEl.replaceChildren(
-        h('h3', {}, setup && !store.floors.length ? 'Pick your first project' : '➕ Add a project'),
+        h('h3', {}, setup && !store.floors.length ? 'Pick your first project' : basement ? 'Add a project to Back Office' : '➕ Add a project'),
         sourceChoice,
-        backToggle,
         h('div.repo-search', {}, input, refreshBtn),
         listEl,
         statusEl,
@@ -272,18 +298,20 @@ export function openElevator(opts: ElevatorOptions): void {
   const add = (repo: string) => {
     if (adding) return;
     adding = repo;
-    localTab.disabled = githubTab.disabled = backBox.disabled = true;
+    localTab.disabled = githubTab.disabled = true;
     error = '';
+    renderFloors();
     renderAdd();
-    net.send({ t: 'floor.add', repo, backOffice: fileInBack });
+    net.send({ t: 'floor.add', repo, backOffice: basement });
   };
 
   const onAdded = (msg: Extract<ServerMsg, { t: 'floor.added' }>) => {
     if (!adding || msg.repo !== adding) return;
     adding = null;
-    localTab.disabled = githubTab.disabled = backBox.disabled = false;
+    localTab.disabled = githubTab.disabled = false;
     if (msg.error || !msg.floor) {
       error = msg.error ?? 'The floor could not be added';
+      renderFloors();
       renderAdd();
       return;
     }
@@ -339,7 +367,7 @@ export function openElevator(opts: ElevatorOptions): void {
     'div.modal.elevator',
     { role: 'dialog', 'aria-label': 'Elevator' },
     h('header', {}, h('h2', {}, setup ? '🏢 Welcome to Agent Office' : '🛗 Elevator'), close),
-    h('div.body', {}, intro, floorsEl, addEl),
+    h('div.body', {}, intro, floorsEl, managementEl, addEl),
     h('footer', {}, h('span.grow', {}, setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'), local.button, addBtn),
   );
   const unsubs = [store.on('floors', () => (renderFloors(), renderAdd())), store.on('repos', renderAdd), store.on('projectsDir', renderAdd), store.on('floor', renderFloors), store.on('peers', renderFloors)];
