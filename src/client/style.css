@@ -1441,10 +1441,15 @@ a.when:hover { text-decoration: underline; }
 .update-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; background: #fff1c1; border-bottom: 2px solid rgba(43,45,66,.2); }
 .update-sub { color: var(--muted); font-weight: 800; }
 .update-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
-.update-steps li { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px 2px 3px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; font-weight: 800; white-space: nowrap; }
+.update-steps li { display: inline-flex; border: 2px solid var(--ink); border-radius: 999px; background: #fff; font-weight: 800; white-space: nowrap; }
+/* Each chip opens its step's instructions. */
+.update-steps li > button { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px 2px 3px; border: 0; border-radius: 999px; background: none; color: inherit; font: inherit; cursor: pointer; }
+.update-steps li > button:hover { text-decoration: underline; }
+.update-steps li > button:focus-visible { outline: 3px solid var(--info); outline-offset: 2px; }
 .update-steps li.done { color: #2a9d4b; border-color: #2a9d4b; }
 .update-steps li.now { background: #ffd166; }
 .update-steps li.later { opacity: .55; }
+.update-steps li.shown { opacity: 1; box-shadow: 0 0 0 3px var(--info); }
 .update-num { width: 18px; height: 18px; border-radius: 50%; background: var(--ink); color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
 .update-steps li.done .update-num { background: #2a9d4b; }
 .update-hide { padding: 3px 12px; font-size: 12px; }
@@ -1453,6 +1458,15 @@ a.when:hover { text-decoration: underline; }
 .update-now .btn { align-self: flex-start; }
 .update-now p .btn { margin-left: 4px; }
 .update-now-title { font-size: 14px; }
+.update-now-head { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+.update-link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 12px; font-weight: 800; text-decoration: underline; cursor: pointer; }
+.update-link:focus-visible { outline: 3px solid var(--info); outline-offset: 2px; border-radius: 4px; }
+/* "Done, next step" under a step done by hand, and why it isn't done yet. */
+.update-next { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; margin-top: 2px; }
+.update-now .update-next .btn { align-self: center; }
+.update-now .btn[aria-disabled="true"] { opacity: .6; cursor: progress; }
+.update-now .update-why { flex: 1 1 280px; color: #b5651d; }
+.update-ok { color: #2a9d4b; }
 .update-warn { color: #b5651d; }
 .update-note { color: var(--muted); font-size: 12px; }
 .update-note code { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 4px; border-radius: 4px; }
