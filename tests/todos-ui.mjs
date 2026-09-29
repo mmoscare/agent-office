@@ -1,8 +1,9 @@
 // npm run build && node tests/todos-ui.mjs
-// The 🔥 To Do board in the built client, against a local WebSocket fixture that keeps the list the
-// way the office does (with the built shared/todos.js). No agents or real office are started.
+// The 🔥 To Do board in the built client, on the wall and in its window, against a local WebSocket
+// fixture that keeps the list the way the office does (with the built shared/todos.js). No agents or
+// real office are started.
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { preview } from 'vite';
 import { chromium } from 'playwright-core';
@@ -67,11 +68,19 @@ try {
   });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  const wall = () => page.evaluate(() => { const w = window.__office.issuesWall(); return { mode: w.mode, map: w.map }; });
+  const saveWall = async (name) => {
+    const data = await page.evaluate(() => window.__office.issuesWall().canvas.toDataURL('image/png'));
+    await writeFile(path.join(screenshotDir, name), Buffer.from(data.split(',')[1], 'base64'));
+  };
   await page.goto(url);
+  await page.waitForFunction(() => window.__office?.issuesWall);
+
+  // The issues board on the wall shows your To Do by default.
+  assert.deepEqual(await wall(), { mode: 'todo', map: 'todo' });
 
   // Up on the top bar on every floor; it opens straight onto the To Do board, ready to type.
-  const topBar = page.locator('#dock button[aria-label="To Do"]');
-  await topBar.click();
+  await page.locator('#dock button[aria-label="To Do"]').click();
   const board = page.getByRole('dialog', { name: 'To Do board', exact: true });
   const input = board.getByRole('textbox', { name: 'New to-do' });
   await input.waitFor();
@@ -79,66 +88,119 @@ try {
   assert.equal(await board.getByRole('button', { name: /Refresh/ }).isVisible(), false, 'GitHub’s Refresh is put away on the To Do side');
   const column = (name) => board.locator(`.todo-col[data-column="${name}"]`);
   const cards = (name) => column(name).locator('.todo-card .todo-text').allInnerTexts();
+  // In one go: a redraw can swap the element out between finding it and reading it.
+  const headColor = (name) => page.evaluate((n) => getComputedStyle(document.querySelector(`.todo-col[data-column="${n}"] h3`)).backgroundColor, name);
+  const card = (name, text) => column(name).locator('.todo-card', { hasText: text });
+  assert.deepEqual(await board.locator('.todo-col h3 .todo-title').allInnerTexts(), ['🔥 Active', '⚡ Urgent', '🌱 Not urgent', '✅ Completed']);
 
-  // Enter adds to To Do, one after another; Shift+Enter starts one now.
+  // Enter adds to the picked column (Urgent to start with), on top; a pick button adds there; Shift+Enter starts one now.
   await input.fill('Write the report');
   await input.press('Enter');
+  await input.fill('Pay the invoice');
+  await input.press('Enter');
   await input.fill('Call the bank');
+  await board.getByRole('button', { name: '🌱 Not urgent', exact: true }).click();
+  await input.fill('Tidy the garage');
   await input.press('Enter');
   await input.fill('Fix the login bug');
   await input.press('Shift+Enter');
-  await page.waitForFunction(() => document.querySelectorAll('.todo-card').length === 3);
-  assert.deepEqual(await cards('todo'), ['Write the report', 'Call the bank']);
+  assert.deepEqual(await cards('urgent'), ['Pay the invoice', 'Write the report']);
+  assert.deepEqual(await cards('todo'), ['Tidy the garage', 'Call the bank'], 'the pick is remembered for Enter');
   assert.deepEqual(await cards('active'), ['Fix the login bug']);
   assert.equal(await input.inputValue(), '');
-  // Active is red, and what's in it shows on the top bar.
-  assert.equal(await column('active').locator('h3').evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(239, 71, 111)');
-  await page.waitForFunction(() => document.querySelector('#dock button[aria-label="To Do"]')?.textContent?.includes('Fix the login bug'));
+  // A column's own add box.
+  const quick = column('active').getByRole('textbox', { name: 'Add to Active' });
+  await quick.fill('Answer the email');
+  await quick.press('Enter');
+  assert.deepEqual(await cards('active'), ['Answer the email', 'Fix the login bug']);
+  assert.equal(await quick.evaluate((el) => el === document.activeElement && el.value === ''), true, 'ready for the next one');
 
-  // 🔥 Start moves a to-do to the top of Active; ✓ Complete folds it into Completed.
-  await column('todo').locator('.todo-card', { hasText: 'Write the report' }).getByRole('button', { name: 'Start it now: move it to Active' }).click();
-  assert.deepEqual(await cards('active'), ['Write the report', 'Fix the login bug']);
-  await column('active').locator('.todo-card', { hasText: 'Fix the login bug' }).getByRole('button', { name: 'Complete it' }).click();
-  assert.deepEqual(await cards('active'), ['Write the report']);
+  // Active is red, Urgent orange; the summary and the top bar say what's on.
+  assert.equal(await headColor('active'), 'rgb(239, 71, 111)');
+  assert.equal(await headColor('urgent'), 'rgb(255, 159, 28)');
+  assert.match(await board.locator('.todo-summary').innerText(), /🔥 2 active.*⚡ 2 urgent.*🌱 2 not urgent.*✅ 0 done today/s);
+  await page.waitForFunction(() => document.querySelector('#dock button[aria-label="To Do"]')?.textContent?.includes('Answer the email'));
+
+  // 🔥 Start, ✓ Complete (Completed folds away and lights up), Reopen puts it back where it was.
+  await card('urgent', 'Write the report').getByRole('button', { name: 'Start it now: move it to Active' }).click();
+  assert.deepEqual(await cards('active'), ['Write the report', 'Answer the email', 'Fix the login bug']);
+  await card('active', 'Fix the login bug').getByRole('button', { name: 'Complete it' }).click();
+  assert.equal(await column('done').locator('.todo-fold.todo-flash').count(), 1);
   await column('done').getByRole('button', { name: /1 completed/ }).click();
   assert.deepEqual(await cards('done'), ['Fix the login bug']);
+  await card('done', 'Fix the login bug').getByRole('button', { name: 'Put it back on Active' }).click();
+  assert.deepEqual(await cards('active'), ['Fix the login bug', 'Write the report', 'Answer the email']);
+  await card('active', 'Fix the login bug').getByRole('button', { name: 'Complete it' }).click();
+  await card('todo', 'Call the bank').getByRole('button', { name: 'Make it urgent' }).click();
+  assert.deepEqual(await cards('urgent'), ['Call the bank', 'Pay the invoice']);
   await board.screenshot({ path: path.join(screenshotDir, 'board.png') });
-  await page.locator('#dock').screenshot({ path: path.join(screenshotDir, 'dock.png') });
 
-  // Dragged from Active back onto To Do, above the card it's dropped on.
-  const drag = column('active').locator('.todo-card', { hasText: 'Write the report' });
-  const target = column('todo').locator('.todo-card', { hasText: 'Call the bank' });
-  await drag.dragTo(target, { targetPosition: { x: 20, y: 4 } });
-  await page.waitForFunction(() => document.querySelectorAll('.todo-col[data-column="active"] .todo-card').length === 0);
-  assert.deepEqual(await cards('todo'), ['Write the report', 'Call the bank']);
+  // Dragged from Active onto Not urgent, above the card it's dropped on.
+  await card('active', 'Answer the email').dragTo(card('todo', 'Tidy the garage'), { targetPosition: { x: 20, y: 4 } });
+  await page.waitForFunction(() => document.querySelectorAll('.todo-col[data-column="active"] .todo-card').length === 1);
+  assert.deepEqual(await cards('todo'), ['Answer the email', 'Tidy the garage']);
 
-  // The keyboard: → moves a focused card a column over, Alt+↓ reorders it.
-  await column('todo').locator('.todo-card', { hasText: 'Write the report' }).focus();
+  // The keyboard: a number sends a focused card to that column, Alt+↓ reorders, Space completes.
+  await card('todo', 'Answer the email').focus();
   await page.keyboard.press('Alt+ArrowDown');
-  assert.deepEqual(await cards('todo'), ['Call the bank', 'Write the report']);
-  await page.keyboard.press('ArrowLeft');
-  assert.deepEqual(await cards('active'), ['Write the report']);
+  assert.deepEqual(await cards('todo'), ['Tidy the garage', 'Answer the email']);
+  await page.keyboard.press('2');
+  assert.deepEqual(await cards('urgent'), ['Answer the email', 'Call the bank', 'Pay the invoice']);
+  await page.keyboard.press('Space');
+  assert.deepEqual(await cards('done'), ['Answer the email', 'Fix the login bug']);
 
   // Edit in place, then ✕ with Undo.
-  await column('todo').locator('.todo-card', { hasText: 'Call the bank' }).dblclick();
+  await card('todo', 'Tidy the garage').dblclick();
   const edit = board.getByRole('textbox', { name: 'Edit to-do' });
-  await edit.fill('Call the bank about the card');
+  await edit.fill('Tidy the garage and shed');
   await edit.press('Enter');
-  assert.deepEqual(await cards('todo'), ['Call the bank about the card']);
-  await column('todo').locator('.todo-card').getByRole('button', { name: 'Remove' }).click();
+  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
+  await card('todo', 'Tidy the garage and shed').getByRole('button', { name: 'Remove' }).click();
   assert.deepEqual(await cards('todo'), []);
   await board.getByRole('button', { name: 'Undo', exact: true }).click();
-  assert.deepEqual(await cards('todo'), ['Call the bank about the card']);
+  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
 
-  // 📌 Issues turns the board over to GitHub's, and back.
+  // 📌 Issues turns the window over to GitHub's, and back.
   await board.getByRole('button', { name: '📌 Issues', exact: true }).click();
   const issues = page.getByRole('dialog', { name: 'Issues board', exact: true });
   await issues.getByText(issue.title, { exact: true }).waitFor();
   assert.equal(await issues.getByRole('button', { name: /Refresh/ }).isVisible(), true);
-  await issues.screenshot({ path: path.join(screenshotDir, 'issues.png') });
   await issues.getByRole('button', { name: '🔥 To Do', exact: true }).click();
   await board.locator('.todo-card').first().waitFor();
   await board.getByRole('button', { name: 'Close', exact: true }).click();
+
+  // The wall draws the board; its switch flips it to the issues (remembered), and back.
+  await saveWall('wall-todo.png');
+  await page.evaluate(() => window.__office.flipIssuesWall());
+  assert.deepEqual(await wall(), { mode: 'issues', map: 'issues' });
+  await page.reload();
+  await page.waitForFunction(() => window.__office?.issuesWall);
+  assert.deepEqual(await wall(), { mode: 'issues', map: 'issues' });
+  await page.evaluate(() => window.__office.flipIssuesWall());
+  assert.deepEqual(await wall(), { mode: 'todo', map: 'todo' });
+
+  // In the room: the board and its switch over its right-hand end; point at the switch and press E.
+  await page.evaluate(() => {
+    const p = window.__office.player;
+    p.setView('first');
+    p.pos.set(-11.7, 0, -5.5);
+    p.camYaw = 0;
+    p.lookPitch = 0.18;
+  });
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(screenshotDir, 'wall-3d.png') });
+  await page.evaluate(() => {
+    const p = window.__office.player;
+    p.pos.set(-9.55, 0, -8.5);
+    p.lookPitch = 0.55;
+  });
+  await page.waitForFunction(() => document.querySelector('#hint')?.textContent?.includes('GitHub issues'));
+  await page.keyboard.press('e');
+  await page.waitForFunction(() => window.__office.issuesWall().mode === 'issues');
+  await page.waitForFunction(() => document.querySelector('#hint')?.textContent?.includes('Back to your To Do'));
+  await page.keyboard.press('e');
+  await page.waitForFunction(() => window.__office.issuesWall().mode === 'todo');
+  await page.evaluate(() => window.__office.player.setView('third'));
 
   // The Issues menu item opens on the issues; the To Do board is still the one you left, on another floor too.
   await page.getByRole('button', { name: 'Menu', exact: true }).click();
@@ -149,12 +211,16 @@ try {
   await page.locator('#dock button[aria-label="To Do"]').click();
   await board.locator('.todo-card').first().waitFor();
   assert.deepEqual(await cards('active'), ['Write the report']);
-  assert.deepEqual(await cards('todo'), ['Call the bank about the card']);
-  assert.deepEqual(await cards('done'), ['Fix the login bug'], 'Completed stays unfolded once shown');
+  assert.deepEqual(await cards('urgent'), ['Call the bank', 'Pay the invoice']);
+  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
+  assert.deepEqual(await cards('done'), ['Answer the email', 'Fix the login bug'], 'Completed stays unfolded once shown');
 
-  // Narrow: the columns stack.
+  // Narrower: two columns a row, then one.
+  const tracks = () => board.locator('.todo-cols').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+  await page.setViewportSize({ width: 900, height: 900 });
+  assert.equal(await tracks(), 2);
   await page.setViewportSize({ width: 480, height: 900 });
-  assert.equal(await board.locator('.todo-cols').evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length), 1);
+  assert.equal(await tracks(), 1);
   await board.screenshot({ path: path.join(screenshotDir, 'narrow.png') });
 
   assert.deepEqual(errors, []);

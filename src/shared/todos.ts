@@ -3,8 +3,11 @@
 // server/todos.ts) and the browser, which makes each change straight away with applyTodo and lets
 // the office's copy win when it comes back.
 
-/** The columns, left to right: Active (what you're on right now), then To Do, then Completed. */
-export const TODO_COLUMNS = { active: 'Active', todo: 'To Do', done: 'Completed' } as const;
+/**
+ * The columns, left to right: Active (red: what you're on right now), Urgent, Not urgent, and
+ * Completed. Not urgent keeps the 'todo' key the board started with, so lists saved then still read.
+ */
+export const TODO_COLUMNS = { active: 'Active', urgent: 'Urgent', todo: 'Not urgent', done: 'Completed' } as const;
 export type TodoColumn = keyof typeof TODO_COLUMNS;
 export const TODO_TEXT_MAX = 500;
 /** Items a list keeps, at most; past it the oldest Completed ones go first. */
@@ -18,6 +21,8 @@ export interface TodoItem {
   at: number;
   /** When it last went to Completed. */
   doneAt?: number;
+  /** Where it was before it went to Completed, for Reopen. */
+  from?: Exclude<TodoColumn, 'done'>;
 }
 
 export type TodoAction =
@@ -31,7 +36,7 @@ export type TodoAction =
 const ID_RE = /^[a-z0-9]{6,32}$/;
 
 export function isTodoColumn(value: unknown): value is TodoColumn {
-  return value === 'active' || value === 'todo' || value === 'done';
+  return value === 'active' || value === 'urgent' || value === 'todo' || value === 'done';
 }
 
 /** A name for a new item. */
@@ -81,7 +86,14 @@ export function checkTodoItem(raw: unknown): TodoItem | null {
   const t = raw as Record<string, unknown>;
   const text = cleanText(t.text);
   if (typeof t.id !== 'string' || !ID_RE.test(t.id) || !text || !isTodoColumn(t.column) || typeof t.at !== 'number' || !Number.isFinite(t.at)) return null;
-  return { id: t.id, text, column: t.column, at: t.at, ...(typeof t.doneAt === 'number' && Number.isFinite(t.doneAt) ? { doneAt: t.doneAt } : {}) };
+  return {
+    id: t.id,
+    text,
+    column: t.column,
+    at: t.at,
+    ...(typeof t.doneAt === 'number' && Number.isFinite(t.doneAt) ? { doneAt: t.doneAt } : {}),
+    ...(t.column === 'done' && isTodoColumn(t.from) && t.from !== 'done' ? { from: t.from } : {}),
+  };
 }
 
 /** The items in `column`, in their order. */
@@ -118,8 +130,14 @@ export function applyTodo(items: readonly TodoItem[], a: TodoAction, now = Date.
     case 'move': {
       if (!was) return items;
       const moved: TodoItem = { ...was, column: a.column };
-      if (a.column === 'done' && was.column !== 'done') moved.doneAt = now;
-      if (a.column !== 'done') delete moved.doneAt;
+      if (a.column === 'done' && was.column !== 'done') {
+        moved.doneAt = now;
+        moved.from = was.column;
+      }
+      if (a.column !== 'done') {
+        delete moved.doneAt;
+        delete moved.from;
+      }
       next = insertAt(items.filter((t) => t !== was), moved, a.column, a.index);
       break;
     }

@@ -23,9 +23,22 @@ For every repository on a floor, with more safety checks and a choice of what
 to delete, see agent-office prune --floor --help.
 `;
 
-interface SavedWorker {
+export interface SavedWorker {
   name?: string;
+  deskId?: string;
   worktree?: { path: string; branch: string; base?: string };
+  /** A multi-repository desk: a worktree in each repository (paths relative to the floor). */
+  workspace?: { path: string; repositories: { repository: string; path: string; branch: string }[] };
+}
+
+/** The workers the office in `dir` still has, awake or asleep, as its .agent-office/workers.json saves them. */
+export function savedWorkers(dir: string): SavedWorker[] {
+  try {
+    const saved = JSON.parse(readFileSync(path.join(dir, '.agent-office', 'workers.json'), 'utf8')) as unknown;
+    return Array.isArray(saved) ? (saved as SavedWorker[]) : [];
+  } catch {
+    return []; // no saved workers
+  }
 }
 
 /** `agent-office prune`: exits 0 when done, 1 when the dir is not a git repo, 2 for a usage error. */
@@ -62,15 +75,10 @@ export async function prune(argv: string[]): Promise<number> {
   // Workers the office still has, awake or asleep, keep theirs: send them home from the office instead.
   const ownerOfBranch = new Map<string, string>();
   const ownerOfPath = new Map<string, string>();
-  try {
-    const saved = JSON.parse(readFileSync(path.join(dir, '.agent-office', 'workers.json'), 'utf8')) as SavedWorker[];
-    for (const w of saved) {
-      if (!w.worktree) continue;
-      ownerOfBranch.set(w.worktree.branch, w.name ?? 'a worker');
-      ownerOfPath.set(path.normalize(w.worktree.path), w.name ?? 'a worker');
-    }
-  } catch {
-    // no saved workers
+  for (const w of savedWorkers(dir)) {
+    if (!w?.worktree) continue;
+    ownerOfBranch.set(w.worktree.branch, w.name ?? 'a worker');
+    ownerOfPath.set(path.normalize(w.worktree.path), w.name ?? 'a worker');
   }
 
   const trees = new Worktrees(dir);
