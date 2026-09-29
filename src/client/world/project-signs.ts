@@ -94,7 +94,7 @@ export function buildProjectSigns() {
     }
     lines = lines.slice(0, 2);
     const lineHeight = size * 1.12;
-    const top = lines.length === 1 ? 231 : 207 - lineHeight / 2;
+    const top = lines.length === 1 ? 231 : 250 - lineHeight / 2;
     lines.forEach((line, i) => g.fillText(line.trim(), left, top + i * lineHeight, available));
     texture.needsUpdate = true;
   }

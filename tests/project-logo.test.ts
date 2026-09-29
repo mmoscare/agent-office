@@ -75,3 +75,72 @@ test('does not read a logo through a directory link outside the project', (t) =>
   symlinkSync(path.join(root, 'outside'), path.join(project, 'assets'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal(readProjectLogo(project), undefined);
 });
+
+test('uses each personal floor’s launcher artwork, with the dashboard mark for Personal Portfolio', (t) => {
+  const { root, put } = fixture(t);
+  const sources = [
+    ['Personal-Portfolio', 'personal-frontend/public/assets/site-logo.svg', 'image/svg+xml'],
+    ['MFT-Trading-Dashboard', 'dashboard-backend/.launcher/maple-futures.png', 'image/png'],
+    ['agent-office', 'personal/windows/Agent Office.png', 'image/png'],
+    ['paper-cloud', '.launcher/paper-cloud-restored.ico', 'image/x-icon'],
+    ['Dad Projects', 'bmo-frontend/public/bmo-launcher.ico', 'image/x-icon'],
+    ['Database-App', 'database-app/public/icons/icon-512.png', 'image/png'],
+    ['Autonomous-Dev-Projects', 'morning-brief/morning-brief.ico', 'image/x-icon'],
+    ['TRACE', 'tools/trace.ico', 'image/x-icon'],
+    ['Dock', 'assets/dock.ico', 'image/x-icon'],
+  ];
+  for (const [project, file, type] of sources) {
+    const artwork = `chosen artwork for ${project}`;
+    put(`${project}/${file}`, artwork);
+    put(`${project}/public/favicon.svg`, '<svg/>');
+    const logo = readProjectLogo(path.join(root, project))!;
+    assert.equal(logo?.bytes.toString(), artwork, project);
+    assert.equal(logo.type, type, project);
+    put(`${project}/.agent-office/logo.svg`);
+    assert.equal(readProjectLogo(path.join(root, project))!.bytes.toString(), svg, 'explicit override still wins');
+  }
+});
+
+test('Personal Portfolio chooses the dashboard over launcher and sibling app logos', (t) => {
+  const { root, put } = fixture(t);
+  put('Personal Portfolio/personal-frontend/public/assets/site-logo.svg');
+  put('Personal Portfolio/personal-frontend/.launcher/logo-256.png', 'launcher');
+  put('Personal Portfolio/budget-tracker/public/logo.svg', 'sibling');
+  assert.equal(readProjectLogo(path.join(root, 'Personal Portfolio'))!.bytes.toString(), svg);
+});
+
+test('mapped launcher paths fall back when missing or unusable, including on a cloned floor', (t) => {
+  const { root, put } = fixture(t);
+  const project = path.join(root, 'paper-cloud');
+  put('paper-cloud/.launcher/paper-cloud-restored.ico', Buffer.alloc(MAX_LOGO_BYTES + 1));
+  put('paper-cloud/frontend/public/paper-cloud-logo.png', 'cloned artwork');
+  assert.equal(readProjectLogo(project)!.bytes.toString(), 'cloned artwork');
+  put('paper-cloud/frontend/public/paper-cloud-logo.png', '');
+  put('paper-cloud/public/logo.svg');
+  assert.equal(readProjectLogo(project)!.bytes.toString(), svg);
+});
+
+test('ordinary projects can use launcher icons without changing conventional discovery', (t) => {
+  const { root, put } = fixture(t);
+  put('Other App/public/logo.svg');
+  put('Other App/.launcher/Logo-256.PNG', 'launcher artwork');
+  assert.equal(readProjectLogo(path.join(root, 'Other App'))!.bytes.toString(), 'launcher artwork');
+  put('Other App/.agent-office/logo.svg');
+  assert.equal(readProjectLogo(path.join(root, 'Other App'))!.bytes.toString(), svg);
+  put('constructor/public/logo.svg');
+  assert.equal(readProjectLogo(path.join(root, 'constructor'))!.bytes.toString(), svg);
+  put('another-app/launcher/another-app.ico', 'shortcut artwork');
+  assert.equal(readProjectLogo(path.join(root, 'another-app'))!.bytes.toString(), 'shortcut artwork');
+});
+
+test('mapped nested assets and generic launcher folders cannot follow links outside the floor', (t) => {
+  const { root, put } = fixture(t);
+  put('outside/public/assets/site-logo.svg', 'outside dashboard');
+  put('outside/logo-256.png', 'outside launcher');
+  put('Personal-Portfolio/public/favicon.svg');
+  const project = path.join(root, 'Personal-Portfolio');
+  for (const relative of ['personal-frontend', '.launcher']) {
+    symlinkSync(path.join(root, 'outside'), path.join(project, relative), process.platform === 'win32' ? 'junction' : 'dir');
+  }
+  assert.equal(readProjectLogo(project)!.bytes.toString(), svg);
+});

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readdirSync, readSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { personalProjectLogoPaths } from './personal-project-logos.js';
 
 /** Logos are small, local assets, read once when a floor opens. Never crawl a checkout or fetch a URL. */
 export const MAX_LOGO_BYTES = 512 * 1024;
@@ -25,45 +26,51 @@ function inside(root: string, file: string): boolean {
   return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-/** Prefer an explicit Office logo, then a project's logo, then its app icon/favicon. */
+/** Prefer an explicit Office logo, then the chosen launcher/dashboard, then conventional assets. */
 export function readProjectLogo(dir: string): ProjectLogo | undefined {
   let root: string;
   try { root = realpathSync(dir); } catch { return; }
-  const folders = ['.agent-office', ...DIRECTORIES].flatMap((relative) => {
+  const readFile = (relative: string): ProjectLogo | undefined => {
+    const type = TYPES[path.extname(relative).slice(1).toLowerCase()];
+    if (!type) return;
+    let fd: number | undefined;
+    try {
+      const file = realpathSync(path.join(root, relative));
+      if (!inside(root, file)) return;
+      fd = openSync(file, 'r');
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.size === 0 || stat.size > MAX_LOGO_BYTES) return;
+      // Bound the read even if another process grows the file after stat.
+      const buffer = Buffer.alloc(MAX_LOGO_BYTES + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        const n = readSync(fd, buffer, size, buffer.length - size, null);
+        if (!n) break;
+        size += n;
+      }
+      if (!size || size > MAX_LOGO_BYTES) return;
+      const bytes = Buffer.from(buffer.subarray(0, size));
+      return { bytes, type, version: createHash('sha256').update(bytes).digest('hex').slice(0, 16) };
+    } catch {
+      // A missing/unreadable logo must never prevent a floor from opening.
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  };
+  const folders = ['.agent-office', '.launcher', 'launcher', ...DIRECTORIES].flatMap((relative) => {
     try {
       const folder = realpathSync(path.join(root, relative));
       if (!inside(root, folder)) return [];
       const files = new Map(readdirSync(folder).map((name) => [name.toLowerCase(), name]));
-      return [{ relative, folder, files }];
+      return [{ relative, files }];
     } catch { return []; }
   });
   const read = (folder: typeof folders[number], stem: string): ProjectLogo | undefined => {
-    for (const [ext, type] of Object.entries(TYPES)) {
+    for (const ext of Object.keys(TYPES)) {
       const name = folder.files.get(`${stem}.${ext}`.toLowerCase());
       if (!name) continue;
-      let fd: number | undefined;
-      try {
-        const file = realpathSync(path.join(folder.folder, name));
-        if (!inside(root, file)) continue;
-        fd = openSync(file, 'r');
-        const stat = fstatSync(fd);
-        if (!stat.isFile() || stat.size === 0 || stat.size > MAX_LOGO_BYTES) continue;
-        // Bound the read even if another process grows the file after stat.
-        const buffer = Buffer.alloc(MAX_LOGO_BYTES + 1);
-        let size = 0;
-        while (size < buffer.length) {
-          const n = readSync(fd, buffer, size, buffer.length - size, null);
-          if (!n) break;
-          size += n;
-        }
-        if (!size || size > MAX_LOGO_BYTES) continue;
-        const bytes = Buffer.from(buffer.subarray(0, size));
-        return { bytes, type, version: createHash('sha256').update(bytes).digest('hex').slice(0, 16) };
-      } catch {
-        // A missing/unreadable logo must never prevent a floor from opening.
-      } finally {
-        if (fd !== undefined) closeSync(fd);
-      }
+      const logo = readFile(path.join(folder.relative, name));
+      if (logo) return logo;
     }
   };
   const override = folders.find((f) => f.relative === '.agent-office');
@@ -72,9 +79,19 @@ export function readProjectLogo(dir: string): ProjectLogo | undefined {
     if (logo) return logo;
   }
   const project = path.basename(root).toLowerCase();
+  for (const file of personalProjectLogoPaths(project)) {
+    const logo = readFile(file);
+    if (logo) return logo;
+  }
+  for (const folder of folders.filter((f) => f.relative === '.launcher' || f.relative === 'launcher')) {
+    for (const stem of ['logo', 'logo-256', project, `${project}-logo`, 'icon']) {
+      const logo = read(folder, stem);
+      if (logo) return logo;
+    }
+  }
   for (const stem of ['logo', `${project}-logo`, project, 'logo-light', 'logo-dark', 'icon', 'apple-touch-icon', 'favicon']) {
     for (const folder of folders) {
-      if (folder.relative === '.agent-office') continue;
+      if (!DIRECTORIES.includes(folder.relative)) continue;
       const logo = read(folder, stem);
       if (logo) return logo;
     }
