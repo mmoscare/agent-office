@@ -563,7 +563,7 @@ async function judge(f: Found, c: Context) {
     it.verdict = locked ?? { kind: 'unknown', text: `could not check it (${(err as Error).message})` };
     it.remoteDeletable = false;
   }
-  it.token = createHash('sha1').update(JSON.stringify([tip, remoteTip, f.abs, it.worktree?.exists, dirty, unpushed, remoteLost, it.pr?.state, it.verdict.kind])).digest('hex').slice(0, 16);
+  it.token = createHash('sha1').update(JSON.stringify([tip, remoteTip, f.abs, it.worktree?.exists, dirty, unpushed, remoteLost, it.pr?.state, it.verdict.kind, it.loses])).digest('hex').slice(0, 16);
 }
 
 /** Every branch and worktree of one repository on a floor, with what deleting each would lose. */
