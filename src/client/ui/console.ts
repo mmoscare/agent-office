@@ -1,7 +1,8 @@
 import type { Net } from '../net';
 import type { ServerMsg } from '../../shared/protocol';
-import { h, openModal, type Modal } from './dom';
+import { h, openModal, toast, type Modal } from './dom';
 import { newTerm } from './terminal';
+import { bindTerminalClipboard, clipboardAction, isMac } from './terminal-clipboard';
 
 let current: { modal: Modal; focus(): void; message(msg: ServerMsg): void } | undefined;
 
@@ -19,11 +20,15 @@ export function openConsole(net: Net) {
   const close = h('button.btn.close', { type: 'button', 'aria-label': 'Close standalone terminal', title: 'Close view; keep the shell running' }, '×');
   const fresh = h('button.btn', { type: 'button', title: 'End this shell and start a new one in the current floor folder' }, 'New shell here');
   const status = h('span', {}, 'Connecting…');
-  const host = h('div.term-host');
+  const host = h('div.term-host', {
+    title: isMac()
+      ? '⌘C copies the selection. ⌘V pastes. Hold ⌥ Option and drag if a program takes the mouse.'
+      : 'Ctrl+C copies the selection. Ctrl+V pastes. Hold Shift and drag if a program takes the mouse.',
+  });
   const el = h('div.modal.term', { role: 'dialog', 'aria-label': 'Standalone terminal' },
     h('header', {}, h('h2', {}, 'Terminal'), fresh, close),
     h('div', { style: 'padding:8px 16px;font-size:12px;overflow-wrap:anywhere;color:#e6e6f0' }, status), host,
-    h('footer', {}, 'Shell on the office computer. Use cd, cd .. or an absolute path. Closing this view keeps it running; disconnecting or restarting the office ends it.'),
+    h('footer', {}, `Shell on the office computer. Use cd, cd .. or an absolute path. ${isMac() ? '⌘C copies a selection; ⌘V pastes.' : 'Ctrl+C copies a selection; Ctrl+V pastes.'} Closing this view keeps it running; disconnecting or restarting the office ends it.`),
   );
   let ready = false;
   let retry = false;
@@ -50,6 +55,7 @@ export function openConsole(net: Net) {
     net.send({ t: 'console.attach', cols: term.cols, rows: term.rows, fresh });
   };
   const observer = new ResizeObserver(resize);
+  const unbindClipboard = bindTerminalClipboard(el, () => term, (message) => toast(message, 'warn'));
   const modal = openModal(el, {
     escCloses: false,
     backdropCloses: false,
@@ -57,6 +63,7 @@ export function openConsole(net: Net) {
     onClose: () => {
       clearTimeout(timer);
       observer.disconnect();
+      unbindClipboard();
       net.send({ t: 'console.detach' });
       current = undefined;
       term.dispose();
@@ -93,6 +100,8 @@ export function openConsole(net: Net) {
   close.addEventListener('click', () => modal.close());
   fresh.addEventListener('click', () => { attach(true); term.focus(); });
   term.open(host);
+  const mac = isMac();
+  term.attachCustomKeyEventHandler((e) => (clipboardAction(e, term.hasSelection(), mac) ? false : true));
   term.onData(data => {
     if (retry && data === '\r') attach();
     else if (ready) net.send({ t: 'console.input', data });
