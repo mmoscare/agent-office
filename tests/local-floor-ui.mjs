@@ -141,7 +141,7 @@ try {
     store.emit('workers');
   });
   await page.locator('#workers li').filter({ hasText: 'Keyboard fixture' }).click();
-  await page.locator('.xterm-helper-textarea').focus();
+  await page.locator('.xterm-screen').click();
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('dialog', { name: 'Keyboard fixture terminal' }).isVisible(), true);
   assert.equal(await page.evaluate(() => window.__terminalInputs.some(m => m.t === 'term.input' && m.data === '\x1b')), true);

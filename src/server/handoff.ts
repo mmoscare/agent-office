@@ -25,6 +25,9 @@ Checkpoint rule: the office can restart at any time and end this session, so mak
 - If you're woken after a restart, first run git status and git log @{u}..HEAD (or git log origin/<your branch>..HEAD) to see what was already saved, and continue from there.
 </agent-office-checkpoint>`;
 
+/** Added to a queued task that runs in its own worktree (see queue.ts). */
+export const WORKTREE_NOTE = "\n\nYou're in your own git worktree, on a fresh branch made for this task. Commit there, push it, and open the pull request from it.";
+
 /** A queued task without the checkpoint rule: the rule is for the worker, not for its pull request. */
 export function withoutCheckpoint(task: string): string {
   return task.endsWith(CHECKPOINT_NOTE) ? task.slice(0, -CHECKPOINT_NOTE.length) : task;
