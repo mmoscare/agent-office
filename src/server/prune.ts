@@ -18,6 +18,9 @@ Options:
   -n, --dry-run   Show what would be removed and change nothing
   -f, --force     Remove leftovers even when they hold work
   -h, --help      Show this help
+
+For every repository on a floor, with more safety checks and a choice of what
+to delete, see agent-office prune --floor --help.
 `;
 
 interface SavedWorker {
@@ -27,6 +30,9 @@ interface SavedWorker {
 
 /** `agent-office prune`: exits 0 when done, 1 when the dir is not a git repo, 2 for a usage error. */
 export async function prune(argv: string[]): Promise<number> {
+  // Personal: the whole-floor sweep CleanBot drives (prune-floor.ts); plain prune below is upstream's, unchanged.
+  const floor = await import('./prune-floor.js');
+  if (floor.isFloorPrune(argv)) return floor.floorPruneCommand(argv);
   let dir = process.cwd();
   let dryRun = false;
   let force = false;
