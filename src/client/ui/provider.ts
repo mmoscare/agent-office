@@ -1,8 +1,7 @@
-import type { AgentEffort, AgentProvider, ClaudeModel, ProjectInfo, Usage } from '../../shared/protocol';
+import type { AgentChoice, AgentEffort, AgentProvider, ClaudeModel, ProjectInfo, Usage } from '../../shared/protocol';
 import { AGENT_EFFORTS, CLAUDE_MODELS } from '../../shared/protocol';
+import { store } from '../state';
 import { h } from './dom';
-
-const PROVIDER_KEY = 'agent-office.provider';
 
 export const PROVIDER_LABEL: Record<AgentProvider, string> = {
   claude: 'Claude Code',
@@ -81,6 +80,26 @@ export function providerUsageNote(provider: AgentProvider): string {
   return 'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.';
 }
 
+/**
+ * The worker a new one starts on unless someone picks another: the one set in ⚙️ Settings, or the
+ * office's --agent on its own default model.
+ */
+export function officeChoice(project: ProjectInfo | null): AgentChoice {
+  const picked = store.prompts.agent;
+  if (picked && supportedProviders(project).includes(picked.provider)) {
+    return { provider: picked.provider, ...(picked.model ? { model: picked.model } : {}), ...(picked.effort ? { effort: picked.effort } : {}) };
+  }
+  return { provider: resolvedProvider(project?.defaultProvider, project) };
+}
+
+/** "Claude Code · Opus · High", "Claude Code", "OpenCode · anthropic/claude-sonnet-4". */
+export function choiceLabel(choice: AgentChoice): string {
+  const badge = modelBadge(choice.provider, choice.model, choice.effort);
+  return badge ? `${PROVIDER_LABEL[choice.provider]} · ${badge}` : PROVIDER_LABEL[choice.provider];
+}
+
+const PROVIDER_KEY = 'agent-office.provider';
+
 function preferredProvider(options: AgentProvider[], fallback: AgentProvider): AgentProvider {
   try {
     const saved = localStorage.getItem(PROVIDER_KEY);
@@ -91,18 +110,6 @@ function preferredProvider(options: AgentProvider[], fallback: AgentProvider): A
   return options.includes(fallback) ? fallback : options[0];
 }
 
-export interface ProviderPicker {
-  element: HTMLElement;
-  value(): AgentProvider;
-  /** The optional initial model override: an OpenCode provider/model id, or a Claude model alias. */
-  model(): string | undefined;
-  /** The optional Claude reasoning effort. */
-  effort(): AgentEffort | undefined;
-  /** Reports a visible field error for an invalid nonempty OpenCode model. */
-  valid(): boolean;
-}
-
-/** Remembers the last Claude model/effort chosen at this picker's key (a desk, or the queue). */
 function claudeChoiceKey(kind: 'model' | 'effort', key: string): string {
   return `agent-office.claude-${kind}.${key}`;
 }
@@ -129,11 +136,33 @@ function preferredEffort(key: string): AgentEffort | undefined {
 
 /**
  * What a picker remembered at `key` starts on, for hiring without showing one (an issue card
- * dropped on a desk): the provider last picked anywhere, and that key's Claude model and effort.
+ * dropped on a desk). A saved choice wins; otherwise the office default from Settings.
  */
-export function rememberedChoice(project: ProjectInfo | null, key: string): { provider: AgentProvider; model?: string; effort?: AgentEffort } {
-  const provider = preferredProvider(supportedProviders(project), resolvedProvider(project?.defaultProvider, project));
-  return provider === 'claude' ? { provider, model: preferredClaudeModel(key), effort: preferredEffort(key) } : { provider };
+export function rememberedChoice(project: ProjectInfo | null, key: string): AgentChoice {
+  const office = officeChoice(project);
+  const provider = preferredProvider(supportedProviders(project), office.provider);
+  if (provider !== 'claude') return { provider };
+  const model = preferredClaudeModel(key) ?? (provider === office.provider ? office.model : undefined);
+  const effort = preferredEffort(key) ?? (provider === office.provider ? office.effort : undefined);
+  return { provider, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+}
+
+export interface ProviderPicker {
+  element: HTMLElement;
+  value(): AgentProvider;
+  /** The optional initial model override: an OpenCode provider/model id, or a Claude model alias. */
+  model(): string | undefined;
+  /** The optional Claude reasoning effort. */
+  effort(): AgentEffort | undefined;
+  /** Reports a visible field error for an invalid nonempty OpenCode model. */
+  valid(): boolean;
+}
+
+export interface AgentFields extends ProviderPicker {
+  /** Puts the fields on this provider, model and effort. */
+  set(choice: AgentChoice): void;
+  /** What they're on now. */
+  choice(): AgentChoice;
 }
 
 const MODEL_MAX = 256;
@@ -169,18 +198,15 @@ function fetchOpenCodeModels(): Promise<string[]> {
 }
 
 /**
- * A provider selector that never offers a provider outside the server's metadata, with a model
- * (and, for Claude, reasoning effort) picker underneath. `key` scopes what gets remembered between
- * hires — a desk id for the hire dialog, or a fixed key like "queue" for the queue's add form —
- * so a desk that always got Haiku offers Haiku again next time, without one hire changing another's.
+ * The provider, model and effort fields: a provider selector that never offers a provider outside
+ * the server's metadata, with a model (and, for Claude, reasoning effort) picker underneath.
  */
-export function providerPicker(project: ProjectInfo | null, id: string, label = 'Worker provider', key = id): ProviderPicker {
+export function agentFields(project: ProjectInfo | null, id: string, initial: AgentChoice, label = 'Provider'): AgentFields {
   const options = supportedProviders(project);
   const fallback = resolvedProvider(project?.defaultProvider, project);
   const select = h('select.provider-select', { id, 'aria-label': 'Worker provider' }) as HTMLSelectElement;
   for (const provider of options) select.append(h('option', { value: provider }, PROVIDER_LABEL[provider]));
-  select.value = preferredProvider(options, fallback);
-  const note = h('small.provider-note', {}, providerUsageNote(select.value as AgentProvider));
+  const note = h('small.provider-note');
   const modelInput = h('input', {
     type: 'text',
     id: `${id}-model`,
@@ -197,11 +223,9 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
   const claudeModelSelect = h('select', { id: `${id}-claude-model`, 'aria-label': 'Claude model' }) as HTMLSelectElement;
   claudeModelSelect.append(h('option', { value: '' }, 'Default (--agent-args)'));
   for (const m of CLAUDE_MODELS) claudeModelSelect.append(h('option', { value: m }, CLAUDE_MODEL_LABEL[m]));
-  claudeModelSelect.value = preferredClaudeModel(key) ?? '';
   const effortSelect = h('select', { id: `${id}-effort`, 'aria-label': 'Reasoning effort' }) as HTMLSelectElement;
   effortSelect.append(h('option', { value: '' }, 'Default'));
   for (const e of AGENT_EFFORTS) effortSelect.append(h('option', { value: e }, EFFORT_LABEL[e]));
-  effortSelect.value = preferredEffort(key) ?? '';
   const claudeChoice = h(
     'div.provider-model.claude-model',
     {},
@@ -209,37 +233,17 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
     claudeModelSelect,
     h('label', { for: `${id}-effort` }, 'Effort'),
     effortSelect,
-    h('small.provider-model-hint', {}, 'Overrides the office default for this worker; the cost panel tracks each model separately.'),
+    h('small.provider-model-hint', {}, 'The cost panel tracks each model separately.'),
   );
-  claudeModelSelect.addEventListener('change', () => {
-    try {
-      if (claudeModelSelect.value) localStorage.setItem(claudeChoiceKey('model', key), claudeModelSelect.value);
-      else localStorage.removeItem(claudeChoiceKey('model', key));
-    } catch {
-      // storage blocked
-    }
-  });
-  effortSelect.addEventListener('change', () => {
-    try {
-      if (effortSelect.value) localStorage.setItem(claudeChoiceKey('effort', key), effortSelect.value);
-      else localStorage.removeItem(claudeChoiceKey('effort', key));
-    } catch {
-      // storage blocked
-    }
-  });
 
-  const setModelVisibility = (provider: AgentProvider) => {
-    const openCode = provider === 'opencode';
-    const claude = provider === 'claude';
-    modelChoice.classList.toggle('hidden', !openCode);
-    modelInput.disabled = !openCode;
-    claudeChoice.classList.toggle('hidden', !claude);
-    if (!openCode) return;
-    // Personal: say which model a blank field runs (see grok-default.ts on the server).
-    const blankRuns = () => {
-      modelInput.placeholder = `Default: ${modelDefault ?? 'top Grok model'}`;
-      return `Blank runs ${modelDefault ?? 'the top Grok model'}.`;
-    };
+  const element = h('div.provider-choice', {}, h('label', { for: id }, label), select, note, modelChoice, claudeChoice);
+  /** OpenCode's model suggestions, asked for only once someone can see the field. */
+  const blankRuns = () => {
+    modelInput.placeholder = `Default: ${modelDefault ?? 'top Grok model'}`;
+    return `Blank runs ${modelDefault ?? 'the top Grok model'}.`;
+  };
+  const loadModels = () => {
+    if (select.value !== 'opencode' || !element.isConnected || element.closest('.hidden')) return;
     modelHint.textContent = modelList ? `${blankRuns()} Optional provider/model override; choose a suggestion or enter one manually.` : `${blankRuns()} Loading OpenCode models… You can enter a provider/model manually.`;
     void fetchOpenCodeModels()
       .then((models) => {
@@ -250,30 +254,42 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
         modelHint.textContent = `${blankRuns()} Model suggestions unavailable; enter a provider/model manually if needed.`;
       });
   };
-  setModelVisibility(select.value as AgentProvider);
-  select.addEventListener('change', () => {
-    const provider = select.value as AgentProvider;
+  const setModelVisibility = (provider: AgentProvider) => {
+    const openCode = provider === 'opencode';
     note.textContent = providerUsageNote(provider);
-    setModelVisibility(provider);
-    if (options.includes(provider)) {
-      try {
-        localStorage.setItem(PROVIDER_KEY, provider);
-      } catch {
-        // storage blocked
-      }
-    }
-  });
+    modelChoice.classList.toggle('hidden', !openCode);
+    modelInput.disabled = !openCode;
+    claudeChoice.classList.toggle('hidden', provider !== 'claude');
+    loadModels();
+  };
+  const set = (c: AgentChoice) => {
+    select.value = options.includes(c.provider) ? c.provider : options.includes(fallback) ? fallback : options[0];
+    const claude = select.value === 'claude';
+    claudeModelSelect.value = claude && c.model && (CLAUDE_MODELS as readonly string[]).includes(c.model) ? c.model : '';
+    effortSelect.value = claude && c.effort ? c.effort : '';
+    modelInput.value = select.value === 'opencode' && c.model ? c.model : '';
+    modelInput.setCustomValidity('');
+    setModelVisibility(select.value as AgentProvider);
+  };
+  set(initial);
+  select.addEventListener('change', () => setModelVisibility(select.value as AgentProvider));
+  modelInput.addEventListener('focus', loadModels);
   modelInput.addEventListener('input', () => modelInput.setCustomValidity(''));
+  const value = () => (options.includes(select.value as AgentProvider) ? (select.value as AgentProvider) : fallback);
+  const effort = () => (select.value === 'claude' && effortSelect.value ? (effortSelect.value as AgentEffort) : undefined);
+  const model = () => {
+    if (select.value === 'claude') return claudeModelSelect.value || undefined;
+    if (select.value !== 'opencode') return undefined;
+    const v = modelInput.value;
+    return validModel(v) ? v : undefined;
+  };
   return {
-    element: h('div.provider-choice', {}, h('label', { for: id }, label), select, note, modelChoice, claudeChoice),
-    value: () => (options.includes(select.value as AgentProvider) ? (select.value as AgentProvider) : fallback),
-    effort: () => (select.value === 'claude' && effortSelect.value ? (effortSelect.value as AgentEffort) : undefined),
-    model: () => {
-      if (select.value === 'claude') return claudeModelSelect.value || undefined;
-      if (select.value !== 'opencode') return undefined;
-      const value = modelInput.value;
-      return validModel(value) ? value : undefined;
-    },
+    element,
+    value,
+    effort,
+    model,
+    set,
+    choice: () => ({ provider: value(), ...(model() ? { model: model() } : {}), ...(effort() ? { effort: effort() } : {}) }),
     valid: () => {
       if (select.value !== 'opencode' || !modelInput.value) {
         modelInput.setCustomValidity('');
@@ -284,5 +300,61 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
       if (!okay) modelInput.reportValidity();
       return okay;
     },
+  };
+}
+
+/**
+ * Which worker to start: the office's default (⚙️ Settings), shown as a line, with an ✏️ Edit button
+ * that opens the provider, model and effort fields to pick another for this one.
+ */
+export function providerPicker(project: ProjectInfo | null, id: string, label = 'Worker', key = id): ProviderPicker {
+  let editing = false;
+  const fields = agentFields(project, id, officeChoice(project));
+  fields.element.classList.add('hidden');
+  const current = h('span.provider-current');
+  const edit = h('button.btn.small', { type: 'button', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  const element = h('div.provider-pick', {}, h('div.provider-summary', {}, h('span.provider-label', {}, label), current, edit), fields.element);
+  const paint = () => {
+    const def = officeChoice(project);
+    current.textContent = choiceLabel(def);
+    current.title = store.prompts.agent ? 'The office’s default worker, set in ⚙️ Settings' : 'The office’s default worker (its --agent); an admin can pick another in ⚙️ Settings';
+    current.classList.toggle('hidden', editing);
+    edit.textContent = editing ? '↺ Use the default' : '✏️ Edit';
+    edit.title = editing ? `Back to ${choiceLabel(def)}` : 'Pick another provider, model or effort for this one';
+    edit.setAttribute('aria-expanded', String(editing));
+    fields.element.classList.toggle('hidden', !editing);
+  };
+  edit.addEventListener('click', () => {
+    editing = !editing;
+    paint();
+    // A desk that already picked a model opens on that; otherwise the Settings default.
+    if (!editing) return;
+    fields.set(rememberedChoice(project, key));
+    (fields.element.querySelector('select') as HTMLSelectElement | null)?.focus();
+  });
+  fields.element.addEventListener('change', () => {
+    try {
+      const provider = fields.value();
+      if (supportedProviders(project).includes(provider)) localStorage.setItem(PROVIDER_KEY, provider);
+      if (provider !== 'claude') return;
+      const model = fields.model();
+      const effort = fields.effort();
+      if (model) localStorage.setItem(claudeChoiceKey('model', key), model);
+      else localStorage.removeItem(claudeChoiceKey('model', key));
+      if (effort) localStorage.setItem(claudeChoiceKey('effort', key), effort);
+      else localStorage.removeItem(claudeChoiceKey('effort', key));
+    } catch {
+      // storage blocked
+    }
+  });
+  paint();
+  // The default can change while this is open; it goes once its window has closed.
+  const off = store.on('prompts', () => (element.isConnected ? paint() : off()));
+  return {
+    element,
+    value: () => (editing ? fields.value() : officeChoice(project).provider),
+    model: () => (editing ? fields.model() : officeChoice(project).model),
+    effort: () => (editing ? fields.effort() : officeChoice(project).effort),
+    valid: () => !editing || fields.valid(),
   };
 }
