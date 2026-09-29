@@ -16,6 +16,7 @@ import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
 import type { TodoAction, TodoItem } from './todos.js';
+import type { ContentAction, ContentItem } from './content-kanban.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -820,6 +821,8 @@ export interface FloorView {
   plans: PlansState;
   /** The 📥 in-tray: what came in from outside. */
   inbox: InboxState;
+  /** The 🎬 Content Kanban on the whiteboard's stand; null (or missing) on a floor without one (see shared/content-kanban.ts). */
+  content?: ContentItem[] | null;
 }
 
 export type AccountRole = 'admin' | 'member';
@@ -1251,7 +1254,9 @@ export type ClientMsg =
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
   /** A change to your own 🔥 To Do board (see shared/todos.ts). */
-  | { t: 'todo'; change: TodoAction };
+  | { t: 'todo'; change: TodoAction }
+  /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
+  | { t: 'content'; change: ContentAction };
 
 export type ServerMsg =
   | ({
@@ -1382,5 +1387,10 @@ export type ServerMsg =
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
   | { t: 'todos'; items: TodoItem[] }
+  /**
+   * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
+   * answer to your own change (every one gets exactly one), so your window knows which are done.
+   */
+  | { t: 'content'; floor: string; items: ContentItem[]; mine?: boolean }
   /** `now` is the office's clock as it answered, which the jukebox keeps time by. */
   | { t: 'pong'; at: number; now: number };

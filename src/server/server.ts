@@ -53,6 +53,7 @@ import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
 import { checkTodoAction } from '../shared/todos.js';
+import { checkContentAction } from '../shared/content-kanban.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
 import { MAX_FLOORS } from '../shared/floors.js';
@@ -815,6 +816,7 @@ export async function startServer(cfg: Config) {
     cabinet: { ...cabinetState(floor), frame: (floor && cabinetPlayer(floor)?.frame) ?? null },
     plans: floor?.plans.state() ?? { revision: 0, items: [] },
     inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
+    content: floor?.content ? [...floor.content.list()] : null,
   });
   /** The rooftop bar: nobody works up there, so it has none of a floor's things. */
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
@@ -2333,6 +2335,16 @@ export async function startServer(cfg: Config) {
         // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
         if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
         if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
+      case 'content': {
+        const floor = floorOf(c);
+        if (!floor?.content) break;
+        const change = checkContentAction(msg.change);
+        const items = change && floor.content.apply(change, who);
+        // Everyone on the floor sees it; a change that did nothing still gets its answer, to put that window right.
+        if (items) for (const o of clients.values()) if (!o.out && o.peer.floor === floor.id) sendTo(o, { t: 'content', floor: floor.id, items: [...items], mine: o === c });
+        if (!items) sendTo(c, { t: 'content', floor: floor.id, items: [...floor.content.list()], mine: true });
         break;
       }
       case 'cabinet.frame': {

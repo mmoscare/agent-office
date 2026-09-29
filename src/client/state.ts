@@ -9,10 +9,11 @@ import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
 import type { TodoItem } from '../shared/todos';
+import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'content';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -154,6 +155,12 @@ class Store {
   todos: readonly TodoItem[] = [];
   /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
   todosPending = 0;
+  /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
+  content: readonly ContentItem[] | null = null;
+  /** It as the office last sent it. */
+  private contentBase: readonly ContentItem[] | null = null;
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
+  private contentPending: ContentAction[] = [];
   /** Who's at the arcade cabinet on your floor, and the building's high scores. */
   cabinet: CabinetState = { player: null, scores: [] };
   /** The game on the cabinet as its player last sent it; null while nobody plays. */
@@ -261,7 +268,21 @@ class Store {
     this.cabinetFrame = v.cabinet.frame;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
+    // A new floor (or a reconnect): changes still on their way were for the board left behind.
+    this.contentPending = [];
+    this.contentBase = this.content = v.content ?? null;
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content'] as Topic[]) this.emit(t);
+  }
+
+  /** Makes a change to the floor's 🎬 Content Kanban on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeContent(a: ContentAction): boolean {
+    if (!this.content) return false;
+    const next = applyContent(this.content, a, Date.now(), this.profile.name);
+    if (next === this.content) return false;
+    this.contentPending.push(a);
+    this.content = next;
+    this.emit('content');
+    return true;
   }
 
   private setDog(dog: DogState | null) {
@@ -399,6 +420,16 @@ class Store {
         this.todos = msg.items;
         this.emit('todos');
         break;
+      case 'content': {
+        // Rode the elevator meanwhile: that was the other floor's board.
+        if (msg.floor !== this.floor || !this.contentBase) break;
+        if (msg.mine) this.contentPending.shift();
+        this.contentBase = msg.items;
+        const now = Date.now();
+        this.content = this.contentPending.reduce((items, a) => applyContent(items, a, now, this.profile.name), this.contentBase);
+        this.emit('content');
+        break;
+      }
       case 'cabinet.frame':
         this.cabinetFrame = msg.frame;
         this.emit('cabinetFrame');
