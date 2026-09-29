@@ -15,7 +15,7 @@ import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
-import type { TodoAction, TodoItem } from './todos.js';
+import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -1250,8 +1250,8 @@ export type ClientMsg =
   /** Your 🗂️ Indirect Time card, please: when you had the office open, per day. */
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
-  /** A change to your own 🔥 To Do board (see shared/todos.ts). */
-  | { t: 'todo'; change: TodoAction };
+  /** A change to your own 🔥 To Do board (see shared/todos.ts), or to the office's 🏢 Autonomous Tasks board. */
+  | { t: 'todo'; change: TodoAction; board?: TodoBoardId };
 
 export type ServerMsg =
   | ({
@@ -1381,6 +1381,6 @@ export type ServerMsg =
   /** Your role changed. */
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
-  | { t: 'todos'; items: TodoItem[] }
+  | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId }
   /** `now` is the office's clock as it answered, which the jukebox keeps time by. */
   | { t: 'pong'; at: number; now: number };

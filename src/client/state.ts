@@ -12,7 +12,7 @@ import type { TodoItem } from '../shared/todos';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'autonomous';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -154,6 +154,9 @@ class Store {
   todos: readonly TodoItem[] = [];
   /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
   todosPending = 0;
+  /** The office's 🏢 Autonomous Tasks board (one list for everyone), and its changes the office hasn't answered yet. */
+  autonomous: readonly TodoItem[] = [];
+  autonomousPending = 0;
   /** Who's at the arcade cabinet on your floor, and the building's high scores. */
   cabinet: CabinetState = { player: null, scores: [] };
   /** The game on the cabinet as its player last sent it; null while nobody plays. */
@@ -279,6 +282,7 @@ class Store {
       case 'welcome':
         // A reconnect: what was on its way is lost, and the To Do board the office sends next is the one.
         this.todosPending = 0;
+        this.autonomousPending = 0;
         this.you = msg.you;
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
         this.floors = msg.floors;
@@ -394,6 +398,13 @@ class Store {
         this.emit('cabinet');
         break;
       case 'todos':
+        if (msg.board === 'autonomous') {
+          // Everyone's changes come back to everyone; while one of yours is on its way, what's on screen is newer.
+          if (this.autonomousPending > 0 && --this.autonomousPending > 0) break;
+          this.autonomous = msg.items;
+          this.emit('autonomous');
+          break;
+        }
         // Each change of yours gets one answer; the last one has them all in it.
         if (this.todosPending > 0 && --this.todosPending > 0) break;
         this.todos = msg.items;

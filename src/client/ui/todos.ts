@@ -1,13 +1,29 @@
 import './todos.css';
-import { applyTodo, newTodoId, TODO_COLUMNS, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoColumn, type TodoItem } from '../../shared/todos';
+import { applyTodo, newTodoId, TODO_COLUMNS, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoBoardId, type TodoColumn, type TodoItem } from '../../shared/todos';
 import type { Net } from '../net';
 import { store } from '../state';
-import { h, timeAgo } from './dom';
+import { h, openModal, timeAgo } from './dom';
+import { cardDetails, onTodoDetails, setTodoDetailsShown, todoDetailsShown } from './todo-details';
 
-/** Makes a change to your 🔥 To Do board: on screen straight away, and on to the office, whose copy wins once it answers (see state.ts). */
-export function changeTodo(net: Net, change: TodoAction) {
-  const next = applyTodo(store.todos, change);
-  if (next === store.todos) return;
+/** A board's list as it is now: your own 🔥 To Do, or the office's 🏢 Autonomous Tasks. */
+export function todoList(board: TodoBoardId): readonly TodoItem[] {
+  return board === 'autonomous' ? store.autonomous : store.todos;
+}
+/** What the store calls a board's changes. */
+export const todoTopic = (board: TodoBoardId) => (board === 'autonomous' ? 'autonomous' : 'todos');
+
+/** Makes a change to a board: on screen straight away, and on to the office, whose copy wins once it answers (see state.ts). */
+export function changeTodo(net: Net, change: TodoAction, board: TodoBoardId = 'mine') {
+  const was = todoList(board);
+  const next = applyTodo(was, change);
+  if (next === was) return;
+  if (board === 'autonomous') {
+    store.autonomous = next;
+    store.autonomousPending++;
+    store.emit('autonomous');
+    net.send({ t: 'todo', change, board });
+    return;
+  }
   store.todos = next;
   store.todosPending++;
   store.emit('todos');
@@ -53,8 +69,8 @@ const write = (key: string, value: string) => {
     // just not remembered
   }
 };
-const FOLD_KEY = 'agent-office.todo.doneOpen';
-const TARGET_KEY = 'agent-office.todo.addTo';
+/** Where a board remembers, in this browser, whether Completed is open and which column Enter adds to. */
+const PREFIX: Record<TodoBoardId, string> = { mine: 'agent-office.todo', autonomous: 'agent-office.autonomous' };
 
 // ---- Which side of the issues board faces the room -----------------------------------------------
 
@@ -95,8 +111,13 @@ const startOfToday = () => new Date(new Date().toDateString()).getTime();
  * (Enter adds to the column picked beside it, Shift+Enter starts it now) or in a column's own add
  * box. Drag cards between columns and up and down (the top is what matters most), or use their
  * buttons, or keys on a focused card: 1–4 or ←/→ move it, Alt+↑/↓ reorder, Space completes.
+ * Double-click the board around the cards to show (or put away) each card's notes, subtasks and
+ * pictures (ui/todo-details.ts). `board` is which list: yours, or the office's Autonomous Tasks.
  */
-export function mountTodoBoard(net: Net): TodoBoard {
+export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard {
+  const FOLD_KEY = `${PREFIX[board]}.doneOpen`;
+  const TARGET_KEY = `${PREFIX[board]}.addTo`;
+  const items = () => todoList(board);
   let doneOpen = read(FOLD_KEY) === '1';
   let target: Exclude<TodoColumn, 'done'> = (['active', 'urgent', 'todo'] as const).find((c) => c === read(TARGET_KEY)) ?? 'urgent';
   /** The card being edited, and what's typed in it so far. */
@@ -106,8 +127,8 @@ export function mountTodoBoard(net: Net): TodoBoard {
   /** What the last ✕ took off, to put back with Undo. */
   let removed: { item: TodoItem; index: number; timer: ReturnType<typeof setTimeout> } | undefined;
 
-  const change = (a: TodoAction) => changeTodo(net, a);
-  const indexOf = (item: TodoItem) => todosIn(store.todos, item.column).indexOf(item);
+  const change = (a: TodoAction) => changeTodo(net, a, board);
+  const indexOf = (item: TodoItem) => todosIn(items(), item.column).indexOf(item);
   /** New cards go on top: the top of a column is what matters most. */
   const addTo = (column: TodoColumn, raw: string): boolean => {
     const text = clean(raw);
@@ -144,7 +165,15 @@ export function mountTodoBoard(net: Net): TodoBoard {
   const summary = h('div.todo-summary', { 'aria-live': 'polite' });
   const undo = h('div.todo-undo', { role: 'status', 'aria-live': 'polite' });
   const cols = h('div.todo-cols');
-  const el = h('div.todo-board', {}, h('div.todo-add', {}, input, picks), h('div.todo-bar', {}, summary, undo), cols);
+  const el = h('div.todo-board', { class: `board-${board}` }, h('div.todo-add', {}, input, picks), h('div.todo-bar', {}, summary, undo), cols);
+  // Double-click the board around the cards (the cork) to show every card's notes, subtasks and
+  // pictures, and again to put them away. A card, a box or a button keeps its own double-click.
+  el.addEventListener('dblclick', (e) => {
+    if ((e.target as Element).closest('.todo-card, input, textarea, button, a, label, .todo-stat')) return;
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    setTodoDetailsShown(board, !todoDetailsShown(board));
+  });
 
   const showUndo = () => {
     if (!removed) return undo.replaceChildren();
@@ -156,7 +185,8 @@ export function mountTodoBoard(net: Net): TodoBoard {
         const { item, index, timer } = removed;
         clearTimeout(timer);
         removed = undefined;
-        change({ action: 'add', id: item.id, text: item.text, column: item.column, index });
+        // Back with its notes, subtasks and pictures.
+        change({ action: 'add', id: item.id, text: item.text, column: item.column, index, notes: item.notes, subtasks: item.subtasks, images: item.images });
         showUndo();
       } }, 'Undo'),
     );
@@ -238,7 +268,17 @@ export function mountTodoBoard(net: Net): TodoBoard {
       h('div.todo-when', {}, when),
       h('div.todo-actions', {}, ...actions),
     );
-    card.addEventListener('dblclick', () => startEdit(item));
+    // Notes, subtasks and pictures, while the board shows them. Working in them doesn't pick the card up.
+    if (todoDetailsShown(board)) {
+      const details = cardDetails(item, { board, change });
+      details.addEventListener('pointerdown', () => (card.draggable = false));
+      card.addEventListener('pointerup', () => (card.draggable = true));
+      card.addEventListener('focusout', () => (card.draggable = true));
+      card.append(details);
+    }
+    card.addEventListener('dblclick', (e) => {
+      if (!(e.target as Element).closest('.todo-details')) startEdit(item);
+    });
     card.addEventListener('dragstart', (e) => {
       dragging = item.id;
       e.dataTransfer?.setData('text/plain', item.text);
@@ -254,7 +294,7 @@ export function mountTodoBoard(net: Net): TodoBoard {
       if (e.target !== card || e.ctrlKey || e.metaKey) return;
       const i = COLUMN_ORDER.indexOf(column);
       const here = indexOf(item);
-      const list = todosIn(store.todos, column);
+      const list = todosIn(items(), column);
       const to = /^[1-4]$/.test(e.key) ? COLUMN_ORDER[Number(e.key) - 1] : e.key === 'ArrowLeft' ? COLUMN_ORDER[i - 1] : e.key === 'ArrowRight' && !e.altKey ? COLUMN_ORDER[i + 1] : undefined;
       if (to) {
         e.preventDefault();
@@ -293,17 +333,17 @@ export function mountTodoBoard(net: Net): TodoBoard {
   }
 
   function columnFor(column: TodoColumn): HTMLElement {
-    const items = todosIn(store.todos, column);
+    const cards = todosIn(items(), column);
     const folded = column === 'done' && !doneOpen;
-    const busy = column === 'active' && items.length > ACTIVE_FOCUS;
+    const busy = column === 'active' && cards.length > ACTIVE_FOCUS;
     const toggle =
       column === 'done'
         ? h('button.btn.todo-mini.todo-toggle', { type: 'button', 'aria-expanded': String(doneOpen), title: doneOpen ? 'Fold Completed away' : 'Show what you’ve completed', onclick: () => ((doneOpen = !doneOpen), write(FOLD_KEY, doneOpen ? '1' : '0'), render()) }, doneOpen ? 'Hide' : 'Show')
         : null;
     const list = h('ul.todo-list', { 'aria-label': TODO_COLUMNS[column] });
     if (!folded) {
-      for (const item of items) list.append(cardFor(item, column));
-      if (!items.length) list.append(h('li.todo-empty', {}, EMPTY[column]));
+      for (const item of cards) list.append(cardFor(item, column));
+      if (!cards.length) list.append(h('li.todo-empty', {}, EMPTY[column]));
     }
     // Each column but Completed has its own add box: type straight into the one it belongs in.
     const quick =
@@ -321,10 +361,10 @@ export function mountTodoBoard(net: Net): TodoBoard {
     const section = h(
       'section.todo-col',
       { class: `todo-${column}${folded ? ' folded' : ''}${busy ? ' todo-busy' : ''}`, 'data-column': column },
-      h('h3', {}, h('span.todo-title', {}, `${COLUMN_ICON[column]} `, TODO_COLUMNS[column]), h('span.todo-count', {}, String(items.length)), toggle),
+      h('h3', {}, h('span.todo-title', {}, `${COLUMN_ICON[column]} `, TODO_COLUMNS[column]), h('span.todo-count', {}, String(cards.length)), toggle),
       folded
-        ? h('button.todo-fold', { type: 'button', onclick: () => ((doneOpen = true), write(FOLD_KEY, '1'), render()) }, items.length ? `${items.length} completed — show them` : 'Nothing completed yet')
-        : h('p.todo-hint', {}, busy ? `${items.length} at once — finish one before starting another?` : COLUMN_HINT[column]),
+        ? h('button.todo-fold', { type: 'button', onclick: () => ((doneOpen = true), write(FOLD_KEY, '1'), render()) }, cards.length ? `${cards.length} completed — show them` : 'Nothing completed yet')
+        : h('p.todo-hint', {}, busy ? `${cards.length} at once — finish one before starting another?` : COLUMN_HINT[column]),
       quick,
       list,
     );
@@ -350,19 +390,20 @@ export function mountTodoBoard(net: Net): TodoBoard {
       const id = dragging;
       dragging = undefined;
       clearMarks();
-      if (!store.todos.some((t) => t.id === id)) return;
+      if (!items().some((t) => t.id === id)) return;
       change({ action: 'move', id, column, index: folded ? 0 : dropIndex(list, e.clientY) });
     });
     return section;
   }
 
   function renderSummary() {
-    const n = (c: TodoColumn) => todosIn(store.todos, c).length;
+    const n = (c: TodoColumn) => todosIn(items(), c).length;
     const today = startOfToday();
-    const doneToday = todosIn(store.todos, 'done').filter((t) => (t.doneAt ?? 0) >= today).length;
+    const doneToday = todosIn(items(), 'done').filter((t) => (t.doneAt ?? 0) >= today).length;
     summary.replaceChildren(
       ...(['active', 'urgent', 'todo'] as const).map((c) => h('span.todo-stat', { class: `stat-${c}` }, `${COLUMN_ICON[c]} ${n(c)} ${TODO_COLUMNS[c].toLowerCase()}`)),
       h('span.todo-stat.stat-done', {}, `✅ ${doneToday} done today`),
+      h('span.todo-reveal-hint', {}, todoDetailsShown(board) ? 'Double-click the board to tuck notes away' : 'Double-click the board for notes, subtasks & pictures'),
     );
   }
 
@@ -370,28 +411,59 @@ export function mountTodoBoard(net: Net): TodoBoard {
     renderSummary();
     // Mid-edit, a change from another window mustn't throw away what's typed.
     const typing = editing && document.activeElement instanceof HTMLTextAreaElement && cols.contains(document.activeElement);
-    if (typing && store.todos.some((t) => t.id === editing!.id)) return;
+    if (typing && items().some((t) => t.id === editing!.id)) return;
     const active = document.activeElement instanceof HTMLElement && cols.contains(document.activeElement) ? document.activeElement : null;
     const focused = active?.closest<HTMLElement>('.todo-card')?.dataset.id;
     // A column's add box keeps the cursor and what's typed in it across a redraw.
     const quick = active instanceof HTMLInputElement ? active.dataset.quick : undefined;
     const typed = new Map([...cols.querySelectorAll<HTMLInputElement>('.todo-quick')].map((q) => [q.dataset.quick, q.value]));
     const scrolled = [...cols.querySelectorAll('.todo-list')].map((ul) => ul.scrollTop);
+    // A card's notes (or any box in its details) keeps the cursor, the selection and what's typed.
+    const keep = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active.dataset.keep : undefined;
+    const kept = keep ? { value: (active as HTMLInputElement).value, start: (active as HTMLInputElement).selectionStart, end: (active as HTMLInputElement).selectionEnd, top: active!.scrollTop } : undefined;
+    const drafts = new Map([...cols.querySelectorAll<HTMLInputElement>('[data-draft]')].map((d) => [d.dataset.draft, d.value]));
     cols.replaceChildren(...COLUMN_ORDER.map(columnFor));
     cols.querySelectorAll<HTMLInputElement>('.todo-quick').forEach((q) => (q.value = typed.get(q.dataset.quick) ?? ''));
+    cols.querySelectorAll<HTMLInputElement>('[data-draft]').forEach((d) => (d.value = drafts.get(d.dataset.draft) ?? ''));
     cols.querySelectorAll('.todo-list').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
-    if (quick) cols.querySelector<HTMLInputElement>(`[data-quick="${quick}"]`)?.focus();
+    const again = keep ? cols.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[data-keep="${CSS.escape(keep)}"]`) : null;
+    if (again && kept) {
+      again.value = kept.value;
+      again.focus({ preventScroll: true });
+      again.setSelectionRange(kept.start, kept.end);
+      again.scrollTop = kept.top;
+    } else if (quick) cols.querySelector<HTMLInputElement>(`[data-quick="${quick}"]`)?.focus();
     else if (focused) focusCard(focused);
   }
 
-  const unsub = store.on('todos', render);
+  const unsubs = [store.on(todoTopic(board), render), onTodoDetails(board, render)];
   render();
   return {
     el,
     focus: () => input.focus(),
     destroy: () => {
-      unsub();
+      unsubs.forEach((u) => u());
       if (removed) clearTimeout(removed.timer);
     },
   };
+}
+
+/** The 🏢 Autonomous Tasks board, opened from its whiteboard: the To Do board's kanban, with the office's list on it. */
+export function openAutonomousBoard(net: Net) {
+  const board = mountTodoBoard(net, 'autonomous');
+  const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
+  const el = h(
+    'div.modal.board.autonomous-board',
+    { role: 'dialog', 'aria-label': 'Autonomous Tasks board' },
+    h('header', {}, h('h2', {}, '🏢 Autonomous Tasks'), h('span.board-status', {}, 'One board for the whole office'), close),
+    h('div.body.todo-body', {}, board.el),
+  );
+  const modal = openModal(el, { doing: '🏢 at the Autonomous Tasks board', onClose: () => board.destroy() });
+  close.addEventListener('click', () => modal.close());
+  board.focus();
+}
+
+/** What's Active on the Autonomous Tasks board. */
+export function activeAutonomous(): TodoItem[] {
+  return todosIn(store.autonomous, 'active');
 }
