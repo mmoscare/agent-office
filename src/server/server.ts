@@ -2444,7 +2444,7 @@ export async function startServer(cfg: Config) {
   mailroom.start();
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
-  const shutdown = (keep = false) => {
+  const shutdown = (keep = false): Promise<void> => {
     consoles.shutdown();
     clearInterval(heartbeat);
     clearInterval(resync);
@@ -2458,7 +2458,8 @@ export async function startServer(cfg: Config) {
     machine.stop();
     sky.stop();
     themes.stop();
-    for (const f of floors.values()) f.shutdown(keep);
+    // Each floor saves its workers' uncommitted work (see wip-checkpoint.ts) while the rest closes.
+    const saving = [...floors.values()].map((f) => f.shutdown(keep));
     ledger.flush();
     modelUsage.flush();
     timecard.flush();
@@ -2466,6 +2467,7 @@ export async function startServer(cfg: Config) {
     for (const c of clients.values()) c.ws.close();
     server.close();
     hookServer.close();
+    return Promise.all(saving).then(() => undefined);
   };
 
   return { server, shutdown, accounts, publicDir, hookPort, floors: () => [...floors.values()], projectsDir: () => building.projectsDir, resolvedAgent: resolveCommand(cfg.agentCmd) };
