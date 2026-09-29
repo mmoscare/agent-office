@@ -324,6 +324,11 @@ export class Ledger {
     return this.opts.budget !== undefined && (this.days[localDay()]?.cost ?? 0) >= this.opts.budget;
   }
 
+  /** Tracked Claude spend on a local day (YYYY-MM-DD), when there is any. Read-only: the Receptionist's morning briefing. */
+  spentOn(day: string): number | undefined {
+    return this.days[day]?.cost;
+  }
+
   /** Why a new agent can't be hired right now, when it can't. */
   get hiringPaused(): string | undefined {
     if (!this.opts.pauseHiring || !this.overBudget) return undefined;

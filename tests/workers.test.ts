@@ -7,6 +7,7 @@ import path from 'node:path';
 import { Ledger } from '../src/server/usage.js';
 import { WorkerManager, type WorkerEvents } from '../src/server/workers.js';
 import { withoutWorkerHandoff } from '../src/server/handoff.js';
+import { GROK_FLAGSHIP, useGrokCatalogue } from '../src/server/grok-default.js';
 import type { AgentProvider, WorkerInfo } from '../src/shared/protocol.js';
 
 type Invocation = {
@@ -398,6 +399,74 @@ test('OpenCode keeps configured model flags when no explicit model is selected, 
   assert.equal(resumed.args.includes('--model'), false);
   assert.equal(resumed.args.includes('configured/model'), false);
   assert.ok(resumed.args.includes('--keep'));
+});
+
+/** Records what each launch would start, then fails the start: no process, so it runs on every platform. */
+function recordLaunches(workers: WorkerManager): { file: string; args: string[] }[] {
+  const launches: { file: string; args: string[] }[] = [];
+  (workers as unknown as { host: { spawn(opts: { file: string; args: string[] }): never } }).host.spawn = (opts) => {
+    launches.push({ file: opts.file, args: opts.args });
+    throw new Error('recorded, not started');
+  };
+  return launches;
+}
+
+test('a blank OpenCode model launches the top Grok model, an explicit one wins, and a resume keeps its session without --model', async (t) => {
+  const f = fixture();
+  t.after(() => f.close());
+  isolateProviderEnvironment(f, t);
+  t.after(() => useGrokCatalogue());
+  useGrokCatalogue();
+  const workers = manager(f, f.opencode, [], ['--keep', 'yes']);
+  t.after(() => workers.shutdown());
+  const launches = recordLaunches(workers);
+
+  const blank = workers.spawn('desk-1', 'test', 'blank model', false, 'agent', 'opencode');
+  assert.equal(typeof blank, 'object');
+  if (typeof blank === 'string') return;
+  assert.deepEqual(launches[0].args.map(withoutWorkerHandoff), ['--keep', 'yes', '--model', GROK_FLAGSHIP, '--prompt', 'blank model']);
+  assert.equal(workers.get(blank.id)?.model, GROK_FLAGSHIP, 'the head and card badges show the model it launched with');
+
+  const explicit = workers.spawn('desk-2', 'test', 'explicit model', false, 'agent', 'opencode', 'openai/gpt-5');
+  assert.equal(typeof explicit, 'object');
+  assert.deepEqual(launches[1].args.map(withoutWorkerHandoff), ['--keep', 'yes', '--model', 'openai/gpt-5', '--prompt', 'explicit model']);
+
+  // The pick follows the live catalogue: a new plain Grok release needs no code change.
+  await useGrokCatalogue({ get: async () => ['xai/grok-4.7', 'xai/grok-5', 'xai/grok-5-fast', 'xai/grok-build-0.1'] }).refresh();
+  const newer = workers.spawn('desk-3', 'test', 'newer Grok', false, 'agent', 'opencode');
+  assert.equal(typeof newer, 'object');
+  assert.deepEqual(launches[2].args.map(withoutWorkerHandoff), ['--keep', 'yes', '--model', 'xai/grok-5', '--prompt', 'newer Grok']);
+
+  // A resume carries on its OpenCode session, which already has its model: no --model at all.
+  (workers as unknown as { workers: Map<string, { info: WorkerInfo }> }).workers.get(blank.id)!.info.sessionId = 'oc-grok';
+  assert.equal(workers.resume(blank.id), undefined);
+  assert.deepEqual(launches[3].args, ['--keep', 'yes', '--session', 'oc-grok']);
+  assert.equal(workers.get(blank.id)?.model, GROK_FLAGSHIP);
+});
+
+test('an office-wide --model still wins over the Grok default, and a Claude office never lends OpenCode its flags', (t) => {
+  const f = fixture();
+  t.after(() => f.close());
+  isolateProviderEnvironment(f, t);
+  t.after(() => useGrokCatalogue());
+  useGrokCatalogue();
+
+  const configured = manager(f, f.opencode, [], ['--model', 'configured/model', '--keep', 'yes']);
+  t.after(() => configured.shutdown());
+  const configuredLaunches = recordLaunches(configured);
+  const worker = configured.spawn('desk-1', 'test', 'configured prompt');
+  assert.equal(typeof worker, 'object');
+  if (typeof worker === 'string') return;
+  assert.deepEqual(configuredLaunches[0].args.map(withoutWorkerHandoff), ['--keep', 'yes', '--model', 'configured/model', '--prompt', 'configured prompt']);
+  assert.equal(configured.get(worker.id)?.model, 'configured/model');
+  configured.shutdown();
+
+  const claudeOffice = manager(f, f.claude, [], ['--model', 'opus']);
+  t.after(() => claudeOffice.shutdown());
+  const claudeLaunches = recordLaunches(claudeOffice);
+  const openCode = claudeOffice.spawn('desk-2', 'test', 'alternate provider', false, 'agent', 'opencode');
+  assert.equal(typeof openCode, 'object');
+  assert.deepEqual(claudeLaunches[0].args.map(withoutWorkerHandoff), ['--model', GROK_FLAGSHIP, '--prompt', 'alternate provider']);
 });
 
 test('workers reject models for non-OpenCode/Claude providers and malformed model ids', (t) => {

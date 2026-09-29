@@ -15,6 +15,7 @@ import { childEnv, resolveCommand } from './workers.js';
 import { ConsoleShells } from './console-shell.js';
 import { configuredProvider, OPEN_CODE_MODEL_MAX } from './agents.js';
 import { createOpenCodeModelCatalogue } from './models.js';
+import { openCodeLaunchModel, useGrokCatalogue } from './grok-default.js';
 import { Team } from './team.js';
 import { Upgrader } from './upgrade.js';
 import { Services } from './services.js';
@@ -33,6 +34,7 @@ import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
 import { PlansError } from './plans.js';
 import { INBOX_SERVE_MAX, InTrayDoor, InboxError, fileType, plainName, readBytes } from './inbox.js';
+import { Mailroom, type MailFloor } from './mailroom.js';
 import { Sky } from './sky.js';
 import { Themes } from './theme.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
@@ -44,7 +46,7 @@ import { taskStatus, unshippedText } from '../shared/task-status.js';
 import { normalizeRepo } from '../shared/floors.js';
 import { PLAN_COLUMNS, PLAN_TEXT_MAX, planTitle, type PlanStatus } from '../shared/plans.js';
 import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../shared/inbox.js';
-import { DESK_BY_ID, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
+import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
@@ -105,6 +107,8 @@ interface Client {
   typingAt: Map<string, number>;
   /** Cleared at each heartbeat ping and set again by the pong; still clear at the next one means gone. */
   isAlive: boolean;
+  /** Since when their tab has been in the background (see 'presence'): long enough, and they're not really here. */
+  awaySince?: number;
 }
 
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
@@ -212,6 +216,9 @@ export async function startServer(cfg: Config) {
     modelCommand.includes('/') ? path.resolve(modelCommand) : modelCommand,
     cfg.dir,
   );
+  // Personal: blank OpenCode models default to the top Grok model in this catalogue (see grok-default.ts).
+  const grok = useGrokCatalogue(openCodeModels);
+  const openCodeDefaultModel = () => openCodeLaunchModel(undefined, configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentArgs : []);
 
   const sendTo = (c: Client, msg: ServerMsg) => {
     if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
@@ -294,6 +301,8 @@ export async function startServer(cfg: Config) {
     if (url.pathname === '/office/queue') return officeQueue(req, res, url);
     if (url.pathname === '/office/plans') return officePlans(req, res, url);
     if (url.pathname === '/office/inbox') return officeInbox(req, res, url);
+    if (url.pathname === '/office/mail') return officeMail(req, res, url);
+    if (url.pathname === '/office/ask') return officeAsk(req, res, url);
     if (req.method !== 'POST' || !['/hooks/claude', '/hooks/opencode', '/hooks/codex'].includes(url.pathname)) return send(res, 404, { ok: false });
     let payload: unknown = {};
     try {
@@ -339,7 +348,7 @@ export async function startServer(cfg: Config) {
       return err ? send(res, 400, { error: err }) : send(res, 200, view());
     }
     if (req.method !== 'POST') return send(res, 405, { error: 'GET, POST or DELETE' });
-    let body: { prompt?: unknown; title?: unknown; issue?: unknown; repo?: unknown; plan?: unknown };
+    let body: { prompt?: unknown; title?: unknown; issue?: unknown; repo?: unknown; plan?: unknown; mail?: unknown };
     try {
       body = JSON.parse(await readBody(req));
     } catch {
@@ -354,10 +363,13 @@ export async function startServer(cfg: Config) {
     if (err) return send(res, 400, { error: err });
     const task = floor.queue.state().tasks.at(-1)!;
     toastFloor(floor, `📋 The ${agent.name} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : `“${task.title}”`}${plan ? ' from To Do Next' : ''}`);
-    send(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status } });
+    // Queued for an email: its sender hears when it's done.
+    const mail = str(body?.mail, 256);
+    const warning = mail ? mailroom.link(floor.id, 'task', task.id, mail) : undefined;
+    send(res, 200, { ok: true, task: { id: task.id, title: task.title, status: task.status }, ...(warning ? { warning } : {}) });
   };
   /** The agent standing by a board that's asking, for the /office/* endpoints; the refusal is already sent when there isn't one. */
-  const boardAgent = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string): { floor: Floor; agent: { id: string; name: string } } | undefined => {
+  const boardAgent = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string): { floor: Floor; agent: { id: string; name: string; deskId: string } } | undefined => {
     const workerId = url.searchParams.get('worker') ?? '';
     const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
     const floor = workerFloor(workerId);
@@ -383,7 +395,7 @@ export async function startServer(cfg: Config) {
     try {
       if (req.method === 'GET') return send(res, 200, floor.plans.read());
       if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
-      let body: { action?: unknown; id?: unknown; text?: unknown; status?: unknown };
+      let body: { action?: unknown; id?: unknown; text?: unknown; status?: unknown; mail?: unknown };
       try {
         body = JSON.parse(await readBody(req, 128 * 1024));
       } catch {
@@ -402,7 +414,10 @@ export async function startServer(cfg: Config) {
       const item = action === 'add' ? state.items.at(-1) : state.items.find((p) => p.id === id);
       const what = item ? `“${planTitle(item.text)}”` : 'an item';
       toastFloor(floor, action === 'add' ? `📒 The ${agent.name} added ${what} to To Do Next` : action === 'remove' ? `📒 The ${agent.name} took an item off To Do Next` : body?.status !== undefined && item ? `📒 The ${agent.name} moved ${what} to ${PLAN_COLUMNS[item.status]}` : `📒 The ${agent.name} edited ${what} on To Do Next`);
-      return send(res, 200, { ok: true, item, state });
+      // Filed for an email: its sender hears when a worker finishes it.
+      const mail = action === 'add' && item ? str(body?.mail, 256) : '';
+      const warning = mail ? mailroom.link(floor.id, 'plan', item!.id, mail) : undefined;
+      return send(res, 200, { ok: true, item, state, ...(warning ? { warning } : {}) });
     } catch (error) {
       if (error instanceof PlansError) return send(res, error.status, { error: error.message });
       throw error;
@@ -419,8 +434,9 @@ export async function startServer(cfg: Config) {
     try {
       if (req.method === 'GET') {
         const name = url.searchParams.get('read');
-        if (name === null) return send(res, 200, { dir: floor.inbox.dir, items: floor.inbox.list() });
-        return send(res, 200, await floor.inbox.read(name));
+        // Each item says whether it came by email, from whom, and whether they may email her; the list says how her mailbox stands.
+        if (name === null) return send(res, 200, { dir: floor.inbox.dir, items: floor.inbox.list().map((i) => ({ ...i, mail: mailroom.origin(floor.id, i.name) })), mail: mailroom.brief() });
+        return send(res, 200, { ...(await floor.inbox.read(name)), mail: mailroom.origin(floor.id, name) });
       }
       if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
       let body: { action?: unknown; name?: unknown };
@@ -438,6 +454,76 @@ export async function startServer(cfg: Config) {
       if (error instanceof InboxError) return send(res, error.status, { error: error.message });
       throw error;
     }
+  };
+  /** The Receptionist, and only her: the one board agent who writes email. */
+  const receptionist = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string) => {
+    const who = boardAgent(req, res, url, what);
+    if (!who) return undefined;
+    if (DESK_BY_ID.get(who.agent.deskId)?.station !== 'inbox') {
+      send(res, 403, { error: `Only the Receptionist can use ${what}` });
+      return undefined;
+    }
+    return who;
+  };
+  /**
+   * The Receptionist's mailbox, for her (office-mail): GET says how it stands; POST {"action": "reply",
+   * "item", "text"} answers whoever sent a tray item, in their thread, and {"action": "send", "subject",
+   * "text"} writes to the owner. She can only ever write to the people allowed to email her.
+   */
+  const officeMail = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = receptionist(req, res, url, 'the mailbox');
+    if (!who) return;
+    const { floor, agent } = who;
+    const a = mailroom.account;
+    if (req.method === 'GET') return send(res, 200, { ...mailroom.brief(), owners: a?.owners ?? [], autoTriage: a?.autoTriage, briefing: a?.briefing || undefined, awayAlerts: a?.awayAlerts });
+    if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
+    let body: { action?: unknown; item?: unknown; subject?: unknown; text?: unknown };
+    try {
+      body = JSON.parse(await readBody(req, 64 * 1024));
+    } catch {
+      return send(res, 400, { error: 'Send JSON: {"action": "reply", "item": "…", "text": "…"} or {"action": "send", "subject": "…", "text": "…"}' });
+    }
+    const text = str(body?.text, 20_001);
+    if (body?.action === 'reply') {
+      const item = str(body?.item, 256);
+      const err = await mailroom.reply(floor.id, item, text);
+      if (err) return send(res, 400, { error: err });
+      const o = mailroom.origin(floor.id, item);
+      toastFloor(floor, `💁‍♀️ The ${agent.name} emailed ${o?.name || o?.from || 'the sender'} back`);
+      return send(res, 200, { ok: true, to: o?.from });
+    }
+    if (body?.action === 'send') {
+      const err = await mailroom.toOwner(str(body?.subject, 200), text, floor.id);
+      if (err) return send(res, 400, { error: err });
+      toastFloor(floor, `💁‍♀️ The ${agent.name} sent an email`);
+      return send(res, 200, { ok: true, to: a?.owners[0] });
+    }
+    return send(res, 400, { error: 'The action is reply or send' });
+  };
+  /**
+   * The Receptionist hands a request to another board agent (office-ask): POST {"to": "issues" | "pulls",
+   * "text"}. Typed into that agent's session, which is hired or woken for it, the way a person asks.
+   */
+  const officeAsk = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = receptionist(req, res, url, 'office-ask');
+    if (!who) return;
+    const { floor, agent } = who;
+    if (req.method !== 'POST') return send(res, 405, { error: 'POST' });
+    let body: { to?: unknown; text?: unknown };
+    try {
+      body = JSON.parse(await readBody(req, 64 * 1024));
+    } catch {
+      return send(res, 400, { error: 'Send JSON: {"to": "issues", "text": "…"}' });
+    }
+    const to = body?.to === 'issues' || body?.to === 'pulls' ? body.to : undefined;
+    if (!to) return send(res, 400, { error: 'Ask the issues or the pulls agent' });
+    const deskId = `station-${to}`;
+    const there = floor.workers.list().find((w) => w.deskId === deskId);
+    if (there?.status === 'needs_input') return send(res, 409, { error: `The ${STATION_AGENT[to].name} is waiting on an answer in its terminal: a person has to see to it first` });
+    const r = floor.workers.station(deskId, `${agent.name}`, `The Receptionist asks, for someone who emailed her: ${str(body?.text, 20_000)}`);
+    if (typeof r === 'string') return send(res, 400, { error: r });
+    toastFloor(floor, `💁‍♀️ The ${agent.name} asked the ${STATION_AGENT[to].name} to help`);
+    return send(res, 200, { ok: true, agent: STATION_AGENT[to].name, hired: r.hired });
   };
   /**
    * The in-tray door: POST /api/inbox from outside the office, with the token an admin made as the
@@ -558,6 +644,28 @@ export async function startServer(cfg: Config) {
     });
   };
 
+  // The Receptionist's mailbox (see mailroom.ts): one for the building, each email landing on the floor it's for.
+  const AWAY_MS = 5 * 60_000;
+  const mailroom = new Mailroom(
+    cfg.dataDir,
+    {
+      floors: (): MailFloor[] => [...floors.values()].map((f) => ({ id: f.id, name: f.def.name, inbox: f.inbox, plans: f.plans, queue: f.queue, workers: f.workers })),
+      toast: (floorId, text, level) => {
+        for (const f of floors.values()) if (!floorId || f.id === floorId) toastFloor(f, text, level);
+      },
+      // Someone with the office open and looked at in the last few minutes is really here.
+      present: () => {
+        const now = Date.now();
+        let n = 0;
+        for (const c of clients.values()) if (!c.out && (c.awaySince === undefined || now - c.awaySince < AWAY_MS)) n++;
+        return n;
+      },
+      url: () => `${cfg.tls ? 'https' : 'http'}://localhost:${cfg.port}`,
+      spend: (day) => ledger.spentOn(day),
+    },
+    (state) => broadcast({ t: 'mail', state }),
+  );
+
   const floorContext: FloorContext = {
     agentCmd: cfg.agentCmd,
     agentArgs: cfg.agentArgs,
@@ -566,6 +674,11 @@ export async function startServer(cfg: Config) {
     capacity: machine,
     emit: toFloor,
     toast: toastFloor,
+    mail: {
+      brief: () => mailroom.brief(),
+      queueChanged: (floor, state) => mailroom.onQueue(floor.id, state),
+      plansChanged: (floor, state) => mailroom.onPlans(floor.id, state),
+    },
     termData: (workerId, data, viewers, side) => {
       const json = JSON.stringify({ t: side ? 'side.data' : 'term.data', workerId, data } satisfies ServerMsg);
       const key = side ? sideKey(workerId) : workerId;
@@ -587,11 +700,13 @@ export async function startServer(cfg: Config) {
     workerChanged: (floor, w) => {
       if (typeof w === 'string') {
         webhook.onWorkerGone(w);
+        mailroom.onWorkerGone(w);
         phone.onWorkerGone(w);
         pumpQueues(floor);
       } else {
         modelUsage.record(floor.def.name, w, floor.project.defaultProvider);
         webhook.onWorker(w);
+        mailroom.onWorker(floor.id, w);
         if (phone.onWorker(w)) {
           const msg: ServerMsg = { t: 'phone', floor: floor.id, name: floor.def.name, worker: w.name, task: w.task?.name };
           for (const c of clients.values()) if (c.peer.floor !== floor.id) sendTo(c, msg);
@@ -929,6 +1044,44 @@ export async function startServer(cfg: Config) {
           throw error;
         }
       }
+      if (p === '/api/mail') {
+        // The Receptionist's mailbox: anyone sees how it stands and can ask her to check now; admins set it up.
+        const admin = meOf(session.account?.id).admin;
+        const floorList = () => [...floors.values()].map((f) => ({ id: f.id, name: f.def.name }));
+        if (req.method === 'GET') return send(res, 200, { state: mailroom.state(), admin, floors: floorList(), ...(admin ? { settings: mailroom.view() ?? null } : {}) });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        const who = session.account?.name ?? 'an admin';
+        if (req.method === 'DELETE') {
+          if (!admin) return send(res, 403, { error: 'Only an admin can change the Receptionist’s email' });
+          mailroom.remove();
+          console.log(`  ${who} took the Receptionist's mailbox away`);
+          return send(res, 200, { state: mailroom.state() });
+        }
+        if (req.method !== 'POST') return send(res, 405, { error: 'GET, POST or DELETE' });
+        let body: { action?: unknown; settings?: unknown; off?: unknown };
+        try {
+          body = JSON.parse((await readBody(req, 64 * 1024)) || '{}');
+        } catch {
+          return send(res, 400, { error: 'Bad request' });
+        }
+        if (body?.action === 'check') {
+          // Up to a quarter of a minute, then the answer comes with the next state instead.
+          await Promise.race([mailroom.check(), new Promise((r) => setTimeout(r, 15_000))]);
+          return send(res, 200, { state: mailroom.state() });
+        }
+        if (!admin) return send(res, 403, { error: 'Only an admin can change the Receptionist’s email' });
+        if (body?.action === 'test') return send(res, 200, await mailroom.test(body.settings));
+        if (body?.action === 'save') {
+          const r = await mailroom.save(body.settings, who);
+          if (r.ok) console.log(`  ${who} set up the Receptionist's mailbox (${mailroom.account?.address})`);
+          return send(res, r.ok ? 200 : 400, r);
+        }
+        if (body?.action === 'reminders') {
+          mailroom.setReminders(body.off === true);
+          return send(res, 200, { state: mailroom.state() });
+        }
+        return send(res, 400, { error: 'Unknown action' });
+      }
       if (p === '/api/inbox/door') {
         // The in-tray door's state; admins open it (a new token, shown once) and close it.
         const admin = meOf(session.account?.id).admin;
@@ -1012,9 +1165,12 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/agents/opencode/models' && req.method === 'GET') {
         try {
-          return send(res, 200, { models: await openCodeModels.get() });
+          const models = await openCodeModels.get();
+          // The catalogue was just read, so this re-pick reuses its cache instead of running OpenCode again.
+          await grok.refresh();
+          return send(res, 200, { models, default: openCodeDefaultModel() });
         } catch {
-          return send(res, 502, { error: 'Could not load OpenCode models' });
+          return send(res, 502, { error: 'Could not load OpenCode models', default: openCodeDefaultModel() });
         }
       }
       if (p === '/api/image' && req.method === 'GET') {
@@ -1238,6 +1394,7 @@ export async function startServer(cfg: Config) {
       machine: machine.state(),
       sky: sky.state,
       theme: themes.state(),
+      mail: mailroom.state(),
       ...(onRoof ? roofView() : floorView(floor)),
     });
     screensOf(client, floor);
@@ -1778,6 +1935,10 @@ export async function startServer(cfg: Config) {
         else toastFloor(floor, `📋 ${who} queued ${issue !== undefined ? `issue ${ghRef({ number: issue, repo })}` : plan ? 'a To Do Next item' : 'a task'}`);
         break;
       }
+      case 'presence':
+        // In the background since then (the first time it said so), or back.
+        c.awaySince = msg.away === true ? (c.awaySince ?? Date.now()) : undefined;
+        break;
       case 'inbox.note': {
         const floor = here();
         if (!floor) break;
@@ -1807,7 +1968,9 @@ export async function startServer(cfg: Config) {
         void floor.inbox.read(str(msg.name, 256)).then((r) => {
           // A file's place is known once it's archived; a note carries its text, and is put away once filed.
           const where = r.item.kind === 'note' ? r.path : floor.inbox.archive(r.item.name);
-          floor.plans.apply({ action: 'add', text: inboxPlanText(r.item, r.body, where).slice(0, PLAN_TEXT_MAX) });
+          const plan = floor.plans.apply({ action: 'add', text: inboxPlanText(r.item, r.body, where).slice(0, PLAN_TEXT_MAX) }).items.at(-1);
+          // Filed from an email: its sender hears when a worker finishes it.
+          if (plan && mailroom.origin(floor.id, r.item.name)?.trusted) mailroom.link(floor.id, 'plan', plan.id, r.item.name);
           if (r.item.kind === 'note') floor.inbox.archive(r.item.name);
           toastFloor(floor, `📒 ${who} filed “${planTitle(r.item.title)}” from the in-tray on To Do Next`);
         }).catch((error) => warn(c, error instanceof InboxError || error instanceof PlansError ? error.message : 'That item could not be filed'));
@@ -1826,6 +1989,9 @@ export async function startServer(cfg: Config) {
           const where = r.item.kind === 'note' ? r.path : floor.inbox.archive(r.item.name);
           const err = floor.queue.add(inboxPrompt(r.item, r.body, where), who, `📥 ${r.item.title}`, undefined, msg.provider, model, effort);
           if (err) return warn(c, err);
+          // Queued from an email: its sender hears when it's done.
+          const task = floor.queue.state().tasks.at(-1);
+          if (task && mailroom.origin(floor.id, r.item.name)?.trusted) mailroom.link(floor.id, 'task', task.id, r.item.name);
           if (r.item.kind === 'note') floor.inbox.archive(r.item.name);
           toastFloor(floor, `📋 ${who} queued “${planTitle(r.item.title)}” from the in-tray`);
         }).catch((error) => warn(c, error instanceof InboxError ? error.message : 'That item could not be queued'));
@@ -2251,6 +2417,7 @@ export async function startServer(cfg: Config) {
     server.listen(cfg.port, cfg.host, () => resolve());
   });
   services.start();
+  mailroom.start();
 
   /** With `keep` (a restart), workers' terminals keep running for the next office to pick up. */
   const shutdown = (keep = false): Promise<void> => {
@@ -2261,6 +2428,7 @@ export async function startServer(cfg: Config) {
     arcade.flush();
     upgrader.stop();
     services.stop();
+    mailroom.stop();
     webhook.stop();
     machine.stop();
     sky.stop();

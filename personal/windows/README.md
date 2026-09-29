@@ -7,6 +7,8 @@ The launcher runs the built app from your personal checkout and uses the Persona
 
 If the office is already running, the launcher opens it. Otherwise, it starts the server quietly. The first time it starts a server, it may ask for the password you normally use for Agent Office. Windows encrypts that password for your Windows account and remembers it locally.
 
+Starting the server also opens a terminal window that follows its output live (the same text goes to `server.log`). Closing that window does not stop the office; reopen it with **Show server terminal** from the tray menu.
+
 While the launcher runs the server, its icon lives near the Windows clock (possibly under the hidden-icons arrow). Right-click it to open, restart, or stop Agent Office. Closing the browser leaves your office running. Restarting or stopping the office also stops its Windows worker processes; let active work finish first.
 
 To load code changes, build the app and use **Restart Agent Office** from that tray menu. If the office was started in PowerShell, stop that copy with Ctrl+C first, then launch the shortcut.

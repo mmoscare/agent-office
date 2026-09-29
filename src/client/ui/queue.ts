@@ -89,7 +89,8 @@ export function openQueue(net: Net, actions: QueueActions) {
     const meta: string[] = [];
     let warning: HTMLElement | null = null;
     const buttons: HTMLElement[] = [];
-    const badge = modelBadge(t.provider, t.model, t.effort);
+    // Personal: a blank OpenCode task shows the model its worker actually launched with.
+    const badge = modelBadge(t.provider, t.model ?? w?.model, t.effort);
     const model = badge ? ` · initial: ${badge}` : '';
     const usageSuffix = (provider: AgentProvider | undefined, usage?: Usage) => {
       const state = providerUsageState(provider, store.project, usage);

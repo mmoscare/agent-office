@@ -17,6 +17,8 @@ export interface DeskDef {
   beanbag?: boolean;
   /** A board agent's kiosk instead of a desk (see STATIONS): the worker stands behind it. */
   station?: StationKind;
+  /** A kiosk out on the floor, not against the north wall: there's room all the way round it. */
+  freestanding?: boolean;
   /** A chair at the meeting room's table (see MEETING_SEATS): only a meeting seats a worker here. */
   room?: boolean;
 }
@@ -85,7 +87,8 @@ export type StationKind = 'issues' | 'pulls' | 'queue' | 'inbox';
 /**
  * The board agents: a worker standing behind a little kiosk just west of each of those boards (see
  * BOARDS), there for anyone to prompt about it. (x, z) is the kiosk. They face into the room, so at
- * rotY PI the worker stands on the wall side of it. Nobody hires them from the desks or the queue.
+ * rotY PI the worker stands on the wall side of it. The Receptionist's is out on the floor instead,
+ * facing the elevator. Nobody hires them from the desks or the queue.
  */
 export const STATIONS: DeskDef[] = [
   // Between the plant in the north-west corner and the Issues board.
@@ -94,8 +97,10 @@ export const STATIONS: DeskDef[] = [
   { id: 'station-pulls', station: 'pulls', x: 0, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'PR board' },
   // Between the Issues board and the task queue.
   { id: 'station-queue', station: 'queue', x: -7.8, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'Task queue' },
-  // Reception: past the gong from the elevator, in the north-east corner, with the in-tray on the counter.
-  { id: 'station-inbox', station: 'inbox', x: 14.6, z: FLOOR.minZ + 1.3, rotY: Math.PI, label: 'In-tray' },
+  // Reception: beside the rolling whiteboard's east end (WHITEBOARD, below) and in line with the
+  // elevator's doors (ELEVATOR), facing them (rotY 0: she stands on the room side), so she's the
+  // first thing you see stepping out onto a floor. The in-tray is on her counter.
+  { id: 'station-inbox', station: 'inbox', x: 8.5, z: -5.4, rotY: 0, label: 'In-tray', freestanding: true },
 ];
 /** A board agent's kiosk: its top, and how far behind its middle (toward the wall) the agent stands. */
 export const KIOSK = { width: 0.8, depth: 0.5, height: 0.55, stand: 0.55 } as const;
@@ -215,8 +220,7 @@ export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[]
   [17.2, -12.2, 1.5],
   [17.2, 12.2, 1.3],
   [-17.2, 8.5, 1.2],
-  // Beside the corner plant, out of the way of the receptionist's kiosk (it stood where that is now).
-  [16.4, -12.2, 1.1],
+  [14.2, -12.2, 1.1],
   [-6, 0, 1],
   [3.5, 0, 0.9],
   [8.5, 5, 1.1],
