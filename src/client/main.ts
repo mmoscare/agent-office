@@ -50,7 +50,8 @@ import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
-import { activeTodos } from './ui/todos';
+import { activeTodos, issuesWallMode, onIssuesWallMode, setIssuesWallMode } from './ui/todos';
+import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { authorUpdates, onAuthorUpdates, openAuthorUpdates } from './ui/author-updates';
@@ -227,6 +228,31 @@ store.on('peers', () => {
   carriedOff = k;
   renderIssuesBoard();
 });
+// The issues board's other side, and the one that faces the room unless you flip it: your own To Do
+// board, drawn from your list (so everyone sees their own), with a switch above it (ui/todos.ts).
+const todoTex = new TodoWallTexture();
+store.on('todos', () => todoTex.render(store.todos));
+todoTex.render(store.todos);
+const issuesSwitch = new IssuesWallSwitch();
+{
+  const b = BOARDS.issues;
+  const nx = Math.sin(b.rotY);
+  const nz = Math.cos(b.rotY);
+  // Along the wall to the board's right-hand end, level with its name above it, like the PR board's.
+  const along = b.width / 2 - 0.85;
+  issuesSwitch.mesh.position.set(b.x + Math.cos(b.rotY) * along + nx * 0.1, b.y + b.height / 2 + 0.5, b.z - Math.sin(b.rotY) * along + nz * 0.1);
+  issuesSwitch.mesh.rotation.y = b.rotY;
+  issuesSwitch.mesh.userData.interact = { kind: 'todoToggle', x: b.x + nx * 1.6, z: b.z + nz * 1.6, radius: 0 } satisfies Interactable;
+  office.group.add(issuesSwitch.mesh);
+}
+const showIssuesWall = () => {
+  const mat = office.boardMeshes.issues.material as THREE.MeshBasicMaterial;
+  mat.map = issuesWallMode() === 'todo' ? todoTex.texture : issuesTex.texture;
+  mat.needsUpdate = true;
+  issuesSwitch.render(issuesWallMode());
+};
+onIssuesWallMode(showIssuesWall);
+showIssuesWall();
 const pullsTex = new BoardTexture('pulls');
 const renderPullsBoard = () => pullsTex.render(store.pulls, store.workers);
 mountBoard(office.boardMeshes.pulls, pullsTex.texture, renderPullsBoard, ['pulls']);
@@ -1669,6 +1695,13 @@ function showAuthorUpdates() {
   openAuthorUpdates((prompt, title) => sendToWorker(title, { initial: prompt }, undefined, undefined, false));
 }
 
+/** The switch above the issues board: turns it over to the floor's issues, or back to your To Do. */
+function flipIssuesWall() {
+  const next = issuesWallMode() === 'todo' ? 'issues' : 'todo';
+  setIssuesWallMode(next);
+  toast(next === 'issues' ? '📌 The board shows the GitHub issues. Press E at it to open them.' : '🔥 The board shows your To Do again');
+}
+
 /** The switch above the PR board: turns it over to Git, or back to pull requests. */
 function flipPullsWall() {
   const next = pullsWallMode() === 'git' ? 'pulls' : 'git';
@@ -1731,8 +1764,10 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
       if (target.floorId === ROOF ? store.floors.some(f => !f.cloning) : floor && !floor.cloning) ride(target.floorId);
     } else showElevator();
   } else if (target.kind === 'pulls' && pullsWallMode() === 'git') showGitBoard();
-  else if (target.kind === 'issues' || target.kind === 'pulls') openBoard(target.kind, net, boardActions());
+  else if (target.kind === 'issues') openBoard('issues', net, boardActions(), { view: issuesWallMode() });
+  else if (target.kind === 'pulls') openBoard('pulls', net, boardActions());
   else if (target.kind === 'gitToggle') flipPullsWall();
+  else if (target.kind === 'todoToggle') flipIssuesWall();
   else if (target.kind === 'manual') openManual();
   else if (target.kind === 'calendar') openCalendar();
   else if (target.kind === 'authorUpdates') showAuthorUpdates();
@@ -2207,6 +2242,10 @@ function hintFor(it: Interactable): Hint {
     case 'station':
       return it.deskId ? stationHint(it.deskId) : { k: '', parts: [] };
     case 'issues':
+      if (issuesWallMode() === 'todo') {
+        const now = activeTodos();
+        return { k: `todo:${now.length}`, parts: [title('🔥 My To Do'), now.length ? aside(`${now.length} active`) : aside('same on every floor'), key('E', 'Open')] };
+      }
       if (aimedNote) return { k: String(aimedNote.number), parts: [title(clip(`📌 #${aimedNote.number} ${aimedNote.title}`, 60)), key('E', 'Take it'), key('O', 'Read it')] };
       return issuesTex.hasNotes ? { k: 'notes', parts: [title('📌 Issues board'), key('E', 'Open'), aside('or point at a note to take it')] } : board('📌 Issues board');
     case 'pulls':
@@ -2217,6 +2256,8 @@ function hintFor(it: Interactable): Hint {
       return { k: '', parts: [title('📅 Calendar'), aside('first of the month'), key('E', 'Open')] };
     case 'authorUpdates':
       return board('Author updates');
+    case 'todoToggle':
+      return { k: issuesWallMode(), parts: [title(issuesWallMode() === 'todo' ? '📌 GitHub issues' : '🔥 Back to your To Do'), key('E', 'Flip the board')] };
     case 'gitToggle':
       return { k: pullsWallMode(), parts: [title(pullsWallMode() === 'git' ? '🔀 Back to pull requests' : '🌿 Git repositories'), key('E', 'Flip the board')] };
     case 'services':
@@ -2748,7 +2789,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -2771,7 +2812,7 @@ function aimedAt(ndc: THREE.Vector2, slack = 0): { it: Interactable; near: boole
 
 /** The issue whose note on the issues board an aim lands on, or null (bare cork, the frame, anything else). */
 function noteUnder(aim: { it: Interactable; hit: THREE.Intersection } | null): GhIssue | null {
-  if (aim?.it.kind !== 'issues' || aim.hit.object !== office.boardMeshes.issues || !aim.hit.uv) return null;
+  if (aim?.it.kind !== 'issues' || issuesWallMode() !== 'issues' || aim.hit.object !== office.boardMeshes.issues || !aim.hit.uv) return null;
   const n = issuesTex.noteAt(aim.hit.uv);
   return n === undefined ? null : (store.issues.items.find((i) => i.number === n) ?? null);
 }
@@ -3295,7 +3336,7 @@ void whoami().then(() => {
 });
 
 // Debug handle for quick checks from the console / headless screenshots.
-(window as any).__office = { roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote };
+(window as any).__office = { issuesWall: () => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;
