@@ -3,14 +3,25 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeRepo } from '../shared/floors.js';
 import { ghKey } from '../shared/protocol.js';
-import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
+import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPause, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
 import { pullForBranch } from '../shared/pulls.js';
-import { BoardRequests, boardList } from './github-board.js';
+import { BoardRequests, QuotaPause, RATE_LIMIT, boardList, quotaMessage } from './github-board.js';
+import { GhSpend } from './gh-spend.js';
 
 const REFRESH_MS = 90_000;
+/** A floor that's a folder of checkouts asks GitHub for each board in the background at most this often. */
+const FOLDER_REFRESH_MS = 5 * 60_000;
+
+/** Which of a floor's boards a refresh asks GitHub for. */
+export type Board = 'issues' | 'pulls';
+const BOARDS: Board[] = ['issues', 'pulls'];
+
+/** What the office's own gh calls spend of the GraphQL quota (see gh-spend.ts). */
+export const ghSpend = new GhSpend();
 
 /** Turns gh's stderr into something a person standing at the board can act on. */
 function friendly(raw: string): string {
+  if (RATE_LIMIT.test(raw)) return quotaMessage({ why: /secondary|abuse/i.test(raw) ? 'secondary' : 'limit', until: boardRequests.resetHint() });
   if (/no git remotes found|none of the git remotes/i.test(raw)) return 'This project has no GitHub remote yet. Push it to GitHub (git remote add origin <url>) to fill the boards.';
   if (/not a git repository/i.test(raw)) return "This folder isn't a git repository";
   if (/auth login|not logged in|authentication/i.test(raw)) return "gh isn't logged in on the server — run `gh auth login`";
@@ -18,18 +29,28 @@ function friendly(raw: string): string {
   return raw;
 }
 
-export function gh(args: string[], cwd: string, timeout = 30_000): Promise<string> {
+/**
+ * Runs gh on the server. `source` says what for in the spend meter; unset, it's told from `args`.
+ * A failure keeps what gh printed (`stdout`): with `api -i`, the headers that say when the quota resets.
+ */
+export function gh(args: string[], cwd: string, timeout = 30_000, source?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('gh', args, { cwd, maxBuffer: 32 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
       if (err) {
         const msg = (stderr || err.message || '').trim().split('\n').slice(-2).join(' ');
-        reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'GitHub CLI (gh) is not installed on the server' : friendly(msg)));
-      } else resolve(stdout);
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(new Error('GitHub CLI (gh) is not installed on the server'));
+        ghSpend.record(args, stdout, source, RATE_LIMIT.test(msg));
+        reject(Object.assign(new Error(friendly(msg)), { stdout }));
+      } else {
+        ghSpend.record(args, stdout, source);
+        resolve(stdout);
+      }
     });
   });
 }
 
-const boardRequests = new BoardRequests(gh);
+/** Every floor's board and detail-window reads, under one rate-limit pause. */
+export const boardRequests = new BoardRequests((args, cwd, source, timeout) => gh(args, cwd, timeout, source));
 
 /** Check all states before offering to create another PR for an existing worker branch. */
 export async function findBranchPr(branch: string, cwd: string, query = gh) {
@@ -187,14 +208,20 @@ export class GitHub {
   private sources?: Promise<GhSource[]>;
   private repos = new Map<string, Promise<GhRepoInfo>>();
   private login?: Promise<string>;
-  private nextFolderRefresh = 0;
+  private nextFolderRefresh: Record<Board, number> = { issues: 0, pulls: 0 };
+  /** When each board last went to GitHub (a refresh the rate limit held back doesn't count). */
+  readonly asked: Record<Board, number> = { issues: 0, pulls: 0 };
+  /** What the spend meter calls this floor. */
+  private label: string;
 
   constructor(
     private dir: string,
     private onIssues: (s: GhState<GhIssue>) => void,
     private onPulls: (s: GhState<GhPull>) => void,
-    private boardQuery = boardRequests.run.bind(boardRequests),
-  ) {}
+    private requests: BoardRequests = boardRequests,
+  ) {
+    this.label = path.basename(dir);
+  }
 
   start() {
     void this.refresh();
@@ -205,12 +232,36 @@ export class GitHub {
     clearInterval(this.timer);
   }
 
-  async refresh(force = true) {
-    if (!force && this.checkouts.length > 1 && Date.now() < this.nextFolderRefresh) return;
+  /**
+   * Asks GitHub for `boards` again. A person's refresh (`force`) always does, unless GitHub has
+   * refused the quota outright; a background one waits while the quota is below the reserve, and on
+   * a floor of several checkouts asks for each board at most every five minutes.
+   */
+  async refresh(force = true, boards: Board[] = BOARDS) {
+    let want = boards;
+    if (!force) {
+      const paused = this.requests.paused(true);
+      if (paused) return this.hold(boards, paused);
+      if (this.checkouts.length > 1) want = boards.filter((b) => Date.now() >= this.nextFolderRefresh[b]);
+      if (!want.length) return;
+    }
     // Looked for again each time, so a repository cloned into the folder shows up on the boards.
     this.sources = undefined;
-    await Promise.all([this.refreshIssues(), this.refreshPulls()]);
-    this.nextFolderRefresh = Date.now() + 5 * 60_000;
+    await Promise.all(want.map((b) => (b === 'issues' ? this.refreshIssues() : this.refreshPulls())));
+    for (const b of want) this.nextFolderRefresh[b] = Date.now() + FOLDER_REFRESH_MS;
+  }
+
+  /** Background refreshes the rate limit holds back: the boards keep their cards and say until when. */
+  private hold(boards: Board[], paused: GhPause) {
+    const same = (p?: GhPause) => p?.until === paused.until && p.why === paused.why && p.remaining === paused.remaining;
+    if (boards.includes('issues') && !same(this.issues.paused)) {
+      this.issues = { ...this.issues, paused };
+      this.onIssues(this.issues);
+    }
+    if (boards.includes('pulls') && !same(this.pulls.paused)) {
+      this.pulls = { ...this.pulls, paused };
+      this.onPulls(this.pulls);
+    }
   }
 
   /**
@@ -250,7 +301,7 @@ export class GitHub {
     const key = src.repo?.toLowerCase() ?? '';
     let info = this.repos.get(key);
     if (!info) {
-      info = gh(['repo', 'view', '--json', 'nameWithOwner,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed'], src.dir).then((out) => {
+      info = this.requests.direct(['repo', 'view', '--json', 'nameWithOwner,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed'], src.dir, 'repo info').then((out) => {
         const r = JSON.parse(out);
         const methods = (['squash', 'merge', 'rebase'] as const).filter((m) => r[{ squash: 'squashMergeAllowed', merge: 'mergeCommitAllowed', rebase: 'rebaseMergeAllowed' }[m]]);
         return { nameWithOwner: String(r.nameWithOwner), methods: methods.length ? methods : ['squash', 'merge', 'rebase'] };
@@ -263,7 +314,7 @@ export class GitHub {
 
   /** Who gh is signed in as, which is who the office comments as. Asked once; '' when gh can't say. */
   viewer(): Promise<string> {
-    this.login ??= gh(['api', 'user', '--jq', '.login'], this.dir).then((out) => out.trim());
+    this.login ??= gh(['api', 'user', '--jq', '.login'], this.dir, undefined, 'detail windows').then((out) => out.trim());
     this.login.catch(() => (this.login = undefined));
     return this.login.catch(() => '');
   }
@@ -274,8 +325,8 @@ export class GitHub {
     const fields = 'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
     const [view, lines, info, viewer] = await Promise.all([
-      gh(['pr', 'view', String(n), '--json', fields], dir),
-      gh(['api', `repos/{owner}/{repo}/pulls/${n}/comments?per_page=100`, '--paginate', '--jq', jq], dir),
+      this.requests.direct(['pr', 'view', String(n), '--json', fields], dir, 'detail windows'),
+      gh(['api', `repos/{owner}/{repo}/pulls/${n}/comments?per_page=100`, '--paginate', '--jq', jq], dir, undefined, 'detail windows'),
       this.repoInfo(repo),
       this.viewer(),
     ]);
@@ -318,12 +369,12 @@ export class GitHub {
 
   /** The PR's unified diff, as `git diff` prints it. */
   async pullDiff(n: number, repo?: string): Promise<string> {
-    return gh(['pr', 'diff', String(n), '--color', 'never'], (await this.source(repo)).dir, 60_000);
+    return this.requests.direct(['pr', 'diff', String(n), '--color', 'never'], (await this.source(repo)).dir, 'detail windows', 60_000);
   }
 
   async issueDetail(n: number, repo?: string): Promise<GhIssueDetail> {
     const { dir } = await this.source(repo);
-    const [view, viewer] = await Promise.all([gh(['issue', 'view', String(n), '--json', 'number,state,body,comments'], dir), this.viewer()]);
+    const [view, viewer] = await Promise.all([this.requests.direct(['issue', 'view', String(n), '--json', 'number,state,body,comments'], dir, 'detail windows'), this.viewer()]);
     const i = JSON.parse(view);
     return { number: i.number, state: i.state, body: String(i.body ?? ''), comments: commentsOf(i.comments), viewer };
   }
@@ -416,30 +467,41 @@ export class GitHub {
    * Runs `list` in every checkout the boards cover and puts the results together, each item marked
    * with its repository on a floor of several. Fails only when every checkout does.
    */
-  private async fromAll<T extends GhWhere>(list: (dir: string) => Promise<T[]>, previous: T[]): Promise<{ items: T[]; error?: string }> {
+  private async fromAll<T extends GhWhere>(list: (dir: string) => Promise<T[]>, previous: T[]): Promise<{ items: T[]; error?: string; paused?: GhPause }> {
     const sources = await this.where();
     const results = await Promise.allSettled(sources.map((s) => list(s.dir)));
     const items: T[] = [];
     const errors: string[] = [];
+    // The rate limit holds every checkout back alike: said once, with the latest it lifts.
+    let paused: QuotaPause | undefined;
+    let failed = 0;
     results.forEach((r, i) => {
       const s = sources[i];
       if (r.status === 'rejected') {
-        errors.push(s.repo ? `${s.repo}: ${(r.reason as Error).message}` : (r.reason as Error).message);
+        failed++;
+        if (r.reason instanceof QuotaPause) {
+          if (!paused || r.reason.pause.until > paused.pause.until) paused = r.reason;
+        } else errors.push(s.repo ? `${s.repo}: ${(r.reason as Error).message}` : (r.reason as Error).message);
         items.push(...previous.filter((it) => it.repo === s.repo));
       } else for (const it of r.value) items.push(s.repo ? { ...it, repo: s.repo, repoDir: s.rel } : it);
     });
-    if (errors.length === sources.length) throw new Error(errors.join('; '));
-    return { items, error: errors.length ? errors.join('; ') : undefined };
+    const error = [paused?.message, ...errors].filter(Boolean).join('; ') || undefined;
+    if (failed === sources.length) throw Object.assign(new Error(error), { paused: paused?.pause });
+    return { items, error, paused: paused?.pause };
   }
+
+  /** Board pages go one at a time through the office-wide queue. */
+  private boardRead = (args: string[], cwd: string, source?: string) => this.requests.run(args, cwd, source);
 
   private async refreshIssues() {
     if (this.issues.loading) return;
+    this.asked.issues = Date.now();
     this.issues = { ...this.issues, loading: true };
     this.onIssues(this.issues);
     try {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
-      const { items, error } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
-        return (await boardList('issues', dir, this.boardQuery)).map((i: any) => ({
+      const { items, error, paused } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
+        return (await boardList('issues', dir, this.boardRead, `board issues ${this.label}`)).map((i: any) => ({
           number: i.number,
           title: i.title,
           state: i.state,
@@ -456,20 +518,21 @@ export class GitHub {
       // Highest priority first, so the board (and the notes that fit on the wall) lead with it. Within
       // a priority, open before closed and newest first, as gh lists them, across every repository.
       items.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels) || Number(a.state !== 'OPEN') - Number(b.state !== 'OPEN') || b.createdAt.localeCompare(a.createdAt));
-      this.issues = { items, fetchedAt: Date.now(), loading: false, error };
+      this.issues = { items, fetchedAt: Date.now(), loading: false, error, paused };
     } catch (err) {
-      this.issues = { ...this.issues, loading: false, error: (err as Error).message };
+      this.issues = { ...this.issues, loading: false, error: (err as Error).message, paused: (err as { paused?: GhPause }).paused };
     }
     this.onIssues(this.issues);
   }
 
   private async refreshPulls() {
     if (this.pulls.loading) return;
+    this.asked.pulls = Date.now();
     this.pulls = { ...this.pulls, loading: true };
     this.onPulls(this.pulls);
     try {
-      const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
-        const all = await boardList('pulls', dir, this.boardQuery);
+      const { items, error, paused } = await this.fromAll(async (dir): Promise<GhPull[]> => {
+        const all = await boardList('pulls', dir, this.boardRead, `board pulls ${this.label}`);
         return all.map((p: any) => ({
           number: p.number,
           title: p.title,
@@ -492,9 +555,9 @@ export class GitHub {
           closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
         }));
       }, this.pulls.items);
-      this.pulls = { items, fetchedAt: Date.now(), loading: false, error };
+      this.pulls = { items, fetchedAt: Date.now(), loading: false, error, paused };
     } catch (err) {
-      this.pulls = { ...this.pulls, loading: false, error: (err as Error).message };
+      this.pulls = { ...this.pulls, loading: false, error: (err as Error).message, paused: (err as { paused?: GhPause }).paused };
     }
     this.onPulls(this.pulls);
   }

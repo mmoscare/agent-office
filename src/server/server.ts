@@ -23,6 +23,9 @@ import { ImageProxy } from './decor.js';
 import { Ledger } from './usage.js';
 import { ledgerFacts } from './ledger-facts.js';
 import { ModelUsageLedger } from './model-usage.js';
+import { boardRequests, ghSpend } from './github.js';
+import { QuotaPause } from './github-board.js';
+import { spendLine } from './gh-spend.js';
 import { TimeCard, timeCardKey } from './timecard.js';
 import { TIMECARD_TICK_MS } from '../shared/timecard.js';
 import { ApiBalances } from './api-balances.js';
@@ -120,6 +123,8 @@ interface Client {
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
 /** The least time between two 'term.typing' notes from one person in one terminal. */
 const TYPING_GAP_MS = 500;
+/** How often the log says what the office spent of GitHub's GraphQL quota. */
+const GH_SPEND_LOG_MS = 15 * 60_000;
 
 function findPublicDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -613,6 +618,9 @@ export async function startServer(cfg: Config) {
   // Everyone's 🗂️ Indirect Time card: when they had the office open, per day.
   const timecard = new TimeCard(cfg.dataDir);
   const timecardTimer = setInterval(() => timecard.tick(), TIMECARD_TICK_MS);
+  // What the office's own gh calls spent of GitHub's hourly GraphQL quota, by source: a line in the
+  // log every quarter hour, and /api/gh/spend (see gh-spend.ts).
+  const ghSpendTimer = setInterval(() => console.log(`  ${spendLine(ghSpend.flush(), boardRequests.quota)}`), GH_SPEND_LOG_MS);
   // Pay-as-you-go balances for the sidebar's API balances panel; keys stay on this side.
   const apiBalances = new ApiBalances(cfg.dataDir);
 
@@ -1013,6 +1021,9 @@ export async function startServer(cfg: Config) {
         }
         return send(res, 200, { records: modelUsage.list(), waiting, saveError: modelUsage.saveError });
       }
+      if (p === '/api/gh/spend' && req.method === 'GET') {
+        return send(res, 200, { current: ghSpend.report(), history: ghSpend.history, quota: boardRequests.quota ?? null, paused: boardRequests.paused(true) ?? null });
+      }
       if (p === '/api/balances') {
         const admin = meOf(session.account?.id).admin;
         if (req.method === 'GET') return send(res, 200, await apiBalances.read(url.searchParams.get('refresh') === '1', admin));
@@ -1266,7 +1277,8 @@ export async function startServer(cfg: Config) {
             return;
           }
         } catch (err) {
-          return send(res, 502, { error: (err as Error).message });
+          // The windows wait for the rate limit to lift rather than offer to try again at once.
+          return send(res, 502, { error: (err as Error).message, ...(err instanceof QuotaPause ? { paused: err.pause } : {}) });
         }
         return send(res, 404, { error: 'Not found' });
       }
@@ -2465,6 +2477,7 @@ export async function startServer(cfg: Config) {
     clearInterval(heartbeat);
     clearInterval(resync);
     clearInterval(timecardTimer);
+    clearInterval(ghSpendTimer);
     clearTimeout(floorsTimer);
     arcade.flush();
     upgrader.stop();

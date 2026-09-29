@@ -1,7 +1,7 @@
 import type { GhPause } from '../shared/protocol.js';
 
 /** Board reads share the server's gh login, so they also share its quota and concurrency limit. */
-export type Query = (args: string[], cwd: string, source?: string) => Promise<string>;
+export type Query = (args: string[], cwd: string, source?: string, timeout?: number) => Promise<string>;
 export const RATE_LIMIT = /rate limit|secondary rate|abuse detection/i;
 const SECONDARY = /secondary|abuse/i;
 
@@ -100,8 +100,8 @@ export class BoardRequests {
    * A read a person is waiting on (the PR and issue windows): under the same pause as the boards,
    * but not queued behind a floor's worth of board pages.
    */
-  direct(args: string[], cwd: string, source?: string): Promise<string> {
-    return this.attempt(args, cwd, source);
+  direct(args: string[], cwd: string, source?: string, timeout?: number): Promise<string> {
+    return this.attempt(args, cwd, source, timeout);
   }
 
   /**
@@ -116,16 +116,23 @@ export class BoardRequests {
     return undefined;
   }
 
+  /** When the quota is known to come back, for messages about a refusal outside the board queue. */
+  resetHint(): number | undefined {
+    const now = this.now();
+    if (now < this.retryAt) return this.retryAt;
+    return this.quota && this.quota.resetAt > now ? this.quota.resetAt : undefined;
+  }
+
   /** A newer reading of the quota, from a response's headers or its rateLimit field. */
   note(q?: GhQuota) {
     if (q) this.quota = q;
   }
 
-  private async attempt(args: string[], cwd: string, source?: string): Promise<string> {
+  private async attempt(args: string[], cwd: string, source?: string, timeout?: number): Promise<string> {
     const pause = this.paused();
     if (pause) throw new QuotaPause(pause, this.now());
     try {
-      const { headers, body } = splitHeaders(await this.query(args, cwd, source));
+      const { headers, body } = splitHeaders(await this.query(args, cwd, source, timeout));
       this.note(headerQuota(headers));
       this.note(bodyQuota(body));
       this.failures = 0;

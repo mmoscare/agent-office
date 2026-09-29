@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { ghRef, type ChangesState, FloorInfo, PeerInfo, ProjectInfo, type QueueState, ServerMsg, WorkerInfo } from '../shared/protocol.js';
+import { ghRef, type ChangesState, FloorInfo, type GhPause, PeerInfo, ProjectInfo, type QueueState, ServerMsg, WorkerInfo } from '../shared/protocol.js';
 import type { PlansState } from '../shared/plans.js';
 import type { MailBrief } from '../shared/mail.js';
 import { isBusy } from '../shared/status.js';
@@ -12,7 +12,8 @@ import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
 import { configuredProvider } from './agents.js';
 import { WorkerManager, type HookEnv } from './workers.js';
-import { GitHub, MergeWatch } from './github.js';
+import { GitHub, MergeWatch, type Board } from './github.js';
+import { boardsDue, TICK_MS, type FloorWatch } from './board-cadence.js';
 import { TaskQueue } from './queue.js';
 import { Changes } from './changes.js';
 import { WorkspaceChanges } from './workspace-changes.js';
@@ -63,9 +64,6 @@ export interface FloorContext {
   };
 }
 
-/** Boards on a floor nobody is on, with nothing running, are asked GitHub about this seldom. */
-const IDLE_REFRESH_MS = 10 * 60_000;
-const REFRESH_MS = 90_000;
 
 /** What `git` says about a checkout: its name, branch and origin for the top bar. */
 export function projectInfo(dir: string, name: string, agentCmd: string, agentArgs: string[]): ProjectInfo {
@@ -116,6 +114,8 @@ export class Floor {
   /** Office branches with work no PR carries, for the PR board and the queue's warnings (see unshipped.ts). */
   readonly unshipped: UnshippedWatch;
   private timer: NodeJS.Timeout;
+  /** Looks at the boards again as soon as GitHub's rate limit lifts, rather than at the next tick. */
+  private resume?: { at: number; timer: NodeJS.Timeout };
   /** Pull requests merging, to ring the gong for. */
   private merges = new MergeWatch();
 
@@ -176,11 +176,16 @@ export class Floor {
 
     this.github = new GitHub(
       def.dir,
-      (state) => ctx.emit(this, { t: 'gh.issues', state }),
+      (state) => {
+        ctx.emit(this, { t: 'gh.issues', state });
+        this.resumeAfter(state.paused);
+      },
       (state) => {
         ctx.emit(this, { t: 'gh.pulls', state });
+        this.resumeAfter(state.paused);
         this.queue?.onPulls(state.items);
-        if (state.loading || state.error) return;
+        // A pause only says the list is as it was: nothing new to act on.
+        if (state.loading || state.error || state.paused) return;
         this.workers.onPulls(state.items);
         void this.unshipped?.scan();
         for (const p of this.merges.look(state.items)) {
@@ -284,11 +289,29 @@ export class Floor {
     // Once the workers are back: tasks the last office left running show whether their work was left behind.
     void this.ready.then(() => this.unshipped.scan(true));
 
-    void this.github.refresh();
-    // A floor with people on it, or work under way, keeps its boards fresh; the others check in now and then.
-    this.timer = setInterval(() => {
-      if (this.active() || Date.now() - this.github.issues.fetchedAt > IDLE_REFRESH_MS) void this.github.refresh(false);
-    }, REFRESH_MS);
+    // Pull requests at once, for the queue, the Unshipped list and the gong's first look; issues when someone walks in.
+    void this.github.refresh(false, ['pulls']);
+    // Boards are kept as fresh as whoever's on the floor needs them (see board-cadence.ts).
+    this.timer = setInterval(() => this.tick(), TICK_MS);
+  }
+
+  /** Background refreshes of whichever boards are due; `resuming` also retries those the rate limit held back. */
+  private tick(resuming = false) {
+    const held = resuming ? (['issues', 'pulls'] as Board[]).filter((b) => this.github[b].paused) : [];
+    const due = boardsDue(this.watch(), this.github.asked, Date.now(), held);
+    if (due.length) void this.github.refresh(false, due);
+  }
+
+  /** Boards the rate limit held back look again a second after it lifts. */
+  private resumeAfter(paused?: GhPause) {
+    if (!paused || paused.until <= Date.now() || this.resume?.at === paused.until) return;
+    if (this.resume) clearTimeout(this.resume.timer);
+    const timer = setTimeout(() => {
+      this.resume = undefined;
+      this.tick(true);
+    }, paused.until - Date.now() + 1000);
+    timer.unref?.();
+    this.resume = { at: paused.until, timer };
   }
 
   /** Pull request `n` (of `repo`, on a floor of several) merged (`by` someone, from the PR window): the gong rings, once per PR. */
@@ -298,11 +321,17 @@ export class Floor {
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */
   arrived() {
-    if (Date.now() - Math.max(this.github.issues.fetchedAt, this.github.pulls.fetchedAt) > REFRESH_MS) void this.github.refresh(false);
+    const stale = (['issues', 'pulls'] as Board[]).filter((b) => Date.now() - this.github[b].fetchedAt > TICK_MS);
+    if (stale.length) void this.github.refresh(false, stale);
   }
 
-  private active(): boolean {
-    return this.ctx.people(this) > 0 || this.workers.list().some((w) => isBusy(w.status)) || this.queue.state().tasks.some((t) => t.status !== 'done') || this.meetings.state().current?.status === 'running';
+  /** Who the boards are kept fresh for. */
+  private watch(): FloorWatch {
+    return {
+      people: this.ctx.people(this) > 0,
+      busy: this.workers.list().some((w) => isBusy(w.status)) || this.queue.state().tasks.some((t) => t.status !== 'done') || this.meetings.state().current?.status === 'running',
+      checkouts: Math.max(1, this.github.checkouts.length),
+    };
   }
 
   info(): FloorInfo {
@@ -328,6 +357,7 @@ export class Floor {
    */
   shutdown(keep = false): Promise<void> {
     clearInterval(this.timer);
+    if (this.resume) clearTimeout(this.resume.timer);
     this.dog.stop();
     this.github.stop();
     this.queue.shutdown();
