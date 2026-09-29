@@ -22,6 +22,7 @@ import { findBranchPr, gh } from './github.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { ServiceOwner } from './services.js';
 import { TaskNamer, fallbackTask, withGuessedKind } from './tasks.js';
+import { nextAsk, savedAsk } from './asks.js';
 import { addUsage, newTracker, restoreTracker, scanTracker, trackerUsage, zeroUsage, type Ledger, type UsageTracker } from './usage.js';
 import { PtyHost, SCROLLBACK, type Adopted, type Pty } from './ptys.js';
 import { codexHookArgs, normalizeCodexHook, writeCodexHook } from './codex.js';
@@ -932,6 +933,7 @@ export class WorkerManager {
     const clean = withoutWorkerHandoff(prompt).replace(/\s+/g, ' ').trim();
     // Bare slash commands (/model, /compact) and repeats aren't new work.
     if (!clean || /^\/\S+$/.test(clean) || w.prompts.at(-1) === clean) return;
+    w.info.ask = nextAsk(w.info.ask, prompt);
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
     if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
@@ -1600,6 +1602,7 @@ process.stdin.on('end', () => {
       sessionId: info.sessionId,
       activity: info.activity,
       task: info.task,
+      ask: info.ask,
       pr: info.pr,
       pullWork: info.pullWork,
       meeting: info.meeting,
@@ -1653,6 +1656,7 @@ process.stdin.on('end', () => {
           sessionId: s.sessionId,
           activity: s.activity,
           task: validTask(s.task, s.prompt, s.worktree?.branch),
+          ask: s.kind === 'shell' ? undefined : savedAsk(s.ask, s.prompt),
           pullWork: s.kind !== 'shell' && readPullWork(s.pullWork) && Number.isFinite(s.pullWork?.assignedAt)
             ? { ...readPullWork(s.pullWork)!, assignedAt: s.pullWork!.assignedAt } : undefined,
           pr: s.pr && typeof s.pr.number === 'number' && typeof s.pr.url === 'string' ? { number: s.pr.number, url: s.pr.url, state: typeof s.pr.state === 'string' ? s.pr.state : undefined } : undefined,

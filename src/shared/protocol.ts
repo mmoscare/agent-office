@@ -62,6 +62,13 @@ export interface WorkerTask {
   kind?: WorkKind;
 }
 
+/** What a worker was asked, without the office's standing notes: for the brief atop its terminal. */
+export interface WorkerAsk {
+  first: string;
+  /** Its most recent request, when that is a new one (short replies such as "yes" keep the one before). */
+  latest?: string;
+}
+
 /** A branch's PR, including completed PRs retained for its handoff/history. */
 export interface PullRequestRef {
   number: number;
@@ -139,6 +146,8 @@ export interface WorkerInfo {
   action?: WorkerAction;
   /** Written by a small model from its prompts and recent tool calls (see server/tasks.ts). */
   task?: WorkerTask;
+  /** What it was asked (agents only; see server/asks.ts). */
+  ask?: WorkerAsk;
   /** Reported session tokens and cost, when the provider supplies them (agents only). */
   usage?: Usage;
   /** Who last typed into its terminal (or sent it a prompt), and when. */

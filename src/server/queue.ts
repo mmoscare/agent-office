@@ -6,7 +6,7 @@ import { normalizeRepo, sameRepo } from '../shared/floors.js';
 import { ghRef, isAgentEffort, isAgentProvider, isClaudeModel, type AgentEffort, type AgentProvider, type GhPull, type QueueState, type QueueTask, type WorkerInfo, type WorkerStatus } from '../shared/protocol.js';
 import { DESK_BY_ID, SEATS, nextFreeSeat } from '../shared/layout.js';
 import { isValidOpenCodeModel, validateWorkerEffort, validateWorkerModel } from './agents.js';
-import { CHECKPOINT_NOTE } from './handoff.js';
+import { CHECKPOINT_NOTE, WORKTREE_NOTE } from './handoff.js';
 import { RESTART_ERROR } from '../shared/task-status.js';
 
 /** What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it. */
@@ -48,8 +48,6 @@ const PUMP_MS = 10_000;
 const BUSY = new Set<WorkerStatus>(['starting', 'idle', 'working', 'needs_input', 'paused', 'interrupted']);
 /** A worker in one of these states is finished with its task (and can make room for the next one). */
 const FINISHED = new Set<WorkerStatus>(['done', 'exited', 'offline']);
-
-const WORKTREE_NOTE = "\n\nYou're in your own git worktree, on a fresh branch made for this task. Commit there, push it, and open the pull request from it.";
 
 /**
  * The 📋 task queue. Tasks (GitHub issues or free text) wait in order; whenever a desk is free and
