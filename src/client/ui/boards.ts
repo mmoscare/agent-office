@@ -12,6 +12,7 @@ import type { MeetingPreset } from './meeting';
 import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './pr-board-model';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows, submitterChip } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
+import { mountTodoBoard, type TodoBoard } from './todos';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
@@ -230,7 +231,10 @@ function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick:
   );
 }
 
-export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions) {
+/** Which side of the issues board shows: your own 🔥 To Do (the default), or the floor's GitHub issues. */
+export type IssuesView = 'todo' | 'issues';
+
+export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions, opts: { view?: IssuesView } = {}) {
   const body = h('div.body');
   const warning = h('div.board-error', { hidden: true });
   const status = h('span.board-status');
@@ -238,18 +242,52 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const git = kind === 'pulls' && actions.gitBoard ? h('button.btn', { title: 'Turn the board over to the Git repositories on this floor', onclick: () => { modal.close(); actions.gitBoard?.(); } }, '🌿 Git') : null;
   const tally = h('div.prb-tally');
+  // The issues board opens on your own To Do board, which follows you onto every floor; 📌 Issues turns it over.
+  let view: IssuesView = kind === 'issues' ? (opts.view ?? 'todo') : 'issues';
+  let todo: TodoBoard | undefined;
+  const title = h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests');
+  const tab = (to: IssuesView, label: string, hint: string) => h('button.btn', { type: 'button', 'aria-pressed': 'false', 'data-view': to, title: hint, onclick: () => show(to) }, label);
+  const tabs = kind === 'issues' ? h('div.board-tabs', { role: 'group', 'aria-label': 'Board' }, tab('todo', '🔥 To Do', 'Your own to-do list: the same on every floor'), tab('issues', '📌 Issues', "This floor's GitHub issues")) : null;
   const el = h(
     kind === 'pulls' ? 'div.modal.board.pr-board' : 'div.modal.board',
     { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' },
-    h('header', {}, h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests'), status, git, refresh, close),
+    h('header', {}, title, tabs, status, git, refresh, close),
     // GitHub trouble shows in the PR board's tally strip, and in this banner on the issues board.
     kind === 'pulls' ? tally : warning,
     body,
   );
   if (kind === 'pulls') body.classList.add('prb-body');
-  const view: PullsView = { doneOpen: true, doneAll: false };
+  const pullsView: PullsView = { doneOpen: true, doneAll: false };
+
+  /** Turns the issues board over to `to`. */
+  const show = (to: IssuesView) => {
+    const was = view;
+    view = to;
+    render();
+    if (to === 'todo' && was !== 'todo') todo?.focus();
+  };
 
   const render = () => {
+    if (view === 'todo') {
+      todo ??= mountTodoBoard(net);
+      title.textContent = '🔥 To Do';
+      el.setAttribute('aria-label', 'To Do board');
+      tabs?.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+      status.hidden = refresh.hidden = warning.hidden = true;
+      body.classList.add('todo-body');
+      if (body.firstChild !== todo.el || body.childNodes.length !== 1) body.replaceChildren(todo.el);
+      return;
+    }
+    if (kind === 'issues') {
+      title.textContent = '📌 Issues';
+      el.setAttribute('aria-label', 'Issues board');
+      tabs?.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+      status.hidden = refresh.hidden = false;
+      if (body.classList.contains('todo-body')) {
+        body.classList.remove('todo-body');
+        body.replaceChildren();
+      }
+    }
     const st = kind === 'issues' ? store.issues : store.pulls;
     status.textContent = st.loading ? 'Refreshing…' : st.fetchedAt ? `Updated ${timeAgo(st.fetchedAt)}` : '';
     if (kind === 'pulls') {
@@ -263,7 +301,7 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
       const focusButton = focusRow && focused !== focusRow ? [...focusRow.querySelectorAll<HTMLElement>('button')].indexOf(focused!) : -1;
       const focusSection = focused?.closest('section')?.id;
       const { scrollTop } = body;
-      renderPulls(body, tally, view, net, actions, render);
+      renderPulls(body, tally, pullsView, net, actions, render);
       body.scrollTop = scrollTop;
       if (focused) {
         const same = focusId ? el.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focusId)}"]`) : null;
@@ -310,9 +348,11 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     doing: kind === 'issues' ? '📋 at the issues board' : '🔀 at the PR board',
     onClose: () => {
       unsubs.forEach((u) => u());
+      todo?.destroy();
       clearInterval(timer);
     },
   });
   close.addEventListener('click', () => modal.close());
   render();
+  if (view === 'todo') todo?.focus();
 }

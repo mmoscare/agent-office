@@ -14,6 +14,7 @@ import type { WorkKind } from './work-kind.js';
 import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
+import type { TodoAction, TodoItem } from './todos.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -1221,7 +1222,9 @@ export type ClientMsg =
   | { t: 'dog.pet' }
   /** Name the dog on your floor ('' gives it back its first name). */
   | { t: 'dog.name'; name: string }
-  | { t: 'ping'; at: number };
+  | { t: 'ping'; at: number }
+  /** A change to your own 🔥 To Do board (see shared/todos.ts). */
+  | { t: 'todo'; change: TodoAction };
 
 export type ServerMsg =
   | ({
@@ -1348,5 +1351,7 @@ export type ServerMsg =
   | { t: 'accounts.invited'; invite?: AccountInvite; error?: string }
   /** Your role changed. */
   | { t: 'me'; me: Me }
+  /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
+  | { t: 'todos'; items: TodoItem[] }
   /** `now` is the office's clock as it answered, which the jukebox keeps time by. */
   | { t: 'pong'; at: number; now: number };

@@ -40,6 +40,7 @@ import { Themes } from './theme.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
+import { Todos } from './todos.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
 import { taskStatus, unshippedText } from '../shared/task-status.js';
@@ -49,6 +50,7 @@ import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../s
 import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
+import { checkTodoAction } from '../shared/todos.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
 import { MAX_FLOORS } from '../shared/floors.js';
@@ -209,6 +211,10 @@ export async function startServer(cfg: Config) {
     for (const f of floors.values()) cabinetChanged(f);
     if (first) toastFloor(floors.get(first.floor), `🏆 ${first.score.name} set a new arcade high score: ${scoreText(first.score.score)}`);
   });
+  // Everyone's own 🔥 To Do board: one list each for the whole building, so it follows them onto every floor.
+  const todos = new Todos(cfg.dataDir);
+  /** Whose To Do board a connection sees: their account's, or the shared password's one list. */
+  const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
   /** What the office is called where it has no project of its own to go by (webhooks, invites). */
   const officeName = cfg.project ? path.basename(cfg.project) : 'the office';
   const modelCommand = configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentCmd : 'opencode';
@@ -1398,6 +1404,7 @@ export async function startServer(cfg: Config) {
       ...(onRoof ? roofView() : floorView(floor)),
     });
     screensOf(client, floor);
+    sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -2295,6 +2302,15 @@ export async function startServer(cfg: Config) {
       case 'cabinet.leave':
         stopPlaying(c);
         break;
+      case 'todo': {
+        const change = checkTodoAction(msg.change);
+        const owner = todoOwner(c);
+        const items = change && todos.apply(owner, change);
+        // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
+        if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
+        if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
       case 'cabinet.frame': {
         const floor = floorOf(c);
         const frame = checkFrame(msg.frame);

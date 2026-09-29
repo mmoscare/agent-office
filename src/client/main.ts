@@ -50,6 +50,7 @@ import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
+import { activeTodos } from './ui/todos';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { authorUpdates, onAuthorUpdates, openAuthorUpdates } from './ui/author-updates';
@@ -2880,7 +2881,26 @@ const noMedia = () => (window.isSecureContext ? undefined : 'Voice and screen sh
 const hud = mountHud(
   [
     { id: 'terminal', icon: '>_', label: 'Terminal', section: 'Open', key: 'Ctrl+`', status: () => true, title: () => 'Open a standalone terminal anywhere (Ctrl+`); PowerShell on Windows', run: () => openConsole(net) },
-    { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions()) },
+    // Your own To Do board, up on the top bar on every floor, with what you're on right now.
+    {
+      id: 'todo',
+      icon: '🔥',
+      label: 'To Do',
+      section: 'Open',
+      status: () => true,
+      chip: () => {
+        const now = activeTodos()[0]?.text;
+        return now ? (now.length > 32 ? `${now.slice(0, 31)}…` : now) : 'To Do';
+      },
+      count: () => activeTodos().length,
+      tone: () => (activeTodos().length ? 'danger' : undefined),
+      title: () => {
+        const active = activeTodos();
+        return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'Your own to-do list, the same on every floor';
+      },
+      run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
+    },
+    { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions(), { view: 'issues' }) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
     { id: 'manual', icon: '📘', label: 'Manual', section: 'Office', title: () => 'The Office Manual: how work gets to GitHub and back, what to do after a merge, and more', run: () => openManual() },
     { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
