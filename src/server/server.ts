@@ -317,6 +317,12 @@ export async function startServer(cfg: Config) {
     if (error) sendTo(c, { t: 'toast', text: error, level: 'warn' });
   };
 
+  /**
+   * Who last typed or sent a prompt to each worker, and whether they're an admin: the VP's standing
+   * duty is the owner's approval for merges, so office-vp can only turn it on for an admin.
+   */
+  const askers = new Map<string, { name: string; admin: boolean }>();
+
   // --- Loopback-only endpoint for authenticated agent events -------------------------------
   let webhook!: Webhook;
   const hookServer = http.createServer(async (req, res) => {
@@ -571,9 +577,11 @@ export async function startServer(cfg: Config) {
         return send(res, 400, { error: 'Send JSON: {"action": "sweep"}' });
       }
     }
-    // Whoever last typed to the VP is who asked him.
+    // Whoever last typed to the VP is who asked him; an admin only if the office saw that person, signed in as one, do it.
     const asked = floor.workers.get(agent.id)?.lastInput?.by;
-    const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name });
+    const asker = askers.get(agent.id);
+    const admin = !!asked && asker?.name === asked && asker.admin;
+    const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name, admin });
     if (req.method === 'POST' && r.status === 200 && body?.action === 'duty') toastFloor(floor, body.on === true ? `👔 The ${agent.name} is on duty: he sweeps the PRs by himself` : `👔 The ${agent.name} is off duty`);
     return send(res, r.status, r.body);
   };
@@ -1429,6 +1437,8 @@ export async function startServer(cfg: Config) {
     const a = accounts.get(accountId);
     return a ? { account: { name: a.name, role: a.role }, admin: a.role === 'admin' } : { admin: !accountId };
   };
+  /** Remembers who just typed to a worker, and whether they're an admin (see `askers`). */
+  const noteAsker = (workerId: string, c: Client, name: string) => askers.set(workerId, { name, admin: meOf(c.accountId).admin });
   /** Still signed in: the account wasn't revoked, and the shared password wasn't switched off. */
   const stillIn = (c: Client) => (c.accountId ? !!accounts.get(c.accountId) : accounts.sharedPassword);
   const signOut = (c: Client) => {
@@ -1997,6 +2007,7 @@ export async function startServer(cfg: Config) {
         const w = worker(msg.workerId);
         const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who, msg.pullWork ?? (msg.issue || msg.plan ? null : msg.pullWork)) : 'No such worker';
         warn(c, err);
+        if (w && !err) noteAsker(w.wid, c, who);
         const issue = w?.info.kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (w && !err && issue) {
           toastFloor(w.floor, `${who} handed issue #${issue} to ${w.info.name}`);
@@ -2011,7 +2022,10 @@ export async function startServer(cfg: Config) {
         if (!floor) break;
         const r = floor.workers.station(str(msg.deskId, 32), who, str(msg.prompt, 20000));
         if (typeof r === 'string') warn(c, r);
-        else if (r.hired) toastFloor(floor, `${who} asked the ${r.info.name} something`);
+        else {
+          noteAsker(r.info.id, c, who);
+          if (r.hired) toastFloor(floor, `${who} asked the ${r.info.name} something`);
+        }
         break;
       }
       case 'worker.pr': {
@@ -2033,7 +2047,10 @@ export async function startServer(cfg: Config) {
         break;
       }
       case 'term.input':
-        if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.write(msg.workerId, str(msg.data, 64 * 1024), who);
+        if (c.attached.has(msg.workerId)) {
+          workerFloor(msg.workerId)?.workers.write(msg.workerId, str(msg.data, 64 * 1024), who);
+          noteAsker(msg.workerId, c, who);
+        }
         break;
       case 'term.typing': {
         // Everyone else in that terminal sees who's typing. A typist says so about once a second.
@@ -2394,7 +2411,10 @@ export async function startServer(cfg: Config) {
         }
         const r = floor.workers.station(botDesk('vp'), who, BOTS.vp.deployPrompt);
         if (typeof r === 'string') warn(c, r);
-        else toastFloor(floor, `👔 ${who} deployed the ${BOTS.vp.name} on this floor`);
+        else {
+          noteAsker(r.info.id, c, who);
+          toastFloor(floor, `👔 ${who} deployed the ${BOTS.vp.name} on this floor`);
+        }
         break;
       }
       case 'vp.duty': {

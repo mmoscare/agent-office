@@ -329,7 +329,11 @@ export class VpDesk {
       if (s.action === 'escalate') {
         const text = `VP needs you: ${w.seat} ${s.detail}. It's asking: ${w.task ?? 'see its terminal'}. Open its terminal (walk up to it and press O) and approve or deny it; the VP never approves prompts.`;
         const err = this.floor.plan(text);
-        if (err) this.log(job, `⚠️ Couldn't file "${text}": ${err}`);
+        if (err) {
+          // The owner hasn't heard: not recorded, so the next duty round tries again.
+          this.log(job, `⚠️ Couldn't file "${text}": ${err}`);
+          continue;
+        }
         out.owner.push(text);
       } else {
         const err = s.action === 'wake' ? this.wake(w.id, s.say ?? 'continue', BOTS.vp.name) : this.nudge(w.id, s.say ?? 'continue', BOTS.vp.name);
@@ -443,6 +447,8 @@ export interface VpRequest {
   body?: Record<string, unknown>;
   /** Who's asking: the VP agent, and the person who last typed to him. */
   by: string;
+  /** Whether that person is one of the office's admins, as the office saw them sign in. */
+  admin?: boolean;
 }
 
 const str = (v: unknown, max = 200) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -492,6 +498,8 @@ export async function handleVp(desk: VpDesk, req: VpRequest): Promise<{ status: 
       const s = desk.store.state;
       const keys = Object.keys(s.fixes).filter((k) => k.endsWith(`#${n}`) && (!repo || k === prKey(repo, n)));
       if (!keys.length) return { status: 404, body: { error: `The VP has no fix on record for #${n}` } };
+      // Two repositories on the floor with a #n: only the one named is forgotten.
+      if (keys.length > 1) return { status: 400, body: { error: `Several repositories have a fix on record for #${n}: say which with --repo (${keys.map((k) => s.fixes[k].repo).join(', ')})` } };
       for (const k of keys) {
         delete s.fixes[k];
         for (const e of Object.keys(s.escalated)) if (e.startsWith(`${k}:`)) delete s.escalated[e];
@@ -511,6 +519,8 @@ export async function handleVp(desk: VpDesk, req: VpRequest): Promise<{ status: 
     }
     case 'duty': {
       const on = b.on === true;
+      // Duty is standing approval for merges: only an admin gives it. Anyone may take it back.
+      if (on && !req.admin) return { status: 403, body: { error: 'Only an admin can put the VP on duty: the last person who asked him isn\'t one. An admin can tick On duty in the floor menu, or ask him themselves.' } };
       const every = b.everyMin === undefined ? undefined : Number(b.everyMin) * 60_000;
       const err = desk.setDuty(on, req.by, every);
       return err ? { status: 400, body: { error: err } } : { status: 200, body: { ok: true, duty: desk.duty } };

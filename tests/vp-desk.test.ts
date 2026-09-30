@@ -88,6 +88,57 @@ test('on duty: a worker stopped by a restart is woken and told "continue"; a per
   assert.equal(did.plans.length, 1);
 });
 
+test('office-vp duty on needs an admin to have asked; anyone may turn it off', async (t) => {
+  const { f } = floor(t, []);
+  const desk = new VpDesk(f);
+  const duty = (on: boolean, admin: boolean) => handleVp(desk, { method: 'POST', query: new URLSearchParams(), body: { action: 'duty', on }, by: 'VP, asked by Sam', admin });
+  const refused = await duty(true, false);
+  assert.equal(refused.status, 403);
+  assert.match(JSON.stringify(refused.body), /Only an admin can put the VP on duty/);
+  assert.equal(desk.duty, undefined, 'nothing changed');
+  assert.equal((await duty(true, true)).status, 200);
+  assert.equal(desk.duty?.on, true);
+  assert.equal((await duty(false, false)).status, 200);
+  assert.equal(desk.duty?.on, false);
+});
+
+test('office-vp retry: a PR number two repositories share needs --repo', async (t) => {
+  const { f } = floor(t, []);
+  const desk = new VpDesk(f);
+  const fix = (repo: string) => ({ pr: 12, repo, taskId: `t-${repo}`, kind: 'conflict' as const, details: ['conflict:a'], reason: 'conflicts', head: 'x', at: 0, attempt: 1 });
+  desk.store.state.fixes['me/a#12'] = fix('me/a');
+  desk.store.state.fixes['me/b#12'] = fix('me/b');
+  const retry = (repo?: string) => handleVp(desk, { method: 'POST', query: new URLSearchParams(), body: { action: 'retry', pr: 12, ...(repo ? { repo } : {}) }, by: 'VP' });
+  const ambiguous = await retry();
+  assert.equal(ambiguous.status, 400);
+  assert.match(JSON.stringify(ambiguous.body), /say which with --repo \(me\/a, me\/b\)/);
+  assert.deepEqual(Object.keys(desk.store.state.fixes).sort(), ['me/a#12', 'me/b#12'], 'nothing forgotten');
+  assert.equal((await retry('me/b')).status, 200);
+  assert.deepEqual(Object.keys(desk.store.state.fixes), ['me/a#12']);
+});
+
+test('a permission prompt whose To Do Next item could not be filed is tried again next round', async (t) => {
+  const byte = worker({ id: 'byt', name: 'Byte', deskId: 'desk-5', status: 'needs_input', activity: 'Wants permission: Bash(git push --force)', waitingSince: 90 * MIN });
+  const { f, did } = floor(t, [byte]);
+  let full = true;
+  f.plan = (text) => {
+    if (full) return 'The To Do Next board is full';
+    did.plans.push(text);
+    return undefined;
+  };
+  const desk = new VpDesk(f);
+  const job = { id: 'j', kind: 'sweep', what: 'duty', by: 'duty', startedAt: 0, log: [] as string[], done: Promise.resolve() };
+  const first = await desk.helpWorkers(job as never, true);
+  assert.deepEqual(first.owner, []);
+  assert.match(job.log.join('\n'), /Couldn't file .*board is full/);
+  full = false;
+  const second = await desk.helpWorkers(job as never, true);
+  assert.equal(second.owner.length, 1, 'filed on the next round');
+  assert.equal(did.plans.length, 1);
+  await desk.helpWorkers(job as never, true);
+  assert.equal(did.plans.length, 1, 'and only once');
+});
+
 test('office-vp nudge and wake: never into an open prompt; wake resumes an asleep worker', async (t) => {
   const pixel = worker({ id: 'pix', status: 'exited' });
   const byte = worker({ id: 'byt', name: 'Byte', status: 'needs_input' });

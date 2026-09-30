@@ -401,7 +401,8 @@ async function sweepPull(deps: SweepDeps, opts: SweepOptions, r: FloorRepo, base
     line(p, 'waiting', 'its head moved while the sweep looked: next sweep');
     return false;
   }
-  const baseSha = (await git(['rev-parse', `refs/remotes/origin/${base}`], r.dir, 10_000)).out;
+  // The base as of this look; it moves on when a PR before this one merges (see below).
+  let baseSha = (await git(['rev-parse', `refs/remotes/origin/${base}`], r.dir, 10_000)).out;
   const problems: Problem[] = [];
   const merged = await mergeTree(r.dir, baseSha, p.headSha);
   if ('error' in merged) {
@@ -476,7 +477,9 @@ async function sweepPull(deps: SweepDeps, opts: SweepOptions, r: FloorRepo, base
         line(p, 'waiting', `${base} kept moving while it was verified: next sweep`);
         return false;
       }
-      deps.log(`↻ ${base} moved during the verify of #${p.number}: verifying again`);
+      deps.log(`↻ ${base} moved during the verify of #${p.number}: verifying again on ${baseNow.slice(0, 7)}`);
+      // Verified again on the base as it is now, not the one it had moved on from.
+      baseSha = baseNow;
       record = undefined;
       continue;
     }
@@ -534,11 +537,15 @@ async function needsFix(deps: SweepDeps, opts: SweepOptions, r: FloorRepo, base:
       const text = `VP needs you: PR #${p.number} "${p.title}" in ${r.repo} (${p.url}) still has ${problem.short} after ${by}. Options: fix it yourself or hand it to a worker; close the PR; or tell the VP to try once more (office-vp retry ${p.number}).`;
       if (!state.escalated[ekey] && !opts.dryRun) {
         const err = deps.escalate(text);
-        if (err) res.errors.push(`Couldn't file "${text}": ${err}`);
-        state.escalated[ekey] = now();
-        deps.store.save();
-        res.escalations.push(text);
-        await postComment(deps.gh, r.dir, r.repo, p.number, `<!-- ${ESCALATE_MARKER} -->\n🙋 The VP handed this PR to the owner: it still has ${problem.short} after ${by}.\n\n${problem.lines.join('\n')}`);
+        if (err) {
+          // The owner hasn't heard: not recorded, so the next sweep tries again.
+          res.errors.push(`Couldn't file "${text}": ${err}`);
+        } else {
+          state.escalated[ekey] = now();
+          deps.store.save();
+          res.escalations.push(text);
+          await postComment(deps.gh, r.dir, r.repo, p.number, `<!-- ${ESCALATE_MARKER} -->\n🙋 The VP handed this PR to the owner: it still has ${problem.short} after ${by}.\n\n${problem.lines.join('\n')}`);
+        }
       }
       line(p, 'owner', `still ${problem.short} after ${by}: the owner decides`, { worker: who });
       return false;

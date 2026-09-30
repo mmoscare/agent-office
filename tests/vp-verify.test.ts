@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { agentOfficeRecipe, detectRecipe, exclusive, relatedTests, runLow, tapFailures, verifySlot } from '../src/server/vp-verify.js';
+import { agentOfficeRecipe, detectRecipe, exclusive, relatedTests, runLow, tapFailures, verifyMerge, verifySlot } from '../src/server/vp-verify.js';
 import { codexFindings, codexPriority } from '../src/server/vp-github.js';
 
 function scratch(t: { after(fn: () => void): void }): string {
@@ -21,6 +22,31 @@ test("node's TAP output gives each failing test with where it's nested, so a bas
   assert.ok(failed.some((f) => /outer › inner fails$/.test(f)), failed.join('\n'));
   assert.ok(failed.some((f) => /top fails$/.test(f)), failed.join('\n'));
   assert.ok(!failed.some((f) => /passes/.test(f)));
+});
+
+test('test output it cannot read stays failed, even when the base fails too', async (t) => {
+  const dir = scratch(t);
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.name', 'VP Test');
+  git('config', 'user.email', 'vp-test@example.invalid');
+  git('config', 'commit.gpgsign', 'false');
+  // Jest-style output (not TAP): the base already fails one test; the PR breaks another.
+  writeFileSync(path.join(dir, 't.js'), "console.log('FAIL src/old.test.js\\n  ● old thing broke'); process.exit(1);\n");
+  git('add', '.');
+  git('commit', '-q', '-m', 'base');
+  const base = git('rev-parse', 'HEAD');
+  writeFileSync(path.join(dir, 't.js'), "console.log('FAIL src/old.test.js\\n  ● old thing broke\\nFAIL src/new.test.js\\n  ● the PR broke this'); process.exit(1);\n");
+  git('commit', '-q', '-am', 'the PR');
+  const head = git('rev-parse', 'HEAD');
+  const r = await verifyMerge(
+    { repoDir: dir, base, head, label: 'fixture', recipe: { source: 'saved', install: false, steps: [{ name: 'test', node: ['t.js'], baseline: true }] } },
+    { pressure: () => undefined, tmpRoot: path.join(dir, 'aovp') },
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.kind, 'failed');
+  assert.equal(r.steps[0].ok, false);
+  assert.equal(r.steps[0].baseline, undefined, 'nothing was waved through as a base failure');
 });
 
 test('a step that runs too long is stopped with everything it started, and says so', async (t) => {

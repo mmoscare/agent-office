@@ -579,6 +579,8 @@ async function verifyNow(req: VerifyRequest, env: VerifyEnv): Promise<VerifyOutc
  */
 async function judgeAgainstBase(step: RecipeStep, merged: RunResult, files: string[] | undefined, req: VerifyRequest, changed: string[], baseDir: string, root: string, env: VerifyEnv): Promise<Partial<StepResult>> {
   const mine = tapFailures(merged.out);
+  // Output it can't read (Jest, Vitest, a crash) can't show the failures are the base's own: it stays failed.
+  if (!mine.length) return {};
   const baseTree = await git(['rev-parse', `${req.base}^{tree}`], req.repoDir);
   if (baseTree.code !== 0) return {};
   if (!existsSync(baseDir)) {
@@ -597,10 +599,6 @@ async function judgeAgainstBase(step: RecipeStep, merged: RunResult, files: stri
   const ran = await runStep(step, baseDir, changed, same);
   if (ran.result.timedOut) return {};
   const theirs = tapFailures(ran.result.out);
-  if (!mine.length) {
-    // Nothing readable: it counts only when the base fails as well.
-    return ran.result.code !== 0 && !theirs.length ? { ok: true, baseline: ['(the base fails this step too)'] } : {};
-  }
   const fresh = mine.filter((f) => !theirs.includes(f));
   return fresh.length ? { baseline: theirs.filter((f) => mine.includes(f)) } : { ok: true, baseline: mine };
 }

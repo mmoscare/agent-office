@@ -59,6 +59,8 @@ class FakeGitHub {
   posted: { n: number; body: string }[] = [];
   /** A head GitHub reports for the PR once it's asked about it alone (just before a merge). */
   headLater = new Map<number, string>();
+  /** Runs when the PR is asked about alone (just before a merge): something else can happen on GitHub then. */
+  onPullGet?: (n: number) => void;
   graphqlLimited = true;
   private ids = 1000;
 
@@ -92,6 +94,7 @@ class FakeGitHub {
     let m = new RegExp(`^repos/${REPO}/pulls/(\\d+)$`).exec(route);
     if (m) {
       const pull = this.pulls.get(Number(m[1]))!;
+      this.onPullGet?.(pull.number);
       const later = this.headLater.get(pull.number);
       return JSON.stringify(later ? { ...pull, head: { ...pull.head, sha: later } } : pull);
     }
@@ -484,6 +487,28 @@ test('a failed verify gets one fix task naming the step; a dry run changes nothi
   assert.equal(m2.nudges.length, 1, 'its own worker was asked to fix it');
   assert.equal(m2.nudges[0].id, 'pix');
   assert.equal(m2.deps.store.state.fixes['test/x#1'].workerId, 'pix');
+});
+
+test('when the base moves during the verify, it is verified again on the new base and merged in the same sweep', async (t) => {
+  const w = world(t);
+  const sha = w.pr(1, 'office/pixel-1', { 'a.txt': 'a\n' });
+  // Another PR lands on personal while #1 is being checked.
+  let moved = '';
+  w.fake.onPullGet = () => {
+    if (moved) return;
+    git(w.seed, 'checkout', '-q', 'personal');
+    writeFileSync(path.join(w.seed, 'other.txt'), 'someone else\n');
+    git(w.seed, 'add', '.');
+    git(w.seed, 'commit', '-q', '-m', 'Someone else merged first');
+    git(w.seed, 'push', '-q', 'origin', 'personal');
+    moved = git(w.seed, 'rev-parse', 'HEAD');
+  };
+  const m = made(w);
+  const res = await sweep(m.deps, { via: 'duty' });
+  assert.deepEqual(w.fake.merges, [{ n: 1, sha }], res.prs.map((p) => p.why).join('; '));
+  assert.equal(w.runs().filter((r) => r.start).length, 2, 'verified twice: on the old base, then the new one');
+  assert.ok(m.logs.some((l) => l.includes(`verifying again on ${moved.slice(0, 7)}`)));
+  assert.equal(m.deps.store.state.merges[0].base, moved, 'merged on the base it was verified against');
 });
 
 test('stacked PRs merge base-first, and the restart count is the merges since the running office started', async (t) => {
