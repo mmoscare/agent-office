@@ -16,6 +16,7 @@ import {
   WEEKDAYS,
   type CalendarChore,
 } from '../../shared/calendar';
+import { BOTS, botDesk } from '../../shared/bots';
 import { notifyPermission } from '../notify';
 import { store } from '../state';
 import { openCleanup } from './cleanup';
@@ -131,17 +132,37 @@ export function openCalendar() {
   render();
 }
 
-/** The button that opens a chore's own screen, when it has one: the cleanup screen for the branch cleanup. */
+/**
+ * The buttons that do a chore, when it has any: for the branch cleanup, the cleanup screen, and
+ * CleanBot deployed on the floor you're on (he suggests what to delete and asks before deleting).
+ */
 function choreButton(c: CalendarChore): HTMLElement | null {
   if (c.opens !== 'cleanup') return null;
-  return h('button.btn.cal-open', { type: 'button', title: 'Pick a floor and a repository, then which branches and worktrees to keep', onclick: () => openCleanup() }, '🧹 Open the cleanup');
+  const bot = BOTS.cleanbot;
+  return h('span.cal-open-row', {},
+    h('button.btn.cal-open', { type: 'button', title: 'Pick a floor and a repository, then which branches and worktrees to keep', onclick: () => openCleanup() }, '🧹 Open the cleanup'),
+    ' ',
+    h('button.btn.cal-open', {
+      type: 'button',
+      title: `${bot.name} goes to his kiosk on this floor, lists the leftover branches and worktrees, suggests what to delete, and deletes only what you say`,
+      onclick: () => {
+        if (!store.floor) return toast('Go to a floor first: CleanBot cleans the floor he is deployed on');
+        if (store.workerAtDesk(botDesk('cleanbot'))) return toast(`${bot.icon} ${bot.name} is already on this floor: walk up to his kiosk in the lounge`);
+        deployCleanbot();
+      },
+    }, `${bot.icon} Deploy ${bot.name}`),
+  );
 }
 
 /**
  * On the first of the month (and until you mark that month done): a card in the office, and a
  * desktop notification if the tab is in the background.
  */
-export function mountCalendarNag(opts: { desktop: () => boolean }) {
+/** Deploys CleanBot on the floor you're on (main.ts sends it; set when the nag mounts). */
+let deployCleanbot = () => {};
+
+export function mountCalendarNag(opts: { desktop: () => boolean; deployCleanbot?: () => void }) {
+  if (opts.deployCleanbot) deployCleanbot = opts.deployCleanbot;
   let card: HTMLElement | null = null;
   let lastShown = 0;
   const hide = () => {

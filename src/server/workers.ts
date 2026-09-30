@@ -1714,7 +1714,7 @@ process.stdin.on('end', () => {
   private writeQueueCommand(): string | undefined {
     const dir = path.join(this.dataDir, 'bin');
     let any = false;
-    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray'], ['office-mail', "Receptionist's mailbox"], ['office-ask', 'board agents'], ['office-vp', 'VP'], ['office-workers', "floor's workers"]] as const) {
+    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray'], ['office-mail', "Receptionist's mailbox"], ['office-ask', 'board agents'], ['office-vp', 'VP'], ['office-cleanbot', 'CleanBot'], ['office-workers', "floor's workers"]] as const) {
       const script = binScript(`${name}.js`);
       if (!script) continue;
       if (!any) mkdirSync(dir, { recursive: true, mode: 0o700 });

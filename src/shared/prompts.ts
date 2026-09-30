@@ -7,6 +7,7 @@
 import { STATION_AGENT, type StationKind } from './layout.js';
 import { BOTS, type BotKind } from './bots.js';
 import { VP_BRIEF } from './vp-brief.js';
+import { CLEANBOT_BRIEF } from './cleanbot-brief.js';
 
 /** The board agents that stand by a board, not the deployable bots (which bring their own brief). */
 type BoardKind = Exclude<StationKind, BotKind>;
@@ -206,6 +207,7 @@ const DEFS = {
   'station.queue': station('queue'),
   'station.inbox': station('inbox'),
   'station.vp': bot('vp', VP_BRIEF),
+  'station.cleanbot': bot('cleanbot', CLEANBOT_BRIEF),
 
   // --- 🤝 Meeting room ---
   'meeting.brief': {

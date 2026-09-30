@@ -70,6 +70,11 @@ export class ConsoleShells {
     }
   }
 
+  /** The folders the open terminals started in (CleanBot never deletes a worktree one of them is in). */
+  folders(): string[] {
+    return [...this.sessions.values()].map((s) => s.cwd);
+  }
+
   resync(id: string) {
     const s = this.sessions.get(id);
     if (s?.attached) this.handle(id, { t: 'console.attach', cols: s.cols, rows: s.rows }, s.cwd);

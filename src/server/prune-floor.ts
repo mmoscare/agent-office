@@ -1045,6 +1045,25 @@ function saveKeep(floor: string, repo: string, add: string[], drop: string[]) {
   writeFileSync(keepFile(floor), JSON.stringify(all, null, 2), { mode: 0o600 });
 }
 
+/**
+ * Adds names to (or, with `forget`, takes them off) the floor's always-keep list: in the repository
+ * named, or in every repository of the floor when none is. Returns the lists as they now stand.
+ */
+export async function pinRows(floorDir: string, names: string[], opts: { repo?: string; forget?: boolean } = {}): Promise<{ repo: string; alwaysKeep: string[] }[]> {
+  const floor = real(floorDir);
+  const found = await workspaceRepositories(floor);
+  let repos = found.repositories.filter((r) => !r.error);
+  if (opts.repo !== undefined) {
+    const want = slash(opts.repo).replace(/^\.\/|\/+$/g, '') || '.';
+    repos = repos.filter((r) => r.path === want || r.name === want);
+    if (!repos.length) throw new Error(`No repository ${opts.repo} on this floor (there's ${found.repositories.map((r) => r.path).join(', ') || 'none'})`);
+  }
+  return repos.map((r) => {
+    saveKeep(floor, r.path, opts.forget ? [] : names, opts.forget ? names : []);
+    return { repo: r.path, alwaysKeep: keepList(floor, r.path) };
+  });
+}
+
 /** A name given on the command line matches a row by its name, its branch or its worktree's path. */
 function matches(row: Pick<PruneRow, 'name' | 'branch' | 'worktree'>, names: Set<string>): boolean {
   const norm = (s: string) => (process.platform === 'win32' ? slash(s).toLowerCase() : slash(s)).replace(/\/+$/, '');
