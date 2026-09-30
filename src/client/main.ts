@@ -71,6 +71,7 @@ import { openAccounts, routeAccountsMessage } from './ui/accounts';
 import { openServices } from './ui/services';
 import { openQueue } from './ui/queue';
 import { openUpgrade, restarting, showRestarting, showUpgraded } from './ui/upgrade';
+import { connectionLost, watchConnection } from './ui/connection';
 import { openHelp, renderCaffeine, renderChat, renderPeople, renderWorkers, updateSpeaking } from './ui/hud';
 import { Compass, type Bearing } from './ui/compass';
 import { openCharacter } from './ui/character';
@@ -716,7 +717,14 @@ let firstWelcome = true;
 let bootVersion = '';
 let upgradePhase = '';
 
-net.onStatus((up) => $('conn').classList.toggle('hidden', up));
+watchConnection(net, {
+  onChange: renderTitle,
+  onLost: () => {
+    sound.ding('needs_input');
+    notifier.serverDown();
+  },
+  onBack: (ms) => notifier.serverBack(ms),
+});
 net.onMessage((msg) => {
   if (msg.t === 'welcome') voice.reset();
   if (msg.t === 'welcome' || msg.t === 'floor.enter') {
@@ -912,12 +920,12 @@ function renderProject() {
 store.on('floors', renderProject);
 store.on('project', renderProject);
 
-/** The tab title counts the workers waiting on someone, on every floor, so you can see them from another tab. */
+/** The tab title counts the workers waiting on someone, on every floor, so you can see them from another tab, and says when the office is unreachable. */
 function renderTitle() {
   const name = store.project?.name;
   const elsewhere = store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0);
   const waiting = summarizeWorkers(store.workers.values()).waiting + elsewhere;
-  document.title = `${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
+  document.title = `${connectionLost() ? '⚠️ OFFLINE · ' : ''}${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
 }
 
 // ---- Floors & the elevator ----------------------------------------------------------------------
