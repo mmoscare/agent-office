@@ -131,7 +131,7 @@ async function pool<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): P
 // ---- The board's front: every repository -------------------------------------------------------
 
 export async function gitRepositories(floorDir: string): Promise<GitRepoList> {
-  const found = await workspaceRepositories(floorDir);
+  const found = await workspaceRepositories(floorDir, { untracked: true });
   const repos = await pool(found.repositories, POOL, async (r): Promise<GitRepoSummary> => {
     const base: GitRepoSummary = { path: r.path, name: r.path === '.' ? path.basename(path.resolve(floorDir)) : r.name, branch: r.branch, ahead: 0, behind: 0, dirty: r.dirty };
     if (r.error) return { ...base, error: r.error };
