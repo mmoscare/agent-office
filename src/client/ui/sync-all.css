@@ -1,0 +1,27 @@
+/* 🔄 Sync everything (ui/sync-all.ts); the cards, outcomes and buttons are office-update.css's. */
+.modal.sa-modal { width: min(760px, calc(100vw - 24px)); }
+.sa-intro { font-weight: 700; }
+.sa-repo-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sa-branch { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; background: #e7f5ee; color: #1f6f46; overflow-wrap: anywhere; }
+.sa-files { display: flex; flex-direction: column; gap: 3px; max-height: 260px; overflow: auto; padding: 4px; border: 2px solid rgba(43,45,66,.15); border-radius: 10px; background: #fff; }
+.sa-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; min-width: 0; }
+.sa-file:hover { background: rgba(43,45,66,.05); }
+.sa-file code { font: 12px ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; min-width: 0; }
+.sa-file.off code { opacity: .55; text-decoration: line-through; }
+.sa-file.blocked { cursor: default; }
+.sa-file.blocked code { text-decoration: none; }
+.sa-status { font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: .03em; padding: 1px 6px; border-radius: 999px; background: #edf2fb; color: #3a5a99; white-space: nowrap; }
+.sa-status.s-new, .sa-status.s-A { background: #e0f2e6; color: #2a7d43; }
+.sa-status.s-D { background: #ffe3e3; color: #b02a37; }
+.sa-why { font-size: 12px; font-weight: 800; }
+.sa-why.risky { color: #9a6700; }
+.sa-why.blocked { color: var(--muted); }
+.sa-message-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .03em; }
+.sa-message { font: 14px/1.4 inherit; font-family: inherit; text-transform: none; letter-spacing: normal; font-weight: 600; padding: 8px 10px; border: 2px solid var(--ink); border-radius: 10px; resize: vertical; }
+.sa-title { margin: 0; font-size: 18px; font-weight: 900; }
+.sa-clashes { margin: 0; padding-left: 20px; }
+.sa-steps { display: flex; flex-direction: column; gap: 10px; }
+.sa-step .manual-code { margin: 6px 0 0; }
+.sa-step .ou-actions { margin-top: 6px; }
+.sa-step-why { color: var(--muted); font-weight: 700; }
+.sa-news ul { display: flex; flex-direction: column; gap: 3px; }

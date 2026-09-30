@@ -5,6 +5,7 @@ import { runCleanup, scanCleanup, setCleanupPin } from './cleanup.js';
 import { authorUpdates } from './author-updates.js';
 import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeFloorPull, officeStatus, type OfficeFloor } from './git-board.js';
 import { routeOfficeUpdate } from './office-update.js';
+import { routeSyncAll } from './sync-all.js';
 
 /** A result that's a string is a failure, said for a person. */
 function reply<T>(r: T | string): [number, unknown] {
@@ -39,6 +40,8 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
     if (p === '/api/git/office/pull-floor' && method === 'POST') return reply(await officeFloorPull(floors, text(body.dir, 4096)));
     // The guided update of the office's own code, step by step (office-update.ts).
     if (p === '/api/git/office/update' || p.startsWith('/api/git/office/update/')) return await routeOfficeUpdate(p, method, q, body, floors, who);
+    // 🔄 Sync everything, the push-button by the gong: save, pull and upload the floor and the app folder (sync-all.ts).
+    if (p === '/api/git/sync-all' || p.startsWith('/api/git/sync-all/')) return await routeSyncAll(p, method, body, floorDir, floors, who);
     if (!repo) return [400, { error: 'Choose a repository' }];
     if (method === 'GET') {
       if (p === '/api/git/repo') return [200, await gitRepository(floorDir, repo, branch)];

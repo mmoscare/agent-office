@@ -73,6 +73,7 @@ import { choresPending, mountCalendarNag, onCalendarChores, openCalendar } from 
 import { openManual } from './ui/manual';
 import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
 import { mountOfficeUpdate } from './ui/office-update';
+import { openSyncAll } from './ui/sync-all';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -2109,6 +2110,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
       toast('🚬 Smoke break');
     }
   } else if (target.kind === 'gong') hitGong();
+  else if (target.kind === 'sync') pressSync();
   else if (target.kind === 'plans') openPlans(plansActions());
   else if (target.kind === 'timecard') openTimeCard(net);
   else if (target.kind === 'whiteboard') {
@@ -2621,6 +2623,12 @@ function hitGong() {
   net.send({ t: 'gong' });
 }
 
+/** E at the 🔄 Sync button beside the gong (or ☰ → Sync everything): it dips, and glows while the sync runs (ui/sync-all.ts). */
+function pressSync() {
+  office.syncButton.press();
+  openSyncAll({ busy: (on) => office.syncButton.setBusy(on) });
+}
+
 /** Where confetti comes from over a desk: above the worker's head. */
 function burstOver(deskId: string, n: number) {
   const d = DESK_BY_ID.get(deskId);
@@ -2821,6 +2829,8 @@ function hintFor(it: Interactable): Hint {
       return { k: String(smokeBreakUntil > 0), parts: [title('🚬 Ashtray'), key('E', smokeBreakUntil ? 'Stub it out' : 'Take a smoke break')] };
     case 'gong':
       return { k: '', parts: [title('🎉 Merge gong'), aside('rings when a PR merges'), key('E', 'Bang it')] };
+    case 'sync':
+      return { k: '', parts: [title('🔄 Sync everything'), aside('save, upload and pull'), key('E', 'Press it')] };
     case 'golf': {
       const other = teeTaken();
       if (other) return { k: `taken|${other}`, parts: [title('⛳ Golf tee'), aside(`🏌️ ${clip(other, 24)} is teeing off`)] };
@@ -3420,7 +3430,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, autonomous: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5, sticky: 9, stickyAdd: 9 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, sync: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, autonomous: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5, sticky: 9, stickyAdd: 9 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -3650,6 +3660,7 @@ const hud = mountHud(
     { id: 'manual', icon: '📘', label: 'Manual', section: 'Office', title: () => 'The Office Manual: how work gets to GitHub and back, what to do after a merge, and more', run: () => openManual() },
     { id: 'calendar', icon: '📅', label: 'Calendar', section: 'Office', count: () => (choresPending() ? 3 : 0), status: () => choresPending(), chip: () => 'Monthly chores', title: () => 'The office calendar: first-of-the-month chores', run: openCalendar },
     { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
+    { id: 'sync', icon: '🔄', label: 'Sync everything', section: 'Office', title: () => 'Save and upload the unsaved work on this floor and in the app folder, pull the latest, and see what to do next (the button beside the gong)', run: () => pressSync() },
     { id: 'author-updates', icon: '🆕', label: 'Author updates', section: 'Office', shown: () => authorUpdates.enabled, count: () => authorUpdates.behind ?? 0, status: () => authorUpdates.enabled && !!(authorUpdates.behind || authorUpdates.merging), chip: () => authorUpdates.merging ? 'Merge needs attention' : 'Author updates', run: showAuthorUpdates },
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
     { id: 'staffer', icon: '📋', label: 'Summon staffer', section: 'Office', key: 'U', title: () => 'Call the queue staffer to where you are. Click his clipboard to read who’s on what. U again beside him sends him back', run: () => summonStaffer() },
