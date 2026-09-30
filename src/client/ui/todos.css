@@ -20,6 +20,16 @@
 .todo-pick.pick-todo[aria-pressed=true] { background: var(--later); }
 
 .todo-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 26px; }
+.todo-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.todo-filter-label { font-size: 12px; font-weight: 900; }
+.todo-filter[aria-pressed=true] { color: #fff; transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+.todo-filter.filter-all[aria-pressed=true] { background: var(--ink); }
+.todo-filter.filter-personal[aria-pressed=true], .todo-area.area-personal[aria-pressed=true] { background: #118ab2; color: #fff; }
+.todo-filter.filter-trading[aria-pressed=true], .todo-area.area-trading[aria-pressed=true] { background: #c26a00; color: #fff; }
+.todo-filter.filter-autonomous[aria-pressed=true], .todo-area.area-autonomous[aria-pressed=true] { background: #6d28d9; color: #fff; }
+.todo-stat.stat-area.stat-personal { background: #d7eef8; border-color: #118ab2; }
+.todo-stat.stat-area.stat-trading { background: #fff0db; border-color: #c26a00; }
+.todo-stat.stat-area.stat-autonomous { background: #efe6ff; border-color: #6d28d9; }
 .todo-summary { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
 .todo-stat { padding: 2px 10px; border: 2px solid var(--ink); border-radius: 999px; background: var(--paper); font-size: 12px; font-weight: 900; }
 .todo-stat.stat-active { background: #ffe1e1; border-color: var(--active-dark); }
@@ -75,6 +85,11 @@
 .todo-card.editing { cursor: default; transform: none; }
 .todo-text { font-weight: 800; font-size: 14px; line-height: 1.3; word-break: break-word; }
 .todo-when { font-size: 11px; font-weight: 700; color: var(--muted); }
+.todo-areas { display: flex; flex-wrap: wrap; gap: 4px; }
+.todo-area { padding: 1px 7px; font-size: 11px; color: var(--muted); background: transparent; }
+.todo-card.area-personal { box-shadow: inset 0 4px 0 #118ab2, 0 3px 0 rgba(43, 45, 66, .6); }
+.todo-card.area-trading { box-shadow: inset 0 4px 0 #c26a00, 0 3px 0 rgba(43, 45, 66, .6); }
+.todo-card.area-autonomous { box-shadow: inset 0 4px 0 #6d28d9, 0 3px 0 rgba(43, 45, 66, .6); }
 .todo-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .todo-mini { padding: 2px 8px; font-size: 12px; border-width: 2px; border-radius: 8px; box-shadow: 0 2px 0 var(--ink); }
 .todo-complete { background: #06d6a0; }
