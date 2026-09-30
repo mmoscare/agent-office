@@ -13,8 +13,9 @@ import { applyContent, type ContentAction, type ContentItem } from '../shared/co
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 import type { BallState } from '../shared/hoop';
+import { emptyVpView, type VpView } from '../shared/vp';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'content' | 'prompts' | 'ball';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'content' | 'prompts' | 'ball' | 'vp';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -206,6 +207,8 @@ class Store {
   prompts: PromptsState = { custom: {} };
   /** Whether workers whose pull request merged go home by themselves (⚙️ Settings). */
   leaveOnMerge: LeaveOnMergeState = { on: false };
+  /** The VP on this floor: his standing duty, what he's on, and the merges waiting for a restart. */
+  vp: VpView = emptyVpView();
   private subs = new Map<Topic, Set<() => void>>();
 
   on(topic: Topic, fn: () => void) {
@@ -279,10 +282,11 @@ class Store {
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
     this.ball = v.ball ?? {};
+    this.vp = v.vp ?? emptyVpView();
     // A new floor (or a reconnect): changes still on their way were for the board left behind.
     this.contentPending = [];
     this.contentBase = this.content = v.content ?? null;
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball', 'vp'] as Topic[]) this.emit(t);
   }
 
   /** Makes a change to the floor's 🎬 Content Kanban on screen straight away; false when it changes nothing (then there's nothing to send). */
@@ -531,6 +535,10 @@ class Store {
       case 'leaveOnMerge':
         this.leaveOnMerge = msg.state;
         this.emit('leaveOnMerge');
+        break;
+      case 'vp':
+        this.vp = msg.state;
+        this.emit('vp');
         break;
       case 'chat':
         this.chat.push(msg);

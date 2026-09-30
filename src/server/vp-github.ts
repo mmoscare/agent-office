@@ -203,7 +203,7 @@ export function codexFindings(comments: ReviewComment[], discussion: IssueCommen
     if (c.inReplyTo !== undefined || !isCodex(c.author)) continue;
     const priority = codexPriority(c.body);
     if (!priority) continue;
-    const title = (c.body.split(/\r?\n/, 1)[0] ?? '').replace(BADGE, '').replace(/[*_`]/g, '').trim().slice(0, 160);
+    const title = (c.body.split(/\r?\n/, 1)[0] ?? '').replace(BADGE, '').replace(/<[^>]*>/g, '').replace(/[*_`]/g, '').trim().slice(0, 160);
     const outdated = c.line === null;
     const base = { id: c.id, url: c.url, priority, path: c.path, title, outdated };
     if (resolved?.get(c.id)) {

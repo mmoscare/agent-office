@@ -81,7 +81,7 @@ import { openSettings } from './ui/settings';
 import { hiringPaused, renderUsage, usageLabel, usageTitle } from './ui/usage';
 import { openModelUsage } from './ui/model-usage';
 import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elevator';
-import { toggleFloorMenu } from './ui/floormenu';
+import { closeFloorMenu, toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, officeChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { openPlans } from './ui/plans';
 import { openTimeCard, todayText } from './ui/timecard';
@@ -3428,7 +3428,19 @@ $('hud').addEventListener('click', (e) => {
 // The project in the corner is the floor you're on; click it for the list of floors to go to.
 $('project').addEventListener('click', () => {
   if (!store.floor) return showElevator();
-  toggleFloorMenu($('project'), { go: switchFloor, elevator: showElevator, roof: () => ride(ROOF) });
+  toggleFloorMenu($('project'), {
+    go: switchFloor,
+    elevator: showElevator,
+    roof: () => ride(ROOF),
+    vp: {
+      deploy: () => net.send({ t: 'vp.deploy' }),
+      duty: (on) => net.send({ t: 'vp.duty', on }),
+      open: (workerId) => {
+        closeFloorMenu();
+        openWorkerTerminal(workerId);
+      },
+    },
+  });
 });
 
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------

@@ -138,8 +138,16 @@ function killTree(pid: number | undefined) {
   }
 }
 
+/** The office's environment, minus what would change how a child's own test runner behaves. */
+function baseEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  // Set by an outer node --test: an inner one would then report to it instead of printing TAP.
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
 /** Runs a command at below-normal priority, keeping the end of its output; stops it (and its children) at `timeoutMs`. */
-export function runLow(file: string, args: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = process.env, input?: NodeJS.ReadableStream): Promise<RunResult> {
+export function runLow(file: string, args: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv = baseEnv(), input?: NodeJS.ReadableStream): Promise<RunResult> {
   const started = Date.now();
   return new Promise((resolve) => {
     let out = '';
@@ -209,7 +217,7 @@ function binScript(dir: string, pkg: string, bin: string): string | undefined {
 
 /** Children see a CI machine: no watch modes, no prompts, no colour codes in the record. */
 function stepEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' };
+  return { ...baseEnv(), CI: '1', FORCE_COLOR: '0', NO_COLOR: '1', GIT_TERMINAL_PROMPT: '0', npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false' };
 }
 
 // ---- The machine ----------------------------------------------------------------------------
