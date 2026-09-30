@@ -105,6 +105,8 @@ try {
   /** A picture from off to one side of you and him, into the screenshot folder, if there is one. */
   const shot = async name => {
     if (!shots) return;
+    // The monthly chores card lists this machine's own chores, which don't belong in a picture.
+    await page.addStyleTag({ content: '.calendar-nag { display: none !important; }' });
     await page.evaluate(() => {
       const o = window.__office;
       const p = o.player.pos;
