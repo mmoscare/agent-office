@@ -4,6 +4,8 @@ import { store } from '../state';
 import { h, openModal, timeAgo, STATUS_LABEL } from './dom';
 import { confirmDialog } from './prompt';
 import { providerPicker, providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelLogoEl } from '../world/model-logos';
 import { officeFull } from '../world/machine';
 import { restartText, stoppedByRestart, taskStatus, unshippedText } from '../../shared/task-status';
 
@@ -137,10 +139,12 @@ export function openQueue(net: Net, actions: QueueActions) {
       buttons.push(h('button.btn', { type: 'button', title: 'Put it back on the queue', onclick: () => net.send({ t: 'queue.retry', taskId: t.id }) }, '↻ Requeue'));
       buttons.push(h('button.btn', { type: 'button', title: 'Forget it', 'aria-label': 'Remove', onclick: () => net.send({ t: 'queue.remove', taskId: t.id }) }, '✕'));
     }
+    const brand = modelBrand(t.model ?? w?.model, t.provider ?? w?.provider);
     return h(
       'li',
       { class: t.status },
       pos ? h('span.pos', {}, pos) : null,
+      brand ? modelLogoEl(brand, t.model ?? w?.model) : null,
       h('div.queue-main', {}, taskTitle(t), warning, h('div.queue-meta', {}, meta.join(' · '))),
       h('div.queue-actions', {}, ...buttons),
     );
