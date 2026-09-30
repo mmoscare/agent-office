@@ -89,6 +89,12 @@ export interface SyncRepoResult {
   /** Pull requests (and other changes) the pull brought in. */
   prs: UpdatePr[];
   otherCommits: number;
+  /** The same, as What's new lines. */
+  news: NewsLine[];
+  /** Where it is on the floor (. for the floor itself), when it's one of the floor's repositories. */
+  floorPath?: string;
+  /** owner/name on GitHub. */
+  github?: string;
 }
 
 export type ChangeArea = 'packages' | 'server' | 'client' | 'launcher' | 'docs';
@@ -111,8 +117,8 @@ export interface NextSteps {
   /** What the new commits in the app folder touch. */
   areas: ChangeArea[];
   steps: NextStep[];
-  /** Plain lines on what the new commits bring. */
-  news: string[];
+  /** What the app folder's new commits bring. */
+  news: NewsLine[];
   /** Workers mid-task (a restart interrupts them). */
   busy: UpdateWorker[];
   /** The app folder moved (so the checklist is about real changes). */
@@ -203,22 +209,28 @@ export function planNextSteps(areas: ChangeArea[], appDir: string, opts: { busy?
   return [{ kind: 'nothing', title: 'Nothing else to do', why: has('docs') ? 'The new changes are only docs and tests.' : 'The office already has everything.' }];
 }
 
-// ---- Pull request titles, tidied ------------------------------------------------------------------
+// ---- What's new -----------------------------------------------------------------------------------
 
-/** A PR title said plainly: no "feat(x):" or "WIP:" prefix, no trailing full stop, a capital first letter. */
-export function tidyTitle(title: string): string {
-  let t = title.trim().replace(/^(\[?wip\]?:?\s*)+/i, '');
-  t = t.replace(/^(feat|fix|chore|docs|refactor|perf|test|tests|style|build|ci)(\([^)]*\))?!?:\s*/i, '');
-  t = t.replace(/\s*\.+$/, '');
-  return t ? t[0].toUpperCase() + t.slice(1) : title.trim();
+/** A line of "What's new": a pull request's title, tidied (or the clipboard's plain words for it), or a count of other changes. */
+export interface NewsLine {
+  pr?: number;
+  text: string;
 }
 
-/** "What's new": a line per pull request (tidied), and a count of other changes. */
-export function newsLines(prs: UpdatePr[], other: number, max = 8): string[] {
-  const lines = prs.slice(-max).map((p) => `${tidyTitle(p.title)} (#${p.number})`);
-  if (prs.length > max) lines.unshift(`…and ${plural(prs.length - max, 'earlier pull request')}`);
-  if (other) lines.push(`${plural(other, 'other change')}${prs.length ? '' : ' without a pull request'}`);
+/**
+ * "What's new" for a pull: a line per pull request, oldest first, and a count of the other changes.
+ * `tidy` is the What's new clipboard's own (server/change-notes.ts), so both say a title the same way.
+ */
+export function newsLines(prs: UpdatePr[], other: number, tidy: (title: string) => string, max = 8): NewsLine[] {
+  const lines: NewsLine[] = prs.slice(-max).map((p) => ({ pr: p.number, text: tidy(p.title) }));
+  if (prs.length > max) lines.unshift({ text: `…and ${plural(prs.length - max, 'earlier pull request')}` });
+  if (other) lines.push({ text: `${plural(other, 'other change')}${prs.length ? '' : ' without a pull request'}` });
   return lines;
+}
+
+/** How a line reads: "Grok is the default model. (#91)". */
+export function newsText(line: NewsLine): string {
+  return line.pr ? `${line.text} (#${line.pr})` : line.text;
 }
 
 // ---- Which files may be committed ------------------------------------------------------------------

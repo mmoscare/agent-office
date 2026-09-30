@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { closeSync, existsSync, openSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { normalizeRepo } from '../shared/floors.js';
 import { interruptedByRestart, type UpdateWorker } from '../shared/office-update.js';
 import {
   BIG_FILE,
@@ -20,6 +21,7 @@ import {
   type SyncRepoResult,
   type SyncResult,
 } from '../shared/sync-all.js';
+import { tidyTitle } from './change-notes.js';
 import { officeRoot, withGitRepository, type OfficeFloor } from './git-board.js';
 import { mergedPrs, redact } from './office-update.js';
 import { floorRepository, workspaceRepositories } from './workspaces.js';
@@ -93,6 +95,8 @@ interface Place {
   dir: string;
   kind: 'floor' | 'office';
   name: string;
+  /** Where it is on the floor, for the floor's What's new (. for the floor itself). */
+  floorPath?: string;
   error?: string;
 }
 
@@ -101,16 +105,16 @@ async function places(floorDir: string, app: string | undefined): Promise<{ plac
   const out: Place[] = found.repositories.map((r) => {
     const name = r.path === '.' ? path.basename(path.resolve(floorDir)) : r.name;
     try {
-      return { id: `floor:${r.path}`, dir: floorRepository(floorDir, r.path), kind: 'floor' as const, name, error: r.error };
+      return { id: `floor:${r.path}`, dir: floorRepository(floorDir, r.path), kind: 'floor' as const, name, floorPath: r.path, error: r.error };
     } catch (err) {
-      return { id: `floor:${r.path}`, dir: path.resolve(floorDir, r.path), kind: 'floor' as const, name, error: (err as Error).message };
+      return { id: `floor:${r.path}`, dir: path.resolve(floorDir, r.path), kind: 'floor' as const, name, floorPath: r.path, error: (err as Error).message };
     }
   });
   if (app) {
     try {
       const dir = floorRepository(app, '.');
       const same = out.findIndex((p) => sameDir(p.dir, dir));
-      const office: Place = { id: 'office', dir, kind: 'office', name: 'Agent Office app' };
+      const office: Place = { id: 'office', dir, kind: 'office', name: 'Agent Office app', floorPath: same >= 0 ? out[same].floorPath : undefined };
       if (same >= 0) out[same] = office;
       else out.push(office);
     } catch {
@@ -137,6 +141,8 @@ interface Tracking {
   pathsFile?: string;
   /** The repository's shared .git folder: worktrees of one repository are synced one after another. */
   common?: string;
+  /** owner/name, when origin is on GitHub. */
+  github?: string;
 }
 
 /** Operations that leave a checkout half done: a sync keeps out of it until they're finished. */
@@ -160,7 +166,8 @@ async function tracking(dir: string, name: string): Promise<Tracking> {
   const row = (heads ?? '').split('\n').map((l) => l.split('\0')).find((f) => f[0] === `refs/heads/${branch}`) ?? [];
   const [, upstreamRef, remote, remoteRef] = row;
   if (!upstreamRef) return { branch, head, problem: `The branch ${branch} in ${name} doesn’t follow a branch on GitHub, so there’s nothing to pull from or upload to. Publish it once with ⬆️ Push on the Git board, then sync.` };
-  const t: Tracking = { branch, head, upstreamRef, remote: remote || undefined, remoteRef: remoteRef || undefined, pathsFile: where[UNFINISHED.length], common };
+  const github = fetchUrl && /github\.com[/:]/i.test(fetchUrl) ? normalizeRepo(fetchUrl) : undefined;
+  const t: Tracking = { branch, head, upstreamRef, remote: remote || undefined, remoteRef: remoteRef || undefined, pathsFile: where[UNFINISHED.length], common, ...(github ? { github } : {}) };
   if (!t.remote || !t.remoteRef) return { ...t, problem: `The branch ${branch} in ${name} follows ${upstreamRef.replace(/^refs\/remotes\//, '')}, which isn’t a branch on GitHub. Ask Claude to “set ${branch} to follow its GitHub branch”.` };
   if (t.remote !== 'origin') t.noPush = `It follows ${t.remote}, not your own copy on GitHub (origin), so it’s pulled but never uploaded from here.`;
   else if (!fetchUrl) t.problem = `${name} has no origin to pull from.`;
@@ -285,6 +292,8 @@ interface Reviewed {
   paths: Map<string, string | undefined>;
   /** The shared .git folder (see Tracking.common). */
   common?: string;
+  floorPath?: string;
+  github?: string;
 }
 
 async function look(place: Place, fetch: boolean): Promise<Reviewed> {
@@ -311,7 +320,7 @@ async function look(place: Place, fetch: boolean): Promise<Reviewed> {
     repo.ahead = counts(lr).ahead;
     repo.behind = Number(incoming) || 0;
     if (repo.ahead) repo.outgoing = ((await gitOut(['log', '-5', '--format=%s', `${t.upstreamRef}..HEAD`], place.dir)) ?? '').split('\n').filter(Boolean);
-    return { repo, head: t.head, paths, common: t.common };
+    return { repo, head: t.head, paths, common: t.common, floorPath: place.floorPath, github: t.github };
   } catch (err) {
     return { repo: { ...repo, problem: `${place.name} can’t be read: ${redact((err as Error).message)}` }, paths };
   }
@@ -345,7 +354,7 @@ export async function syncPlan(floorDir: string, admin: boolean, opts: { app?: s
 
 function outcome(repo: SyncRepo, extra: Partial<SyncRepoResult> & Pick<SyncRepoResult, 'state' | 'message'>): SyncRepoResult {
   const details = extra.details ? redact(extra.details).slice(-20_000) : undefined;
-  return { id: repo.id, name: repo.name, kind: repo.kind, saved: 0, pulled: 0, pushed: 0, prs: [], otherCommits: 0, ...extra, details };
+  return { id: repo.id, name: repo.name, kind: repo.kind, saved: 0, pulled: 0, pushed: 0, prs: [], otherCommits: 0, news: [], ...extra, details };
 }
 
 /** A merge that stopped: undone at once, and checked that the folder is exactly as it was. */
@@ -503,7 +512,7 @@ export async function nextSteps(app: SyncRepoResult | undefined, appDir: string 
   }
   const diff = await gitOut(['diff', '--name-only', '--no-renames', `${app.before}..${app.after}`], appDir);
   const areas = changeAreas((diff ?? '').split('\n').filter(Boolean));
-  return { areas, steps: planNextSteps(areas, appDir, { busy: busy.length, canRestart: restartable }), news: newsLines(app.prs, app.otherCommits), busy, changed: true, appDir };
+  return { areas, steps: planNextSteps(areas, appDir, { busy: busy.length, canRestart: restartable }), news: app.news, busy, changed: true, appDir };
 }
 
 /** Go: every repository on the review, then what to do next (from the app folder's new commits). */
@@ -527,7 +536,11 @@ export async function syncRun(floorDir: string, token: string, choices: SyncChoi
     await pool([...groups.values()], POOL, async (group) => {
       for (const r of group) done.set(r, await syncOne(r, byId.get(r.repo.id)));
     });
-    const results = order.map((r) => done.get(r)!);
+    // What's new, said the way the clipboard's What's new says a title; where the repository is, for its plain words.
+    const results = order.map((r): SyncRepoResult => {
+      const x = done.get(r)!;
+      return { ...x, news: newsLines(x.prs, x.otherCommits, (t) => tidyTitle(t).replace(/[.!?…]+$/, '')), ...(r.floorPath ? { floorPath: r.floorPath } : {}), ...(r.github ? { github: r.github } : {}) };
+    });
     const app = results.find((r) => r.kind === 'office');
     const appDir = order.find((r) => r.repo.kind === 'office')?.repo.dir;
     return { repos: results, next: await nextSteps(app, appDir, floors, opts.restartable ?? canRestart()) };

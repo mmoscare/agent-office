@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkerInfo, WorkerStatus } from '../src/shared/protocol.js';
-import { blockedReason, changeAreas, newsLines, planNextSteps, riskyName, riskyText, suggestMessage, tidyTitle, type SyncChoice, type SyncPlan, type SyncResult } from '../src/shared/sync-all.js';
+import { blockedReason, changeAreas, newsLines, newsText, planNextSteps, riskyName, riskyText, suggestMessage, type SyncChoice, type SyncPlan, type SyncResult } from '../src/shared/sync-all.js';
 import { routeSyncAll, syncPlan, syncRun } from '../src/server/sync-all.js';
 import type { OfficeFloor } from '../src/server/git-board.js';
 
@@ -174,6 +174,9 @@ test('dirty work is committed, GitHub’s changes pulled in, and everything uplo
   assert.equal(floor.pushed, 2, 'the saved commit and the merge');
   assert.match(floor.message, /^Saved 2 files \([0-9a-f]+\), uploaded 2 commits, pulled 1 new change\.$/);
   assert.deepEqual(floor.prs.map((p) => [p.number, p.title]), [[12, 'Notes from a teammate']]);
+  assert.deepEqual(floor.news, [{ pr: 12, text: 'Notes from a teammate' }]);
+  // Where it is on the floor, to find the clipboard's plain words for it (key pr:12 on a one-repository floor).
+  assert.equal(floor.floorPath, '.');
   // GitHub (the bare repository) has it all; the folder is clean and level with it.
   assert.equal(git(fx.floor, 'rev-parse', 'HEAD'), git(fx.floorOrigin, 'rev-parse', 'personal'));
   assert.equal(git(fx.floor, 'status', '--porcelain'), '');
@@ -321,7 +324,9 @@ test('the checklist follows what the app folder’s new commits change', async (
   assert.deepEqual(next.steps.map((s) => [s.kind, !!s.walkthrough]), [['packages', true], ['build', true], ['restart', true]]);
   assert.match(next.steps[2].why!, /^2 workers are mid-task: restarting interrupts them/);
   assert.deepEqual(next.busy.map((w) => w.name), ['Byte', 'Dot']);
-  assert.deepEqual(next.news, ['Grok is the default model (#57)']);
+  // Said the way the clipboard's What's new says a title (server/change-notes.ts tidyTitle).
+  assert.deepEqual(next.news, [{ pr: 57, text: 'Grok is the default model' }]);
+  assert.deepEqual(app.news, next.news);
 });
 
 test('the checklist for a pull that only changes the pages: build them, reload', async (t) => {
@@ -331,7 +336,7 @@ test('the checklist for a pull that only changes the pages: build them, reload',
   assert.deepEqual(next.areas, ['client', 'docs']);
   assert.deepEqual(next.steps.map((s) => s.kind), ['build-client', 'reload']);
   assert.equal(next.steps[0].commands![0], `cd "${fx.app}"\nnpm run build:client`);
-  assert.deepEqual(next.news, ['1 other change without a pull request']);
+  assert.deepEqual(next.news, [{ text: '1 other change without a pull request' }]);
 });
 
 test('changeAreas and planNextSteps: packages, server, client-only, launcher, docs-only', () => {
@@ -361,9 +366,8 @@ test('changeAreas and planNextSteps: packages, server, client-only, launcher, do
 });
 
 test('the small pieces: titles, news, suggested messages, blocked and risky names', () => {
-  assert.equal(tidyTitle('feat(ui): add a sync button.'), 'Add a sync button');
-  assert.equal(tidyTitle('WIP: fix the gong'), 'Fix the gong');
-  assert.deepEqual(newsLines([{ number: 1, title: 'fix: a', sha: 'x' }], 2), ['A (#1)', '2 other changes']);
+  assert.deepEqual(newsLines([{ number: 1, title: 'fix: a', sha: 'x' }], 2, (t) => t.toUpperCase()), [{ pr: 1, text: 'FIX: A' }, { text: '2 other changes' }]);
+  assert.equal(newsText({ pr: 7, text: 'A thing' }), 'A thing (#7)');
   assert.equal(suggestMessage([{ path: 'a/b/c.ts', status: 'M' }]), 'Update c.ts');
   assert.equal(suggestMessage([{ path: 'old.md', status: 'D' }, { path: 'x/older.md', status: 'D' }]), 'Remove old.md and older.md');
   assert.equal(suggestMessage(['src/client/a.ts', 'src/client/b.ts', 'src/client/ui/c.ts', 'src/client/d.ts'].map((p) => ({ path: p, status: 'M' as const }))), 'Update 4 files in src/client');

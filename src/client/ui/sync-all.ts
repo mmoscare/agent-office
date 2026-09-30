@@ -1,7 +1,8 @@
 import './office-update.css';
 import './sync-all.css';
-import { newsLines, suggestMessage, type NextStep, type SyncChoice, type SyncFile, type SyncPlan, type SyncRepo, type SyncRepoResult, type SyncResult } from '../../shared/sync-all';
+import { newsText, suggestMessage, type NextStep, type SyncChoice, type SyncFile, type SyncPlan, type SyncRepo, type SyncRepoResult, type SyncResult } from '../../shared/sync-all';
 import { UPDATE_STEPS } from '../../shared/office-update';
+import type { WhatsNew } from '../../shared/whats-new';
 import { store } from '../state';
 import { codeBox, copyText } from './copy-code';
 import { h, openModal, STATUS_LABEL, toast, type Modal } from './dom';
@@ -184,6 +185,8 @@ async function goNow(plan: SyncPlan) {
   }
   view = { kind: 'done', result: r };
   picks.clear();
+  plain.clear();
+  void plainWords(r);
   if (!modal) {
     unseen = true;
     toast('🔄 Sync finished. Press the Sync button again to see what to do next.');
@@ -242,13 +245,52 @@ function summaryText(result: SyncResult): string {
   return lines.join('\n');
 }
 
+/** The clipboard's ✨ What's new, in plain words, for the pull requests a sync brought in: by <repository id>#<number>. */
+const plain = new Map<string, string>();
+
 function whatsNew(result: SyncResult): string[] {
   const out: string[] = [];
   for (const r of result.repos) {
-    const lines = r.kind === 'office' ? result.next.news : newsLines(r.prs, r.otherCommits, 4);
+    const lines = r.news.map((l) => newsText({ ...l, text: (l.pr && plain.get(`${r.id}#${l.pr}`)) || l.text }));
     out.push(...lines.map((l) => `${r.kind === 'office' ? 'Agent Office' : r.name}: ${l}`));
   }
   return out;
+}
+
+/**
+ * The floor's ✨ What's new (the queue staffer's clipboard) writes each merged pull request in plain
+ * words, in the background: use its line wherever it has one. It knows the floor's repositories (by
+ * their place on the floor) and so the app folder's too when the floor is a copy of the same code.
+ */
+async function plainWords(result: SyncResult) {
+  const floor = store.floor;
+  if (!floor || !result.repos.some((r) => r.news.some((l) => l.pr))) return;
+  for (const wait of [0, 8000, 25000]) {
+    if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (view.kind !== 'done' || view.result !== result) return;
+    let data: WhatsNew;
+    try {
+      const res = await fetch(`/api/whats-new?${new URLSearchParams({ floor })}`, { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      data = (await res.json()) as WhatsNew;
+    } catch {
+      return;
+    }
+    const byKey = new Map(data.notes.filter((n) => n.plain).map((n) => [n.key, n.text]));
+    let wanted = 0;
+    for (const r of result.repos) {
+      const at = r.floorPath ?? result.repos.find((x) => x.floorPath !== undefined && !!r.github && x.github === r.github)?.floorPath;
+      if (at === undefined) continue;
+      for (const l of r.news) {
+        if (!l.pr) continue;
+        const text = byKey.get(`${at === '.' ? '' : `${at} `}pr:${l.pr}`);
+        if (text) plain.set(`${r.id}#${l.pr}`, text.replace(/[.!?…]+$/, ''));
+        else wanted++;
+      }
+    }
+    render?.();
+    if (!wanted || (!data.writing && !data.refreshing && wait)) return;
+  }
 }
 
 function doneView(result: SyncResult): HTMLElement[] {
