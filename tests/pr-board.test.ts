@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { GhPull, UnshippedItem } from '../src/shared/protocol.js';
-import { comparePulls, ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo, sortUnshipped } from '../src/client/ui/pr-board-model.js';
+import { comparePulls, ghTrouble, groupByRepo, limitNote, pullSections, pullStatus, showsRepo, sortUnshipped } from '../src/client/ui/pr-board-model.js';
 
 function pr(number: number, over: Partial<GhPull> = {}): GhPull {
   return {
@@ -90,4 +90,14 @@ test('sortUnshipped: actionable first, then recovering, then still-working; newe
   const items = [u('active', { worker: 'active', modifiedAt: 9 }), u('old', { modifiedAt: 1 }), u('recovering', { modifiedAt: 8 }), u('new', { modifiedAt: 5, worker: 'idle' }), u('never')];
   const sorted = sortUnshipped(items, (it) => it.key === 'recovering');
   assert.deepEqual(sorted.map((it) => it.key), ['new', 'old', 'never', 'recovering', 'active']);
+});
+
+test("the Unshipped note names the account's shared quota and its reset, not gh's words", () => {
+  const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+  assert.equal(
+    limitNote({ secondary: false, resetAt: Date.UTC(2026, 8, 29, 1, 15, 43) }, clock),
+    "❔ The GitHub account's shared hourly API quota ran out, so some branches may have a PR after all. It resets at 01:15. Showing what's on disk.",
+  );
+  assert.equal(limitNote({ secondary: false }, clock), "❔ The GitHub account's shared hourly API quota ran out, so some branches may have a PR after all. Showing what's on disk.");
+  assert.match(limitNote({ secondary: true, resetAt: Date.UTC(2026, 8, 29, 1, 2) }, clock), /slow down.*It lifts at 01:02\. Showing what's on disk\.$/);
 });

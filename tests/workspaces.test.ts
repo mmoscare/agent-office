@@ -235,7 +235,9 @@ test('PR actions use the selected starting branches and each repo remote, with i
     if (cmd !== 'gh') return (original as any)(cmd, args, opts, callback);
     calls.push({ cwd: opts.cwd, args });
     const pr = { number: 1, url: `https://github.com/test/${path.basename(opts.cwd)}/pull/1` };
-    const out = args[1] === 'list' ? JSON.stringify(opened.has(opts.cwd) ? [opened.get(opts.cwd)] : []) : `${pr.url}\n`;
+    // The open-PR lookup goes over REST (github-rest.ts); gh pr create prints the new PR's URL.
+    const listed = opened.has(opts.cwd) ? [opened.get(opts.cwd)!] : [];
+    const out = args[0] === 'api' ? JSON.stringify(listed.map(p => ({ number: p.number, html_url: p.url, state: 'open', merged_at: null, head: { ref: 'feature/pr', sha: 'abc' } }))) : `${pr.url}\n`;
     if (args[1] === 'create') opened.set(opts.cwd, pr);
     queueMicrotask(() => callback(null, out, ''));
     return {};
@@ -257,7 +259,12 @@ test('PR actions use the selected starting branches and each repo remote, with i
   assert.equal(worker.pr, undefined);
   assert.equal(calls.filter(c => c.args[1] === 'create').length, 2);
   for (const c of calls.filter(c => c.args[1] === 'create')) assert.equal(c.args[c.args.indexOf('--base') + 1], 'personal');
-  for (const c of calls) assert.equal(c.args[c.args.indexOf('--repo') + 1], `github.com/test/${path.basename(c.cwd)}`);
+  for (const c of calls) {
+    // Each repository by its own origin's name: --repo for gh, the REST path for the lookup.
+    if (c.args[0] === 'api') assert.deepEqual(c.args, ['api', '-i', `repos/test/${path.basename(c.cwd)}/pulls?state=open&head=test:feature%2Fpr&per_page=100`]);
+    else assert.equal(c.args[c.args.indexOf('--repo') + 1], `github.com/test/${path.basename(c.cwd)}`);
+  }
+  assert.equal(calls.filter(c => c.args[0] === 'api').length, 2);
   const saved = JSON.parse(readFileSync(path.join(a.data, 'workers.json'), 'utf8'));
   assert.equal(saved[0].workspace.repositories.filter((r: any) => r.pr).length, 2);
   await a.workers.kill(worker.id, 'keep');
