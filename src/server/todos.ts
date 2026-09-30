@@ -8,14 +8,15 @@ const LISTS_KEPT = 256;
 /**
  * Everyone's own 🔥 To Do board (see shared/todos.ts): one list per person for the whole building, so
  * it's the same on every floor, saved in the office's .agent-office/todos.json. A person is their
- * account, or everyone on the shared password together (they're the office's own people).
+ * account, or everyone on the shared password together (they're the office's own people). The 🏢
+ * Autonomous Tasks board is another of these, in autonomous.json, with one list for everyone.
  */
 export class Todos {
   private lists = new Map<string, readonly TodoItem[]>();
   private file: string;
 
-  constructor(dataDir: string) {
-    this.file = path.join(dataDir, 'todos.json');
+  constructor(dataDir: string, name = 'todos.json') {
+    this.file = path.join(dataDir, name);
     this.load();
   }
 
