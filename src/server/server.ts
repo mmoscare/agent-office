@@ -41,6 +41,7 @@ import { Sky } from './sky.js';
 import { Themes } from './theme.js';
 import { OfficePrompts } from './prompts.js';
 import { LeaveOnMerge } from './leave-on-merge.js';
+import { clockOut, listWorkers, workersFloor } from './office-workers.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
@@ -339,6 +340,7 @@ export async function startServer(cfg: Config) {
     if (url.pathname === '/office/queue') return officeQueue(req, res, url);
     if (url.pathname === '/office/plans') return officePlans(req, res, url);
     if (url.pathname === '/office/inbox') return officeInbox(req, res, url);
+    if (url.pathname === '/office/workers') return officeWorkers(req, res, url);
     if (url.pathname === '/office/mail') return officeMail(req, res, url);
     if (url.pathname === '/office/ask') return officeAsk(req, res, url);
     if (url.pathname === '/office/vp') return officeVp(req, res, url);
@@ -493,6 +495,37 @@ export async function startServer(cfg: Config) {
       if (error instanceof InboxError) return send(res, error.status, { error: error.message });
       throw error;
     }
+  };
+  /**
+   * The floor's workers, for the board agents (office-workers): GET lists them with where their work
+   * stands; POST {"action": "home", "id", "removeWorktree"} clocks one out, as X at its desk does, once
+   * the office has checked nothing would be left behind (see office-workers.ts). Only on its own floor.
+   */
+  const officeWorkers = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'office-workers');
+    if (!who) return;
+    const { floor, agent } = who;
+    const here = workersFloor(floor);
+    if (req.method === 'GET') return send(res, 200, { workers: await listWorkers(here) });
+    if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
+    let body: { action?: unknown; id?: unknown; removeWorktree?: unknown };
+    try {
+      body = JSON.parse(await readBody(req, 16 * 1024));
+    } catch {
+      return send(res, 400, { error: 'Send JSON: {"action": "home", "id": "…", "removeWorktree": false}' });
+    }
+    if (body?.action !== 'home') return send(res, 400, { error: 'The action is home' });
+    const r = await clockOut(here, str(body?.id, 64), body?.removeWorktree === true);
+    if (!r.ok) return send(res, r.status, { error: r.error });
+    toastFloor(floor, `🏠 The ${agent.name} clocked out ${r.worker.name}`);
+    const done = r.done.catch((e: Error) => ({ note: undefined, error: `Clocking ${r.worker.name} out went wrong: ${e.message}` }));
+    void done.then(({ note, error }) => {
+      if (note) toastFloor(floor, note);
+      if (error) toastFloor(floor, error, 'warn');
+    });
+    // Deleting a big worktree can take a while: the agent hears how it went if it's quick, the floor either way.
+    const settled = await Promise.race([done, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 60_000).unref())]);
+    return send(res, 200, { ok: true, worker: { id: r.worker.id, name: r.worker.name }, cleanup: r.cleanup, ...(r.kept ? { kept: r.kept } : {}), ...(settled ?? { pending: true }) });
   };
   /** The Receptionist, and only her: the one board agent who writes email. */
   const receptionist = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string) => {
