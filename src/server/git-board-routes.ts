@@ -1,5 +1,7 @@
 import { previewPush, pushReviewed, pushTargets } from './push.js';
 import type { GitDiffMode } from '../shared/git-board.js';
+import type { CleanupChoice } from '../shared/cleanup.js';
+import { runCleanup, scanCleanup, setCleanupPin } from './cleanup.js';
 import { authorUpdates } from './author-updates.js';
 import { gitBranchPr, gitCommit, gitFetch, gitFileDiff, gitOpenPr, gitPull, gitPush, gitRepositories, gitRepository, gitStage, gitUnstage, officeFloorPull, officeStatus, type OfficeFloor } from './git-board.js';
 import { routeOfficeUpdate } from './office-update.js';
@@ -47,6 +49,8 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
         return reply(await gitFileDiff(floorDir, repo, branch, file, mode as GitDiffMode));
       }
       if (p === '/api/git/pr') return reply(await gitBranchPr(floorDir, repo));
+      // The cleanup screen: this floor's repository, with every floor's workers keeping theirs (cleanup.ts).
+      if (p === '/api/git/cleanup') return [200, await scanCleanup({ floorDir, repo, floors, fresh: q.get('fresh') === '1' })];
     }
     if (method === 'POST') {
       if (p === '/api/git/fetch') return reply(await gitFetch(floorDir, repo));
@@ -56,6 +60,9 @@ export async function routeGitBoard(p: string, method: string, q: URLSearchParam
       if (p === '/api/git/push') return reply(await gitPush(floorDir, repo));
       if (p === '/api/git/pull') return reply(await gitPull(floorDir, repo));
       if (p === '/api/git/pr') return reply(await gitOpenPr(floorDir, repo, text(body.title, 300), text(body.body, 60_000)));
+      if (p === '/api/git/cleanup/pin') return reply(setCleanupPin(floorDir, repo, text(body.id, 4096), body.pinned === true));
+      // A dry run unless it says otherwise.
+      if (p === '/api/git/cleanup/run') return reply(await runCleanup({ floorDir, repo, floors, choices: body.choices as CleanupChoice[], dryRun: body.dryRun !== false }));
     }
     return [404, { error: 'Not found' }];
   } catch (err) {

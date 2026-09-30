@@ -5,11 +5,11 @@ To pin it: open Start, search **Agent Office**, right-click it, and choose **Pin
 
 The launcher runs the built app from your personal checkout and uses the Personal-Portfolio building, which contains both of your floors. It checks that this checkout is still on the `personal` branch. It does not download another copy.
 
-If the office is already running, the launcher opens it. Otherwise, it starts the server quietly. The first time it starts a server, it may ask for the password you normally use for Agent Office. Windows encrypts that password for your Windows account and remembers it locally.
+If the office is already running, the launcher opens it in Chrome. Otherwise, it starts the server quietly. The first time it starts a server, it may ask for the password you normally use for Agent Office. Windows encrypts that password for your Windows account and remembers it locally.
 
-Starting the server also opens a terminal window that follows its output live (the same text goes to `server.log`). Closing that window does not stop the office; reopen it with **Show server terminal** from the tray menu.
+Starting the server also opens a terminal window that follows its output live (the same text goes to `server.log`), and opens the office in Chrome. Close that terminal or press Ctrl+C in it to stop the office. Reopen the terminal with **Show server terminal** from the tray menu if it disappeared while the office is still running.
 
-While the launcher runs the server, its icon lives near the Windows clock (possibly under the hidden-icons arrow). Right-click it to open, restart, or stop Agent Office. Closing the browser leaves your office running. Restarting or stopping the office also stops its Windows worker processes; let active work finish first.
+While the launcher runs the server, its icon lives near the Windows clock (possibly under the hidden-icons arrow). Right-click it to open, restart, or stop Agent Office. Closing Chrome leaves your office running until you close the server terminal or use **Stop**. Restarting or stopping the office also stops its Windows worker processes; let active work finish first.
 
 To load code changes, use the office's **Update the office** walkthrough (the bar across the top after an Agent Office PR merges). It pulls, builds in a staging folder and asks the launcher to restart the office. You can also build by hand and use **Restart Agent Office** from the tray menu. If the office was started in PowerShell, stop that copy with Ctrl+C first, then launch the shortcut.
 

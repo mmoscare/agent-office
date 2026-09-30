@@ -25,6 +25,9 @@ Checkpoint rule: the office can restart at any time and end this session, so mak
 - If you're woken after a restart, first run git status and git log @{u}..HEAD (or git log origin/<your branch>..HEAD) to see what was already saved, and continue from there.
 </agent-office-checkpoint>`;
 
+/** Added to a queued task that runs in its own worktree (see queue.ts). */
+export const WORKTREE_NOTE = "\n\nYou're in your own git worktree, on a fresh branch made for this task. Commit there, push it, and open the pull request from it.";
+
 /** A queued task without the checkpoint rule: the rule is for the worker, not for its pull request. */
 export function withoutCheckpoint(task: string): string {
   return task.endsWith(CHECKPOINT_NOTE) ? task.slice(0, -CHECKPOINT_NOTE.length) : task;
@@ -41,10 +44,31 @@ export function retoldTask(task: string | undefined): string | undefined {
   return task ? `${task}${RETOLD_NOTE}` : undefined;
 }
 
+const SAVED_PREFIX = 'The office saved your uncommitted work as WIP commit ';
+
+/** Tells a worker that the office committed what it left uncommitted when it went down. */
+export function checkpointNotice(checkpoints: { hash: string; branch: string; repository?: string }[] | undefined): string | undefined {
+  if (!checkpoints?.length) return undefined;
+  return checkpoints
+    .map((c) => `${SAVED_PREFIX}${c.hash.slice(0, 12)} on ${c.branch}${c.repository ? ` (in ${c.repository})` : ''} when it restarted; run \`git log -1 --stat\` and continue from it. Squash or reword it before opening the PR if you like.`)
+    .join('\n');
+}
+
+/** A woken worker's prompt with the checkpoint notice after it, or the notice alone when there's no task to repeat. */
+export function withCheckpointNotice(prompt: string | undefined, notice: string | undefined): string | undefined {
+  if (!notice) return prompt;
+  return prompt ? `${prompt}\n\n${notice}` : notice;
+}
+
+/** A native slash command (/compact, /model …), which the agent runs as typed. */
+export function isSlashCommand(prompt: string): boolean {
+  return /^\/[\w:-]+(?:\s|$)/.test(prompt);
+}
+
 /** Preserve native slash commands and avoid submitting a new turn on a bare resume. */
 export function withWorkerHandoff(prompt: string | undefined, resumeSessionId?: string): string | undefined {
   if (!prompt && resumeSessionId) return undefined;
-  if (prompt && /^\/[\w:-]+(?:\s|$)/.test(prompt)) return prompt;
+  if (prompt && isSlashCommand(prompt)) return prompt;
   return `${prompt || WAIT_FOR_TASK}${HANDOFF_NOTE}`;
 }
 
@@ -53,5 +77,15 @@ export function withoutWorkerHandoff(prompt: string): string {
   if (!prompt.endsWith(HANDOFF_NOTE)) return prompt;
   const request = prompt.slice(0, -HANDOFF_NOTE.length);
   if (request === WAIT_FOR_TASK) return '';
-  return request.endsWith(RETOLD_NOTE) ? request.slice(0, -RETOLD_NOTE.length) : request;
+  const told = withoutNotice(request);
+  return told.endsWith(RETOLD_NOTE) ? told.slice(0, -RETOLD_NOTE.length) : told;
+}
+
+/** Drops the checkpoint notice the office put after a woken worker's prompt (see withCheckpointNotice). */
+function withoutNotice(request: string): string {
+  // The notice is the last paragraph: one line per saved commit, each starting with the same words.
+  const split = request.lastIndexOf('\n\n');
+  const notice = request.slice(split < 0 ? 0 : split + 2);
+  if (!notice.split('\n').every((line) => line.startsWith(SAVED_PREFIX))) return request;
+  return split < 0 ? '' : request.slice(0, split);
 }

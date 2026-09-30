@@ -79,7 +79,27 @@ internal static class Program {
         } catch { return false; }
     }
 
-    internal static void OpenBrowser() { Process.Start(new ProcessStartInfo(Url) { UseShellExecute = true }); }
+    internal static string ChromeExe() {
+        string[] roots = {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+        };
+        foreach (string root in roots) {
+            string exe = Path.Combine(root, "Google\\Chrome\\Application\\chrome.exe");
+            if (File.Exists(exe)) return exe;
+        }
+        return null;
+    }
+
+    internal static void OpenBrowser() {
+        string chrome = ChromeExe();
+        if (chrome != null) {
+            Process.Start(new ProcessStartInfo(chrome, Quote(Url)) { UseShellExecute = false });
+            return;
+        }
+        Process.Start(new ProcessStartInfo(Url) { UseShellExecute = true });
+    }
     internal static string Quote(string value) {
         var quoted = new StringBuilder("\"");
         int slashes = 0;
@@ -146,18 +166,22 @@ internal sealed class OfficeContext : ApplicationContext {
         tray.DoubleClick += delegate { Program.OpenBrowser(); };
         monitor = new System.Windows.Forms.Timer { Interval = 1500 };
         monitor.Tick += delegate {
-            if (stopping || server == null || !server.HasExited) return;
-            monitor.Stop();
-            int code = server.ExitCode;
-            if (StartsAgain(code)) {
-                // The page reconnects by itself, so no new browser tab.
-                Program.Log("--- Agent Office asked to be started again (exit code " + code + ") ---");
-                server.Dispose(); server = null;
-                if (!StartOffice(false)) ExitThread();
+            if (stopping) return;
+            if (server != null && server.HasExited) {
+                monitor.Stop();
+                int code = server.ExitCode;
+                if (StartsAgain(code)) {
+                    // The page reconnects by itself, so no new browser window.
+                    Program.Log("--- Agent Office asked to be started again (exit code " + code + ") ---");
+                    server.Dispose(); server = null;
+                    if (!StartOffice(false)) ExitThread();
+                    return;
+                }
+                MessageBox.Show("Agent Office stopped. See server.log in " + Program.InstallDir + " for details.", "Agent Office");
+                ExitThread();
                 return;
             }
-            MessageBox.Show("Agent Office stopped. See server.log in " + Program.InstallDir + " for details.", "Agent Office");
-            ExitThread();
+            if (terminal != null && terminal.HasExited && StopOffice()) ExitThread();
         };
     }
 
@@ -175,6 +199,7 @@ internal sealed class OfficeContext : ApplicationContext {
                         if (StartsAgain(server.ExitCode) && attempt < 3) { server.Dispose(); server = null; again = true; break; }
                         throw new Exception("Agent Office could not start. See server.log in " + Program.InstallDir);
                     }
+                    if (terminal != null && terminal.HasExited) throw new Exception("The server terminal was closed before Agent Office was ready.");
                     if (Program.Healthy()) { monitor.Start(); if (openBrowser) Program.OpenBrowser(); return true; }
                     Thread.Sleep(300);
                 }
@@ -201,11 +226,12 @@ internal sealed class OfficeContext : ApplicationContext {
     }
 
     // The server itself stays hidden (a console of its own kept it from coming up); this window follows server.log live.
+    // Closing it or Ctrl+C stops the office, so the backend is as easy to dismiss as the Chrome window.
     private void ShowTerminal() {
         if (terminal != null && !terminal.HasExited) return;
         string log = Path.Combine(Program.InstallDir, "server.log").Replace("'", "''");
         string script = "$Host.UI.RawUI.WindowTitle = 'Agent Office server'; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; "
-            + "Write-Host 'Live output of the Agent Office server. Closing this window does not stop the office; use the tray icon for that.' -ForegroundColor DarkGray; "
+            + "Write-Host 'Agent Office server. Close this window or press Ctrl+C to stop the office.' -ForegroundColor DarkGray; "
             + "Get-Content -LiteralPath '" + log + "' -Wait -Tail 40 -Encoding UTF8";
         try {
             terminal = Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -NoLogo -ExecutionPolicy Bypass -Command " + Program.Quote(script)) { UseShellExecute = true });

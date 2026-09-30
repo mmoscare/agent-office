@@ -100,7 +100,25 @@ function reopenAfterRestart(on: boolean) {
   }
 }
 
-export { load as checkOfficeUpdate };
+/** The check under way: another caller shares it rather than starting a second. */
+let inflight: Promise<void> | null = null;
+
+/** Asks the office how its update stands; while a check is under way, this returns that one. */
+export function checkOfficeUpdate(fresh = false): Promise<void> {
+  inflight ??= load(fresh).finally(() => {
+    inflight = null;
+  });
+  return inflight;
+}
+
+/**
+ * Checks again once any check under way is back. That one may have asked before a step done
+ * elsewhere finished (a restart from the tray icon, say), and would leave things as they were.
+ */
+export async function checkOfficeUpdateAfter(): Promise<void> {
+  await inflight;
+  await checkOfficeUpdate();
+}
 
 /** The first step still to do, or null when everything is. */
 export function currentStep(s: OfficeUpdateState): UpdateStepId | null {
@@ -301,7 +319,7 @@ function restartCard(s: OfficeUpdateState): HTMLElement[] {
   if (s.busy.length) {
     out.push(
       h('div.ou-outcome.warn', {},
-        h('p.ou-message', {}, `⚠️ ${s.busy.length === 1 ? 'This worker is' : 'These workers are'} busy right now. Restarting stops ${s.busy.length === 1 ? 'it' : 'them'}; ${s.busy.length === 1 ? 'it comes' : 'they come'} back idle, and you tell ${s.busy.length === 1 ? 'it' : 'them'} “continue” afterwards:`),
+        h('p.ou-message', {}, `⚠️ ${s.busy.length === 1 ? 'This worker is' : 'These workers are'} busy right now. Restarting interrupts ${s.busy.length === 1 ? 'it' : 'them'}. The office starts ${s.busy.length === 1 ? 'it' : 'them'} again and says “continue”; this window lists ${s.busy.length === 1 ? 'it' : 'them'} afterwards in case one needs telling again:`),
         h('ul.ou-workers', {}, ...s.busy.map(workerLine)),
         h('p.ou-note', {}, 'Anything they started in a terminal (a dev server, a test run) has to be started again.'),
       ),
@@ -381,14 +399,14 @@ function doneCard(s: OfficeUpdateState): HTMLElement[] {
       render?.();
     };
     out.push(
-      h('h4', {}, `Tell ${last.now.length === 1 ? 'this worker' : 'these workers'} “continue”:`),
-      h('p.ou-muted', {}, `${last.now.length === 1 ? 'It was' : 'They were'} busy when the office restarted, so ${last.now.length === 1 ? 'it' : 'they'} stopped where ${last.now.length === 1 ? 'it was' : 'they were'}.`),
+      h('h4', {}, sayable.length ? `Tell ${sayable.length === 1 ? 'this worker' : 'these workers'} “continue”:` : `${last.now.length === 1 ? 'The worker' : 'The workers'} that ${last.now.length === 1 ? 'was' : 'were'} busy:`),
+      h('p.ou-muted', {}, `${last.now.length === 1 ? 'It was' : 'They were'} busy when the office restarted. The office told ${last.now.length === 1 ? 'it' : 'them'} to carry on; one that’s idle now needs a “continue”.`),
       h('ul.ou-workers.ou-continue', {},
         ...last.now.map((w) => {
           const li = h('li', {}, h('b', {}, w.name), ` · ${w.floor}`, ' ');
           if (w.gone) li.append(h('span.ou-muted', {}, '(no longer at a desk)'));
           else if (said.has(w.id)) li.append(h('span.ou-said', {}, '✓ Said “continue”'));
-          else if (w.status === 'working' || w.status === 'starting') li.append(h('span.ou-said', {}, '✅ Already working again'));
+          else if (w.status === 'working' || w.status === 'starting') li.append(h('span.ou-said', {}, '✅ Carrying on'));
           else li.append(button('💬 Say “continue”', () => say(w)));
           return li;
         }),

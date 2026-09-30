@@ -6,6 +6,7 @@ import { renderDiff } from './changes';
 import { h, openModal, timeAgo, toast } from './dom';
 import { confirmDialog, openPrompt } from './prompt';
 import { renderOfficeStatus } from './office-status';
+import { openCleanup } from './cleanup';
 
 // The Git board: the PR board's other side. A button over the PR board on the wall (or in its
 // window) flips it. Its front lists every Git repository on the floor; open one for its branches and,
@@ -157,12 +158,14 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
   const status = h('span.board-status');
   const pullsBtn = h('button.btn', { type: 'button', title: 'Turn the board back to pull requests' }, '🔀 Pull requests');
   const refresh = h('button.btn', { type: 'button', title: 'Read the repositories again' }, '🔄 Refresh');
+  // The cleanup screen (ui/cleanup.ts), on this floor and the repository open here; any floor from there.
+  const cleanBtn = h('button.btn', { type: 'button', title: 'Delete leftover branches and worktrees, on this floor or any other', onclick: () => openCleanup({ floor: store.floor ?? undefined, repo: repo ?? undefined }) }, '🧹 Clean up');
   const close = h('button.btn.close', { 'aria-label': 'Close' }, '✕');
   const title = h('h2', {}, '🌿 Git');
   const body = h('div.body.git-body');
   const footer = h('footer.git-actions', { hidden: true });
   const officeBar = h('div.git-office-bar', { hidden: true });
-  const el = h('div.modal.board.git-board', { role: 'dialog', 'aria-label': 'Git board', tabindex: -1 }, h('header', {}, title, status, pullsBtn, refresh, close), officeBar, body, footer);
+  const el = h('div.modal.board.git-board', { role: 'dialog', 'aria-label': 'Git board', tabindex: -1 }, h('header', {}, title, status, pullsBtn, cleanBtn, refresh, close), officeBar, body, footer);
 
   // The office's own code: is what's running the latest? (ui/office-status.ts)
   let office: OfficeStatus | null = null;

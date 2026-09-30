@@ -10,24 +10,30 @@ import { floorRoster } from '../shared/roster.js';
 import { pullForBranch } from '../shared/pulls.js';
 import type { FloorDef } from './building.js';
 import { excludeFromGit } from './config.js';
-import { configuredProvider } from './agents.js';
+import { agentProviders, configuredProvider } from './agents.js';
 import { WorkerManager, type HookEnv } from './workers.js';
 import { GitHub, MergeWatch } from './github.js';
 import { TaskQueue } from './queue.js';
 import { Changes } from './changes.js';
 import { WorkspaceChanges } from './workspace-changes.js';
 import { Decor } from './decor.js';
+import { Docs } from './docs.js';
 import { Dog } from './dog.js';
+import { Court } from './court.js';
 import { Jukebox } from './jukebox.js';
 import { Whiteboard } from './whiteboard.js';
+import { ContentKanban } from './content-kanban.js';
+import { hasContentKanban } from '../shared/content-kanban.js';
 import { Plans } from './plans.js';
 import { Inbox } from './inbox.js';
 import { MeetingRoom } from './meetings.js';
 import { Worktrees } from './worktrees.js';
 import { UnshippedWatch } from './unshipped.js';
 import { readProjectLogo, type ProjectLogo } from './project-logo.js';
+import { landedWorkers } from './leave-on-merge.js';
 import type { Ledger } from './usage.js';
 import type { Capacity } from './machine.js';
+import { officePrompt, type PromptSource } from './prompts.js';
 
 type ToastLevel = 'info' | 'warn' | 'error';
 
@@ -40,6 +46,8 @@ export interface FloorContext {
   ledger: Ledger;
   /** The office's worker limit, across every floor. */
   capacity: Capacity;
+  /** The office's prompts and the worker everyone starts on, as set in ⚙️ Settings. */
+  prompts: PromptSource;
   /** To everyone on this floor. */
   emit(floor: Floor, msg: ServerMsg, droppable?: boolean): void;
   toast(floor: Floor, text: string, level?: ToastLevel): void;
@@ -61,8 +69,12 @@ export interface FloorContext {
     queueChanged(floor: Floor, state: QueueState): void;
     plansChanged(floor: Floor, state: PlansState): void;
   };
+  /** ⚙️ Settings: a worker whose pull request merged goes home by itself. */
+  leaveOnMerge(): boolean;
 }
 
+/** How long after a PR list or a worker's change the office looks for workers whose PR merged. */
+const LANDED_DELAY_MS = 1500;
 /** Boards on a floor nobody is on, with nothing running, are asked GitHub about this seldom. */
 const IDLE_REFRESH_MS = 10 * 60_000;
 const REFRESH_MS = 90_000;
@@ -83,7 +95,7 @@ export function projectInfo(dir: string, name: string, agentCmd: string, agentAr
     remote: git(['remote', 'get-url', 'origin']),
     agentCmd: [agentCmd, ...agentArgs].join(' '),
     defaultProvider: configuredProvider(agentCmd),
-    agentProviders: configuredProvider(agentCmd) === 'custom' ? ['claude', 'opencode', 'codex', 'custom'] : ['claude', 'opencode', 'codex'],
+    agentProviders: agentProviders(configuredProvider(agentCmd)),
   };
 }
 
@@ -105,19 +117,27 @@ export class Floor {
   readonly jukebox: Jukebox;
   /** The whiteboard everyone on the floor draws on together. */
   readonly whiteboard: Whiteboard;
+  /** The 🎬 Content Kanban on the whiteboard's stand, on the floors that have one (see shared/content-kanban.ts). */
+  readonly content?: ContentKanban;
   readonly plans: Plans;
   /** The 📥 in-tray: what came into the office from outside (see inbox.ts). */
   readonly inbox: Inbox;
   /** The meeting room, where workers work through a question together (see meetings.ts). */
   readonly meetings: MeetingRoom;
+  /** The bookshelf: the project's Markdown files (see docs.ts). */
+  readonly docs: Docs;
   /** Settles once the workers whose terminals outlived the last office are picked back up, and the rest woken. */
   readonly ready: Promise<void>;
   readonly dog: Dog;
   /** Office branches with work no PR carries, for the PR board and the queue's warnings (see unshipped.ts). */
   readonly unshipped: UnshippedWatch;
+  /** The basketball by the hoop: who has it, or how it was last thrown. */
+  readonly court = new Court();
   private timer: NodeJS.Timeout;
   /** Pull requests merging, to ring the gong for. */
   private merges = new MergeWatch();
+  /** A look for workers whose pull request merged, due shortly (see sendLandedHome). */
+  private landedTimer?: NodeJS.Timeout;
 
   constructor(
     readonly def: FloorDef,
@@ -131,6 +151,7 @@ export class Floor {
     this.project = projectInfo(def.dir, def.name, ctx.agentCmd, ctx.agentArgs);
     this.logo = readProjectLogo(def.dir);
     if (this.logo) this.project.logo = `/api/floors/${encodeURIComponent(def.id)}/logo?v=${this.logo.version}`;
+    this.docs = new Docs(def.dir);
 
     // Before the workers, so it hears about the ones who wake up needing input.
     this.dog = new Dog(def.id, dataDir, {
@@ -154,6 +175,8 @@ export class Floor {
           this.meetings?.onWorker(worker);
           this.dog.onWorker(worker);
           ctx.workerChanged(this, worker);
+          // Its turn ended, or whoever had its terminal open closed it: it may be free to go now.
+          this.sendLandedHome();
         },
         remove: (workerId) => {
           this.changes?.forget(workerId);
@@ -172,6 +195,7 @@ export class Floor {
       },
       ctx.ledger,
       ctx.capacity,
+      ctx.prompts,
     );
 
     this.github = new GitHub(
@@ -187,6 +211,7 @@ export class Floor {
           ctx.toast(this, `🎉 PR ${ghRef(p)} merged: ${p.title}`);
           this.merged(p.number, undefined, p.repo);
         }
+        this.sendLandedHome();
       },
     );
     // The 📒 To Do Next board: before the queue, which moves its items along as their tasks run.
@@ -199,6 +224,8 @@ export class Floor {
       update: (state) => {
         ctx.emit(this, { t: 'queue', state });
         ctx.mail?.queueChanged(this, state);
+        // A task's pull request may just have been linked (or merged).
+        this.sendLandedHome();
       },
       toast: (text, level) => ctx.toast(this, text, level),
       claimIssue: (issue, repo) => this.github.claim(issue, repo),
@@ -212,6 +239,7 @@ export class Floor {
       startPlan: (plan, worker, task) => void this.plans.start(plan, worker, task),
       endPlan: (plan, outcome) => this.plans.end(plan, outcome),
       finished: () => this.unshipped?.soon(),
+      worktreeNote: () => officePrompt(ctx.prompts, 'queue.worktree'),
     });
     this.unshipped = new UnshippedWatch(def.dir, {
       workers: () => this.workers.list(),
@@ -223,11 +251,15 @@ export class Floor {
     });
 
     // Meetings seat their own workers round the meeting room's table and run them round by round.
+    const workers = this.workers;
     this.meetings = new MeetingRoom(
       def.dir,
       dataDir,
       {
         defaultProvider: this.workers.defaultProvider,
+        get officeDefault() {
+          return workers.officeDefault;
+        },
         list: () => this.workers.list(),
         seat: (deskId, by, prompt, provider, model, effort, meeting) => this.workers.spawn(deskId, by, prompt, false, 'agent', provider, model, effort, meeting),
         prompt: (id, text, by) => this.workers.prompt(id, text, by),
@@ -240,6 +272,7 @@ export class Floor {
         toast: (text, level) => ctx.toast(this, text, level),
         hiringPaused: () => ctx.ledger.hiringPaused,
         postReview: (pr, file) => this.github.review(pr, file),
+        prompt: (id) => ctx.prompts.text(id),
       },
     );
 
@@ -275,6 +308,7 @@ export class Floor {
     this.decor = new Decor(dataDir);
     this.jukebox = new Jukebox(dataDir);
     this.whiteboard = new Whiteboard(dataDir);
+    if (hasContentKanban(def.id)) this.content = new ContentKanban(dataDir);
     // The 📥 in-tray watches its folder for what comes in from outside.
     this.inbox = new Inbox(dataDir, {
       update: (state) => ctx.emit(this, { t: 'inbox', state }),
@@ -294,6 +328,28 @@ export class Floor {
   /** Pull request `n` (of `repo`, on a floor of several) merged (`by` someone, from the PR window): the gong rings, once per PR. */
   merged(n: number, by?: string, repo?: string) {
     if (this.merges.ring(n, repo)) this.ctx.emit(this, { t: 'gong', why: 'merged', pr: n, by });
+  }
+
+  /**
+   * With ⚙️ Settings' *go home once merged* on, sends home every worker whose pull request merged,
+   * once it's at rest and nobody has its terminal open, deleting its worktree and branch unless they
+   * hold work that isn't on GitHub. Called whenever that might have changed; it looks a moment later,
+   * once for a burst of calls, and not from inside the event that prompted it.
+   */
+  sendLandedHome() {
+    if (this.landedTimer || !this.ctx.leaveOnMerge()) return;
+    this.landedTimer = setTimeout(() => {
+      this.landedTimer = undefined;
+      if (!this.ctx.leaveOnMerge()) return;
+      for (const { worker, pr, head } of landedWorkers(this.workers.list(), this.github.pulls.items, this.queue.state().tasks)) {
+        const done = this.workers.kill(worker.id, undefined, head);
+        this.ctx.toast(this, `🏠 ${worker.name} went home: PR #${pr} merged`);
+        void done.then(({ note, error }) => {
+          if (note) this.ctx.toast(this, note);
+          if (error) this.ctx.toast(this, error, 'warn');
+        });
+      }
+    }, LANDED_DELAY_MS);
   }
 
   /** Someone just walked in: boards that haven't been looked at in a while get fetched again. */
@@ -322,9 +378,13 @@ export class Floor {
     };
   }
 
-  /** With `keep` (a restart), the workers' terminals keep running for the next office to pick up. */
-  shutdown(keep = false) {
+  /**
+   * With `keep` (a restart), the workers' terminals keep running for the next office to pick up.
+   * Resolves once the workers' uncommitted work is saved as WIP commits (bounded, see wip-checkpoint.ts).
+   */
+  shutdown(keep = false): Promise<void> {
     clearInterval(this.timer);
+    clearTimeout(this.landedTimer);
     this.dog.stop();
     this.github.stop();
     this.queue.shutdown();
@@ -335,6 +395,7 @@ export class Floor {
     this.whiteboard.flush();
     this.inbox.shutdown();
     this.workers.shutdown(keep);
+    return this.workers.checkpoint(keep);
   }
 
   changesFor(workerId: string, repository?: string): Changes | undefined {

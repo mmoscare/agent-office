@@ -248,7 +248,7 @@ export const MANUAL: ManualChapter[] = [
       {
         list: [
           'Work in progress stops wherever it was.',
-          'Workers come back **idle**. Tell each busy one “continue”.',
+          'After **Ctrl+C** or the tray icon’s **Restart Agent Office**, workers come back **idle**: tell each busy one “continue”. The walkthrough’s **🔄 Restart now** tells them to carry on by itself.',
           'Anything they started in a terminal (dev servers, test runs) has to be started again.',
           'A worker that never got going comes back as a fresh one.',
         ],
@@ -257,7 +257,7 @@ export const MANUAL: ManualChapter[] = [
       {
         list: [
           'Step 5 lists the workers who are busy right now. **🔄 Restart now** asks you to confirm when anyone is; **⏳ Restart as soon as everyone is idle** waits for them.',
-          'It saves who was busy before it restarts. Afterwards it lists them, each with a **💬 Say “continue”** button.',
+          'It saves who was busy before it restarts. The office starts them again and tells them to carry on; afterwards the window lists them, with a **💬 Say “continue”** button for any that came back idle.',
           'It works when the office runs from the **Agent Office** launcher (the tray icon near the clock), installed after this feature. Otherwise it shows how to restart by hand.',
         ],
       },
@@ -308,6 +308,8 @@ export const MANUAL: ManualChapter[] = [
       },
       { h: 'The board agents read it too' },
       { p: 'Every board agent knows the board through `office-plans` (`list`, `add`, `set <id> todo|progress|finished`, `remove <id>`) and queues an item with `office-queue add --plan <id>`. Ask the Queue agent to “queue everything on the To Do Next board” and it makes one task per item.' },
+      { h: 'Your hours: the Indirect Time card' },
+      { p: 'The 🗂️ **Indirect Time** index card beside the binder (or ☰ → **Indirect Time**) keeps your hours in the office, per day. You clock in when your first browser window opens the office and out when your last one closes, on whichever floor; a reload or a restart within 5 minutes carries on the same stint. It is the same card on every floor. **⬇️ CSV** downloads every day for a timesheet. The cards are kept on the office’s machine in `.agent-office/timecard.json`.' },
     ],
   },
   {

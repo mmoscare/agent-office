@@ -1,16 +1,19 @@
 import { UPDATE_STEPS, type OfficeUpdateState } from '../../shared/office-update';
 import { store } from '../state';
 import { h } from './dom';
-import { checkOfficeUpdate, currentStep, officeUpdateState, onOfficeUpdate, openOfficeUpdate } from './office-update';
+import { checkOfficeUpdate, checkOfficeUpdateAfter, currentStep, officeUpdateState, onOfficeUpdate, openOfficeUpdate } from './office-update';
 
 // The update bar across the top of the screen: after a pull request for Agent Office itself is
 // merged (in the office or on GitHub), which pull requests are waiting and how far the update has
 // got, with a button that opens the step-by-step walkthrough (ui/office-update.ts). After the
 // restart it says the update is live and who to tell "continue". "Hide" puts it away until the next
-// merge. It reads the walkthrough's state (/api/git/office/update).
+// merge. It reads the walkthrough's state (/api/git/office/update). The step chips open the walkthrough
+// too, and coming back to this tab (from a restart done by hand, say) checks again.
 
 const HIDE_KEY = 'agent-office.updateBarHidden';
 const POLL_MS = 60_000;
+/** Back on this tab: check this long after, once the switch has settled. */
+const BACK_MS = 500;
 
 let bar: HTMLElement | null = null;
 
@@ -61,11 +64,15 @@ function render() {
     }
     bar!.hidden = true;
   });
-  const open = (label: string) => {
-    const b = h('button.btn.primary', { type: 'button' }, label);
-    b.addEventListener('click', openOfficeUpdate);
+  // Space jumps in the office: a button left focused in the bar would be pressed again.
+  const opener = (b: HTMLButtonElement) => {
+    b.addEventListener('click', () => {
+      b.blur();
+      openOfficeUpdate();
+    });
     return b;
   };
+  const open = (label: string) => opener(h('button.btn.primary', { type: 'button' }, label));
   bar.hidden = false;
   if (!step && last) {
     // After the restart: how it went.
@@ -88,7 +95,12 @@ function render() {
   const chips = h(
     'ol.update-steps',
     { 'aria-label': `Step ${index + 1} of ${UPDATE_STEPS.length}` },
-    ...UPDATE_STEPS.map((st, i) => h('li', { class: i < index ? 'done' : i === index ? 'now' : 'later' }, h('span.update-num', {}, i < index ? '✓' : String(i + 1)), st.title)),
+    // Each chip opens the walkthrough, where the step is explained.
+    ...UPDATE_STEPS.map((st, i) =>
+      h('li', { class: i < index ? 'done' : i === index ? 'now' : 'later' },
+        opener(h('button', { type: 'button', title: 'Open the walkthrough', 'aria-current': i === index ? 'step' : undefined }, h('span.update-num', {}, i < index ? '✓' : String(i + 1)), st.title)),
+      ),
+    ),
   );
   const title = s.app.behind > 0 || s.floors.some((f) => f.behind > 0) ? '🔀 New Agent Office code' : '🛠 The office’s code changed';
   const label = prLabel(s);
@@ -106,6 +118,16 @@ export function mountUpdateBar(): void {
     if (document.visibilityState === 'visible') void checkOfficeUpdate();
   }, POLL_MS);
   store.on('floor', () => void checkOfficeUpdate());
+  // Back on this tab (from the tray icon or PowerShell): check again, after any check under way,
+  // which may have asked before whatever was done out there had finished.
+  let backTimer: ReturnType<typeof setTimeout> | undefined;
+  const back = () => {
+    if (document.visibilityState !== 'visible' || !bar || bar.hidden) return;
+    clearTimeout(backTimer);
+    backTimer = setTimeout(() => void checkOfficeUpdateAfter(), BACK_MS);
+  };
+  document.addEventListener('visibilitychange', back);
+  window.addEventListener('focus', back);
   // A PR the boards now show as merged (on GitHub, by a worker, by anyone here): check at once.
   let merged: Set<string> | null = null;
   store.on('pulls', () => {

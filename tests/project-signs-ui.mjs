@@ -1,5 +1,7 @@
 // npm run build && node tests/project-signs-ui.mjs
 // Isolated local floors; no agents, repository clones or live office state.
+// Optional argument: a saved floors.json. Copy only its discovered logo bytes into temporary
+// floors to verify the real launchers' PNG/ICO/SVG artwork without opening the live projects.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -9,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { readProjectLogo } from '../dist/server/server/project-logo.js';
 
 const codeDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const root = await mkdtemp(path.join(os.tmpdir(), 'office-signs-ui-'));
@@ -50,10 +53,11 @@ try {
   assert.equal((await context.request.get(url + '/api/floors/sketchbook/logo')).status(), 404);
   assert.equal((await context.request.get(url + '/api/floors/unknown/logo')).status(), 404);
   const svg = await readFile(path.join(codeDir, 'src/client/public/favicon.svg'), 'utf8');
-  const addFloor = async (name, image) => {
-    const dir = path.join(root, name);
-    await mkdir(path.join(dir, 'public'), { recursive: true });
-    if (image) await writeFile(path.join(dir, 'public/logo.svg'), image);
+  const addFloor = async (name, image, asset = 'public/logo.svg') => {
+    const dir = path.resolve(root, name);
+    assert.equal(path.dirname(dir), root, 'fixture floor stays inside the temporary building');
+    await mkdir(path.dirname(path.join(dir, asset)), { recursive: true });
+    if (image) await writeFile(path.join(dir, asset), image);
     const response = await context.request.post(url + '/api/floors/local', { headers: { Origin: url }, data: { dir } });
     assert.equal(response.status(), 200);
     return (await response.json()).floor;
@@ -62,6 +66,17 @@ try {
   const longName = 'a-repository-with-a-very-long-unbroken-name-that-must-still-fit-on-every-door-and-whiteboard-sign-12345';
   const long = await addFloor(longName);
   const broken = await addFloor('Broken Logo', 'not an SVG');
+  const twoLines = await addFloor('Autonomous Dev Projects', svg);
+  const localLogos = [];
+  if (process.argv[2]) {
+    const types = { 'image/svg+xml': 'svg', 'image/png': 'png', 'image/x-icon': 'ico', 'image/webp': 'webp', 'image/jpeg': 'jpg' };
+    for (const floor of JSON.parse(await readFile(process.argv[2], 'utf8'))) {
+      const logo = readProjectLogo(floor.dir);
+      assert.ok(logo, `${floor.name} has a discovered logo`);
+      const id = await addFloor(floor.name, logo.bytes, `.agent-office/logo.${types[logo.type]}`);
+      localLogos.push({ id, name: floor.name, logo });
+    }
+  }
   await context.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Signage test', color: '#ff8a5b', look: {} }));
     localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
@@ -73,7 +88,10 @@ try {
       return fillRect.apply(this, args);
     };
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
-      if (this.canvas.signText) this.canvas.signText.push({ text, x, y, width: this.measureText(text).width });
+      if (this.canvas.signText) {
+        const metrics = this.measureText(text);
+        this.canvas.signText.push({ text, x, y, width: metrics.width, top: y - metrics.actualBoundingBoxAscent, bottom: y + metrics.actualBoundingBoxDescent });
+      }
       return maxWidth === undefined ? fillText.call(this, text, x, y) : fillText.call(this, text, x, y, maxWidth);
     };
   });
@@ -86,6 +104,11 @@ try {
   const ride = async (id) => {
     await page.evaluate((floor) => window.__office.ride(floor), id);
     await page.waitForFunction((floor) => window.__office.store.floor === floor && window.__office.office.elevator.open, id);
+  };
+  const assertTitleSpacing = (sign) => {
+    const header = sign.text.find((t) => t.x === 380 && t.y === 94);
+    const title = sign.text.filter((t) => t.x === 380 && t.y > 94);
+    assert.ok(title.every((t) => t.top > header.bottom + 8 && t.bottom < 340), 'title clears the floor label and bottom trim');
   };
   const snapshot = () => page.evaluate(() => {
     const signs = [];
@@ -142,6 +165,10 @@ try {
   assert.equal(plain.text.filter((t) => t.x === 380 && t.y > 94).map((t) => t.text).join(''), longName);
   assert.ok(plain.text.filter((t) => t.x === 380).every((t) => t.x + t.width <= 1469));
   await photograph('long-name', [5.4, 3.25, 1.5], [5.4, 2.3, -5.4]);
+  await ride(twoLines);
+  const wrapped = await snapshot();
+  assert.equal(wrapped.text.filter((t) => t.x === 380 && t.y > 94).length, 2);
+  assertTitleSpacing(wrapped);
 
   // Hold a real floor's image response, leave it, then deliver it after the next floor is visible.
   let held;
@@ -161,6 +188,41 @@ try {
   const version = await page.evaluate(() => window.__office.office.group.getObjectByName('project-sign-face').material.map.version);
   await page.evaluate(() => { for (let i = 0; i < 20; i++) window.__office.store.emit('floors'); });
   assert.equal(await page.evaluate(() => window.__office.office.group.getObjectByName('project-sign-face').material.map.version), version, 'worker-count broadcasts do not redraw signage');
+  const gallery = [];
+  for (const { id, name, logo } of localLogos) {
+    await ride(id);
+    await page.waitForFunction(() => {
+      const canvas = window.__office.office.group.getObjectByName('project-sign-face').material.map.image;
+      // Initials are centered at x=192; only the name/floor lettering remains after image load.
+      return !canvas.signText.some((t) => t.x === 192);
+    });
+    const sign = await snapshot();
+    assert.equal(sign.signs.length, 9, name);
+    assert.ok(sign.shared);
+    assertTitleSpacing(sign);
+    const response = await context.request.get(url + sign.logo);
+    assert.equal(response.status(), 200, name);
+    assert.equal(response.headers()['content-type'], logo.type, name);
+    assert.deepEqual(await response.body(), logo.bytes, name);
+    gallery.push({ name, pixels: sign.pixels });
+    console.log(`PASS: ${name} logo is served and rendered on every plaque (${logo.type}).`);
+  }
+  if (gallery.length) {
+    const preview = await context.newPage();
+    await preview.setContent('<html><body style="margin:24px;background:#eee9df;display:grid;grid-template-columns:1fr 1fr;gap:16px"></body></html>');
+    await preview.evaluate(async (items) => {
+      for (const { name, pixels } of items) {
+        const image = document.createElement('img');
+        image.src = pixels;
+        image.alt = name;
+        image.style.width = '100%';
+        document.body.append(image);
+      }
+      await Promise.all([...document.images].map((image) => image.decode()));
+    }, gallery);
+    await preview.screenshot({ path: path.join(shots, 'launcher-logos.png'), fullPage: true });
+    await preview.close();
+  }
   assert.deepEqual(errors, []);
   console.log('PASS: 9 plaques, shared textures, authenticated local logos, floor palettes, initials, long names, floor rides, delayed image race, broken images, stable broadcasts and whiteboard interaction.');
   console.log(`Screenshots: ${shots}`);
