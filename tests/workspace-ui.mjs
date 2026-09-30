@@ -97,7 +97,7 @@ fetch(process.env.AGENT_OFFICE_HOOK_URL + '/hooks/codex?worker=' + process.env.A
     await page.waitForFunction(() => {
       const hint = document.querySelector('#hint');
       const worker = window.__office.store.workerAtDesk('desk-1');
-      return !hint?.classList.contains('hidden') && hint?.textContent.includes(worker ? 'Send home' : 'Desk 1');
+      return !hint?.classList.contains('hidden') && hint?.textContent.includes(worker ? 'Clock out' : 'Desk 1');
     });
   };
   await atDesk(); await page.keyboard.press('e');
@@ -159,11 +159,11 @@ fetch(process.env.AGENT_OFFICE_HOOK_URL + '/hooks/codex?worker=' + process.env.A
   console.log('Added a third repository to the existing worker.');
   await workspace.getByRole('button', { name: 'Close workspace' }).click();
   await atDesk(); await page.keyboard.press('x');
-  const cleanup = page.getByRole('alertdialog', { name: 'Send Pixel home?' }).or(page.getByRole('dialog', { name: 'Send Pixel home?' }));
+  const cleanup = page.getByRole('alertdialog', { name: 'Clock Pixel out?' }).or(page.getByRole('dialog', { name: 'Clock Pixel out?' }));
   await cleanup.waitFor();
   await cleanup.getByText(/backend: 0 uncommitted changes, 1 unpushed commits/).waitFor({ timeout: 15000 });
   assert.equal(await cleanup.getByRole('radio', { name: /Keep everything/ }).isChecked(), true);
-  await cleanup.getByRole('button', { name: 'Send home', exact: true }).click();
+  await cleanup.getByRole('button', { name: 'Clock out', exact: true }).click();
   await page.waitForFunction(() => window.__office.store.workers.size === 0);
   assert.equal(existsSync(backend), true, 'default cleanup preserves unpushed work');
   assert.equal(readFileSync(path.join(floor, 'frontend/app.txt'), 'utf8'), 'unfinished original edits\n');

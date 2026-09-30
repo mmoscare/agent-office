@@ -30,7 +30,7 @@ const GROUPS: { id: Group; icon: string; title: string; hint: string }[] = [
   { id: 'safe', icon: '🧹', title: 'Safe to delete', hint: 'every commit is already in the default branch or on a remote, and nothing is uncommitted' },
   { id: 'work', icon: '✋', title: 'Holding work', hint: 'deleting one of these loses what it says, so it needs its own "delete anyway"' },
   { id: 'pinned', icon: '📌', title: 'Always kept', hint: 'pinned in this repository: every cleanup leaves them alone' },
-  { id: 'kept', icon: '🔒', title: 'Kept: live workers and protected', hint: 'never deleted from here. Send a worker home from the office to clean up after it' },
+  { id: 'kept', icon: '🔒', title: 'Kept: live workers and protected', hint: 'never deleted from here. Clock a worker out from the office to clean up after it' },
 ];
 
 function groupOf(it: CleanupItem): Group {
