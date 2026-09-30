@@ -289,7 +289,7 @@ export class MeetingRoom {
     }
     for (const s of m.seats) {
       const w = s.workerId ? byId.get(s.workerId) : undefined;
-      if (!w) return this.halt(m, `the ${s.role} (${s.workerName ?? 'its worker'}) was sent home`);
+      if (!w) return this.halt(m, `the ${s.role} (${s.workerName ?? 'its worker'}) clocked out`);
       if (w.status === 'exited') return this.halt(m, `the ${s.role}'s agent (${w.name}) exited`);
     }
     if (m.tokens > m.budget) return this.halt(m, `over budget: ${fmtTokens(m.tokens)} of ${fmtTokens(m.budget)} tokens`);

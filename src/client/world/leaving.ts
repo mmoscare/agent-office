@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { BALCONY, PARACHUTE } from '../../shared/layout';
 import { walkOff, wayHome, wayIn, wayToBalcony, type Pt } from '../../shared/nav';
+import { wayTo } from '../walkto';
 import type { Worker } from './character';
 import type { Laptop } from './laptop';
 import type { DeskView } from './office';
 import { mesh, toonUnique } from './toon';
 
-/** Walking pace on the way out, in m/s: no hurry any more. */
+/** Walking pace on the way out, in m/s: coffee in hand, heading out. */
 const PACE = 2.3;
-/** Seconds sat at the desk while its things go in the box and the laptop shuts. */
+/** Seconds sat at the desk, waving, while the laptop shuts. */
 const PACK = 0.9;
 /** Seconds hopping down off the chair (or the bean bag). */
 const HOP = 0.55;
@@ -19,7 +20,7 @@ const GONE = 0.6;
 /** Seconds for a shut laptop to shrink away. */
 const LAPTOP_GONE = 0.3;
 
-const FAREWELLS = ['😢 bye, everyone', '🥲 it was fun', '📦 welp', '😞 cleaning out my desk', '🥺 but my PR…', '😶 security is walking me out'];
+const FAREWELLS = ['👋 back soon', '☕ coffee run', '🌙 see you later', '✨ brb', '😊 catch you in a bit', '🚲 heading out'];
 
 // Leaving a floor with no exit door, by parachute off the balcony.
 /** Seconds climbing up onto the railing, then teetering on it. */
@@ -36,7 +37,7 @@ const TURN = 1.2;
 /** Seconds for the chute to pop open, and to crumple on the ground once it's down. */
 const POP = 0.45;
 const CRUMPLE = 1.3;
-const JUMPS = ['🪂 geronimo!', '🪂 see ya!', '🪂 wheee!', '🪂 bye bye!', '🪂 I quit!'];
+const JUMPS = ['🪂 see you soon!', '🪂 brb!', '🪂 wheee!', '🪂 back in a bit!', '🪂 catch you later!'];
 const CANOPIES = ['#ef476f', '#ffd166', '#06d6a0', '#118ab2', '#8338ec', '#ff8a5b'];
 
 /** Seen from below too, so both sides of the fabric. */
@@ -138,11 +139,11 @@ const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 const pick = <T>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)];
 
 /**
- * Workers who've been sent home. Each one packs its things into a cardboard box while its laptop
- * shuts, hops down off its chair, and walks out of the building with the box (see wayHome): out the
- * exit door, down the steps and off along the sidewalk, where it's gone. Only the bottom floor has
- * an exit door, so from the floors above it goes out onto the balcony instead, climbs up on the
- * railing and jumps, and its parachute brings it down onto the lot out front, box and all.
+ * Workers who've clocked out. Each one grabs a coffee, waves while its laptop shuts, hops down off
+ * its chair, and walks out (see wayHome): out the exit door, down the steps and off along the
+ * sidewalk, where it's gone. They'll be back — this isn't a send-off. Only the bottom floor has an
+ * exit door, so from the floors above it goes out onto the balcony instead, climbs up on the
+ * railing and jumps, and its parachute brings it down onto the lot out front, coffee and all.
  */
 export class Departures {
   private leavers: Leaver[] = [];
@@ -159,32 +160,40 @@ export class Departures {
     private upstairs: () => boolean,
   ) {}
 
-  /** Takes over a worker's model and laptop the moment it's sent home from `desk`. */
-  add(model: Worker, laptop: Laptop, desk: DeskView) {
+  /**
+   * Takes over a worker's model and laptop the moment it clocks out from `desk`. `away` when it isn't
+   * there (the staffer, called over to you): it waves where it stands and walks back past its desk and
+   * out the same way, rather than flying back to its seat first.
+   */
+  add(model: Worker, laptop: Laptop, desk: DeskView, away = false) {
     // Off the desk first if it was up there dancing: it packs up in its seat.
     model.stopDancing();
     const seat = model.root.getWorldPosition(new THREE.Vector3());
     const scale = model.root.getWorldScale(new THREE.Vector3()).x;
+    const yaw = new THREE.Euler().setFromQuaternion(model.root.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
     this.parent.add(model.root);
     model.root.position.copy(seat);
     // On the seat it faces the desk: the seat anchor is turned round from the desk's own rotation.
-    model.root.rotation.set(0, desk.def.rotY + Math.PI, 0);
+    model.root.rotation.set(0, away ? yaw : desk.def.rotY + Math.PI, 0);
     model.root.scale.setScalar(scale);
     model.leave(pick(FAREWELLS));
     const chair = desk.def.beanbag ? null : desk.chair;
     const up = this.upstairs();
     const chute: Chute | null = up ? { phase: 'walk', t: 0, color: pick(CANOPIES), canopy: null, from: new THREE.Vector3(), vel: new THREE.Vector3(), land: new THREE.Vector3(), angle: 0, radius: 0, height: 1 } : null;
-    const way = up ? wayToBalcony(desk.def) : wayHome(desk.def);
+    const out = up ? wayToBalcony(desk.def) : wayHome(desk.def);
+    // Its way out starts beside its seat, then steps out into the room (out[1]); from where it is, it
+    // walks over to that and on from there.
+    const way: Pt[] = away ? [[seat.x, seat.z], ...wayTo(seat, { x: out[1][0], y: 0, z: out[1][1] }).map((p): Pt => [p.x, p.z]), ...out.slice(2)] : out;
     this.leavers.push({ model, deskId: desk.def.id, way, next: 0, t: 0, seat, heading: model.root.rotation.y, stepIn: 0, chair, spin: 0, scale, gone: 0, chute });
     this.laptops.push({ laptop, deskId: desk.def.id, gone: 0 });
   }
 
-  /** Whether someone sent home from `deskId` is still sitting there, packing up. */
+  /** Whether someone clocking out from `deskId` is still sitting there, waving. */
   seated(deskId: string): boolean {
     return this.leavers.some((l) => l.deskId === deskId && l.next === 0);
   }
 
-  /** Someone new sat down at `deskId`: the old laptop goes at once, and whoever was packing there gets up. */
+  /** Someone new sat down at `deskId`: the old laptop goes at once, and whoever was still waving there gets up. */
   vacate(deskId: string) {
     for (const c of this.laptops) if (c.deskId === deskId) this.dropLaptop(c);
     this.laptops = this.laptops.filter((c) => c.deskId !== deskId);

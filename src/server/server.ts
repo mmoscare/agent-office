@@ -2311,7 +2311,7 @@ export async function startServer(cfg: Config) {
         const on = msg.on === true;
         if (on === leaveOnMerge.on) break;
         leaveOnMerge.set(on, who);
-        toastAll(on ? `🏠 ${who} set workers to go home by themselves once their pull request merges` : `🪑 ${who} set workers whose pull request merged to stay until they're sent home`);
+        toastAll(on ? `🏠 ${who} set workers to go home by themselves once their pull request merges` : `🪑 ${who} set workers whose pull request merged to stay until they're clocked out`);
         // The ones already merged go now.
         if (on) for (const f of floors.values()) f.sendLandedHome();
         break;
