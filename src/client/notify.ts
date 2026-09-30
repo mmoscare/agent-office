@@ -31,6 +31,8 @@ export function waitingOnSomeone(w: WorkerInfo): w is WorkerInfo & { status: 'ne
 export class DesktopNotifier {
   /** The notification up for each worker, to take down once it's handled. */
   private shown = new Map<string, Notification>();
+  /** Up while the office server is unreachable. */
+  private down: Notification | null = null;
 
   constructor(
     private enabled: () => boolean,
@@ -79,6 +81,26 @@ export class DesktopNotifier {
       window.focus();
       n.close();
     };
+  }
+
+  /** The office server stopped answering: stays up until it's back, since nothing works meanwhile. */
+  serverDown() {
+    if (!this.enabled() || notifyPermission() !== 'granted') return;
+    if (!document.hidden && document.hasFocus()) return;
+    this.down?.close();
+    this.down = this.show('⚠️ Agent Office server is down', { body: 'Lost connection to the office server. The office tab keeps trying to reconnect.', tag: 'server-down', requireInteraction: true });
+    if (this.down) this.down.onclick = () => window.focus();
+  }
+
+  /** It's answering again after `ms`. */
+  serverBack(ms: number) {
+    const was = this.down;
+    this.down = null;
+    was?.close();
+    if (!was || !this.enabled() || notifyPermission() !== 'granted') return;
+    if (!document.hidden && document.hasFocus()) return;
+    const n = this.show('✅ Agent Office is back online', { body: `The office server was unreachable for ${Math.round(ms / 1000)}s.`, tag: 'server-down' });
+    if (n) n.onclick = () => (window.focus(), n.close());
   }
 
   private closeAll() {

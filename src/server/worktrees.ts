@@ -98,7 +98,8 @@ export class Worktrees {
           } catch (err) {
             // Git won't (a lock, a submodule), but it is the office's own folder: take it out ourselves.
             if (!this.owns(abs)) throw err;
-            await rm(abs, { recursive: true, force: true });
+            // Retries ride out files Windows still has locked for a moment; fs.rm copes with paths too long for git.
+            await rm(abs, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
           }
         }
       }

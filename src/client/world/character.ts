@@ -8,6 +8,8 @@ import { HIPS } from '../player';
 import { OpenBook } from './book';
 import { HeldCard } from './card';
 import { UNDEAD_SKIN, elfBoot, elfHat, elfWorker, santaHat, warlockHat, zombieWorker } from './costumes';
+import type { ModelBrand } from '../../shared/model-brand';
+import { disposeLogoSprite, logoSprite } from './model-logos';
 import { cardSprite, disposeSprite, mesh, textSprite, toon, toonUnique } from './toon';
 import { WORK_KINDS } from '../../shared/work-kind';
 
@@ -1282,6 +1284,9 @@ export class Worker {
   private task: WorkerTask | undefined;
   /** The model it runs, on a tab at the foot of its task card. */
   private modelTag: string | undefined;
+  /** The company's mark, floating above the card (or the name, when it has no card yet). */
+  private logo: THREE.Sprite | null = null;
+  private logoBrand: ModelBrand | undefined;
   /** Its pull request, open or merged: its bubble is outlined (and labelled, while it rests) to match. */
   private pr: WorkerPr | undefined;
   private nameTag: THREE.Sprite | null = null;
@@ -1507,10 +1512,43 @@ export class Worker {
     this.drawBubble();
   }
 
-  /** The model (and effort) it runs, e.g. "Opus 5.5 · high", tucked onto the bottom edge of its task card. */
-  setModel(tag: string | undefined) {
-    this.modelTag = tag;
-    this.drawBubble();
+  /** The model (and effort) it runs, e.g. "Opus 5.5 · high", tucked onto the bottom edge of its task card. `brand` is the logo above that card. */
+  setModel(tag: string | undefined, brand?: ModelBrand) {
+    if (tag !== this.modelTag) {
+      this.modelTag = tag;
+      this.drawBubble();
+    }
+    this.setLogo(brand);
+  }
+
+  private setLogo(brand: ModelBrand | undefined) {
+    if (brand === this.logoBrand) return;
+    this.logoBrand = brand;
+    if (this.logo) {
+      this.logo.removeFromParent();
+      disposeLogoSprite(this.logo);
+      this.logo = null;
+    }
+    if (!brand) return;
+    this.logo = logoSprite(brand);
+    this.logo.visible = !this.leaving;
+    this.logo.position.y = 2.9;
+    this.root.add(this.logo);
+  }
+
+  /** Sits the mark on top of whatever is over its head. The sprite's anchor is its bottom edge. */
+  private placeLogo() {
+    if (!this.logo) return;
+    if (this.leaving) {
+      this.logo.visible = false;
+      return;
+    }
+    this.logo.visible = true;
+    const gap = 0.05;
+    let top = 1.72;
+    if (this.bubble) top = this.bubble.position.y + (this.bubbleIsCard ? this.bubble.scale.y : this.bubble.scale.y / 2);
+    else if (this.nameTag) top = this.nameTag.position.y + this.nameTag.scale.y / 2;
+    this.logo.position.set(0, top + gap, 0.02);
   }
 
   setPr(pr: WorkerPr | undefined) {
@@ -1532,6 +1570,7 @@ export class Worker {
     for (const p of this.pupils) p.position.y = 0.7;
     this.bulb.color.set(STATUS_BULB.exited);
     this.bulb.emissive.set('#000000');
+    if (this.logo) this.logo.visible = false;
     if (this.bubble) {
       this.root.remove(this.bubble);
       disposeSprite(this.bubble);
@@ -1672,6 +1711,7 @@ export class Worker {
     this.bulbMesh.scale.setScalar(this.status === 'needs_input' ? 1 + Math.abs(Math.sin(t * 8)) * 0.5 : 1);
     if (this.bubble) this.bubble.position.y = (this.bubbleIsCard ? 1.74 : 1.95) + (hopping ? this.body.position.y : 0) + Math.sin(t * 3) * 0.03;
     if (this.nameTag) this.nameTag.position.y = 1.55 + (hopping ? this.body.position.y : 0);
+    this.placeLogo();
     // Walking in to a meeting: the same waddle as on the way out, without the box.
     if (this.walking || this.stride) {
       this.stride = this.walking ? this.stride + dt * 9 : 0;
@@ -1837,6 +1877,7 @@ export class Worker {
     this.blink(dt);
     if (this.bubble) this.bubble.position.y = (this.bubbleIsCard ? 1.74 : 1.95) + lift + Math.sin(t * 3) * 0.03;
     if (this.nameTag) this.nameTag.position.y = 1.55 + lift;
+    this.placeLogo();
   }
 
   /** Back in its seat, standing straight, its light showing its status again. */
@@ -1863,6 +1904,7 @@ export class Worker {
   dispose() {
     if (this.bubble) disposeSprite(this.bubble);
     if (this.nameTag) disposeSprite(this.nameTag);
+    if (this.logo) disposeLogoSprite(this.logo);
     undress(this.outfit);
   }
 }

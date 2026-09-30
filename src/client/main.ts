@@ -8,6 +8,7 @@ import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, Gong
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
+import { modelBrand } from '../shared/model-brand';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
 import { isAsleep, isBusy, workerPr } from '../shared/status';
@@ -71,6 +72,7 @@ import { openAccounts, routeAccountsMessage } from './ui/accounts';
 import { openServices } from './ui/services';
 import { openQueue } from './ui/queue';
 import { openUpgrade, restarting, showRestarting, showUpgraded } from './ui/upgrade';
+import { connectionLost, watchConnection } from './ui/connection';
 import { openHelp, renderCaffeine, renderChat, renderPeople, renderWorkers, updateSpeaking } from './ui/hud';
 import { Compass, type Bearing } from './ui/compass';
 import { openCharacter } from './ui/character';
@@ -716,7 +718,14 @@ let firstWelcome = true;
 let bootVersion = '';
 let upgradePhase = '';
 
-net.onStatus((up) => $('conn').classList.toggle('hidden', up));
+watchConnection(net, {
+  onChange: renderTitle,
+  onLost: () => {
+    sound.ding('needs_input');
+    notifier.serverDown();
+  },
+  onBack: (ms) => notifier.serverBack(ms),
+});
 net.onMessage((msg) => {
   if (msg.t === 'welcome') voice.reset();
   if (msg.t === 'welcome' || msg.t === 'floor.enter') {
@@ -912,12 +921,12 @@ function renderProject() {
 store.on('floors', renderProject);
 store.on('project', renderProject);
 
-/** The tab title counts the workers waiting on someone, on every floor, so you can see them from another tab. */
+/** The tab title counts the workers waiting on someone, on every floor, so you can see them from another tab, and says when the office is unreachable. */
 function renderTitle() {
   const name = store.project?.name;
   const elsewhere = store.floors.reduce((n, f) => n + (f.id === store.floor ? 0 : f.waiting), 0);
   const waiting = summarizeWorkers(store.workers.values()).waiting + elsewhere;
-  document.title = `${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
+  document.title = `${connectionLost() ? '⚠️ OFFLINE · ' : ''}${waiting ? `(${waiting}) ` : ''}${name ? `${name} · ` : ''}Agent Office`;
 }
 
 // ---- Floors & the elevator ----------------------------------------------------------------------
@@ -1335,7 +1344,11 @@ function syncWorkers() {
     }
     v.model.setAction(w.action);
     // What it last replied with, or failing that the model it was hired on.
-    v.model.setModel(w.kind === 'agent' ? modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : undefined) : undefined);
+    const modelId = w.runningModel ?? w.model;
+    v.model.setModel(
+      w.kind === 'agent' ? modelTag(modelId, w.runningModel ? w.runningEffort : undefined) : undefined,
+      w.kind === 'agent' ? modelBrand(modelId, w.provider) : undefined,
+    );
     v.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
     const engineBadge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
     v.model.setTask(meetingCard(w) ?? (w.task && w.kind === 'agent' ? { ...w.task, name: `${providerLabel(w.provider, store.project)}${engineBadge ? ` · ${engineBadge}` : ''} · ${w.task.name}` } : w.task));
