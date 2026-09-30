@@ -111,6 +111,16 @@ export function ghTrouble(error: string): GhTrouble {
 }
 
 /**
+ * The Unshipped work list's note when GitHub's rate limit left some PR statuses unknown, in plain
+ * words rather than gh's: the quota every client of the account shares, and when it resets.
+ */
+export function limitNote(limit: { secondary: boolean; resetAt?: number }, clock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })): string {
+  const why = limit.secondary ? 'GitHub asked the office to slow down for a few minutes' : "The GitHub account's shared hourly API quota ran out";
+  const when = limit.resetAt ? ` It ${limit.secondary ? 'lifts' : 'resets'} at ${clock(limit.resetAt)}.` : '';
+  return `❔ ${why}, so some branches may have a PR after all.${when} Showing what's on disk.`;
+}
+
+/**
  * The Unshipped work rows in the order they're worth acting on: ones you can queue a PR for first,
  * then ones with a recovery already queued or running, then ones whose worker is still mid-turn;
  * within those, the most recently touched first.

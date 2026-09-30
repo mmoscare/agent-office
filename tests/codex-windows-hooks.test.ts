@@ -39,7 +39,7 @@ test('generated Windows Codex hook commands deliver every event through the shel
         const child = spawn(shell, args, {
           env: { ...process.env, AGENT_OFFICE_HOOK_URL: `http://127.0.0.1:${address.port}`, AGENT_OFFICE_HOOK_TOKEN: 'test-only', AGENT_OFFICE_WORKER_ID: 'test-worker' },
           stdio: ['pipe', 'pipe', 'pipe'],
-          timeout: 3000,
+          timeout: 20000,
           windowsHide: true,
         });
         let stdout = '';

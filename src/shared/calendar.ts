@@ -12,6 +12,8 @@ export interface CalendarChore {
   icon: string;
   title: string;
   detail: string;
+  /** A screen that does the chore, opened from the calendar and the reminder. */
+  opens?: 'cleanup';
 }
 
 /** Recurring first-of-the-month chores. They show on the calendar and the office notifies you. */
@@ -21,6 +23,7 @@ export const MONTHLY_CHORES: readonly CalendarChore[] = [
     icon: '🌿',
     title: 'Delete and clean up branches and worktrees',
     detail: 'Prune leftover office branches and worktrees that are safe to delete.',
+    opens: 'cleanup',
   },
   {
     id: 'mft-portfolio',
