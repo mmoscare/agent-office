@@ -1259,7 +1259,7 @@ export async function startServer(cfg: Config) {
           return send(res, 400, { error: 'Bad request' });
         }
         const r = notes.addImage(owner, body);
-        return 'error' in r ? send(res, 400, r) : send(res, 200, r);
+        return 'error' in r ? send(res, r.status ?? 400, { error: r.error }) : send(res, 200, r);
       }
       // Which floor a request is about: its boards and its workers.
       const floor = floors.get(url.searchParams.get('floor') ?? '');

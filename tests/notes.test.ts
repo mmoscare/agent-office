@@ -30,6 +30,15 @@ const titles = (s: NotesState, folder: string) => notesIn(s, folder).map((n) => 
 const DAY = 86_400_000;
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4d20000000049454e44ae426082', 'hex');
 const dataURL = (b: Buffer, type = 'image/png') => `data:${type};base64,${b.toString('base64')}`;
+/** A different picture each `n`, `extra` bytes bigger than PNG (only the first bytes say what it is). */
+const picture = (n: number, extra = 1000) => Buffer.concat([PNG, Buffer.alloc(extra, n)]);
+/** Ages a file by `ms`. */
+const age = (file: string, ms: number) => {
+  const then = new Date(Date.now() - ms);
+  utimesSync(file, then, then);
+};
+/** No clearing away on the clock, unless a test asks for it. */
+const QUIET = { sweepMs: 0 };
 
 test('notes are added, edited, pinned and listed newest first with pinned ones on top', () => {
   let s = run(
@@ -200,7 +209,7 @@ test('a pad read back from disk keeps what holds up', () => {
 test('the office keeps each person’s pad and pictures apart, and across a restart', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-notes-'));
   try {
-    const notes = new Notes(dir);
+    const notes = new Notes(dir, QUIET);
     assert.ok(notes.apply('shared', { action: 'add', id: id(1), folder: 'notes', text: 'Shared note' }));
     assert.ok(notes.apply('account:a1', { action: 'add', id: id(2), folder: 'links', text: 'https://youtu.be/x' }));
     assert.equal(notes.apply('shared', { action: 'edit', id: id(9), text: 'nobody' }), null, 'a change that does nothing');
@@ -217,7 +226,7 @@ test('the office keeps each person’s pad and pictures apart, and across a rest
     assert.ok('error' in notes.addImage('shared', {}));
     notes.apply('shared', { action: 'edit', id: id(1), images: [pic.id] });
 
-    const again = new Notes(dir);
+    const again = new Notes(dir, QUIET);
     assert.deepEqual(again.pad('shared').notes.map((n) => [n.text, n.images]), [['Shared note', [pic.id]]]);
     assert.deepEqual(again.pad('account:a1').notes.map((n) => n.folder), ['links']);
     assert.deepEqual(again.pad('account:nobody'), EMPTY_NOTES);
@@ -225,8 +234,7 @@ test('the office keeps each person’s pad and pictures apart, and across a rest
 
     // Gone for good, a note's pictures go with it (once they're not brand new).
     const file = again.imagePath('shared', pic.id)!;
-    const old = new Date(Date.now() - 10 * 60_000);
-    utimesSync(file, old, old);
+    age(file, 20 * 60_000);
     again.apply('shared', { action: 'delete', id: id(1) });
     assert.ok(existsSync(file), 'still in Recently deleted');
     again.apply('shared', { action: 'empty' });
@@ -239,21 +247,95 @@ test('the office keeps each person’s pad and pictures apart, and across a rest
 test('a picture nothing uses is cleared away at start-up once it’s old', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-notes-'));
   try {
-    const notes = new Notes(dir);
+    const notes = new Notes(dir, QUIET);
     notes.apply('shared', { action: 'add', id: id(1), folder: 'notes', text: 'x' });
     const pic = notes.addImage('shared', { dataURL: dataURL(PNG) });
     assert.ok('id' in pic);
     const file = notes.imagePath('shared', pic.id)!;
-    new Notes(dir);
+    new Notes(dir, QUIET);
     assert.ok(existsSync(file), 'just added: it may be on its way into a note');
-    const old = new Date(Date.now() - 2 * 3_600_000);
-    utimesSync(file, old, old);
-    new Notes(dir);
+    age(file, 2 * 3_600_000);
+    new Notes(dir, QUIET);
     assert.equal(existsSync(file), false);
     assert.deepEqual(readdirSync(path.dirname(file)), []);
     // A broken file starts an empty pad rather than failing.
     writeFileSync(path.join(dir, 'notes.json'), '{broken');
-    assert.deepEqual(new Notes(dir).pad('shared'), EMPTY_NOTES);
+    assert.deepEqual(new Notes(dir, QUIET).pad('shared'), EMPTY_NOTES);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pictures no note has are cleared away once past the grace period: on adding another, and on the clock', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-notes-'));
+  const add = (notes: Notes, owner: string, n: number) => {
+    const r = notes.addImage(owner, { dataURL: dataURL(picture(n)) });
+    assert.ok('id' in r, JSON.stringify(r));
+    return { id: r.id, file: notes.imagePath(owner, r.id)! };
+  };
+  try {
+    const notes = new Notes(dir, { ...QUIET, graceMs: 60_000 });
+    notes.apply('shared', { action: 'add', id: id(1), folder: 'notes', text: 'with a picture' });
+    const kept = add(notes, 'shared', 1);
+    notes.apply('shared', { action: 'edit', id: id(1), images: [kept.id] });
+    const stray = add(notes, 'shared', 2);
+    const fresh = add(notes, 'shared', 3);
+    age(kept.file, 5 * 60_000);
+    age(stray.file, 5 * 60_000);
+    // Adding another clears away what no note has and is past the grace period, and nothing else.
+    const next = add(notes, 'shared', 4);
+    assert.equal(existsSync(stray.file), false, 'no note has it, and it’s old');
+    assert.ok(existsSync(kept.file), 'a note has it');
+    assert.ok(existsSync(fresh.file), 'just added: it may be on its way into a note');
+    assert.ok(existsSync(next.file));
+    // Added again, a picture is fresh again, so it isn't cleared away before it's back in a note.
+    age(fresh.file, 5 * 60_000);
+    assert.deepEqual(notes.addImage('shared', { dataURL: dataURL(picture(3)) }), { id: fresh.id });
+    notes.sweep();
+    assert.ok(existsSync(fresh.file));
+    // The sweep clears away the old ones, including a folder nobody's pad owns.
+    const ghost = add(notes, 'account:ghost', 5);
+    for (const f of [fresh.file, next.file, ghost.file, kept.file]) age(f, 5 * 60_000);
+    notes.sweep();
+    assert.deepEqual([fresh.file, next.file, ghost.file].map(existsSync), [false, false, false]);
+    assert.ok(existsSync(kept.file), 'a note still has it, however old');
+    notes.apply('shared', { action: 'delete', id: id(1) });
+    notes.sweep();
+    assert.ok(existsSync(kept.file), 'a note in Recently deleted still has it');
+
+    // And on the clock, with nobody adding anything.
+    const ticking = new Notes(dir, { graceMs: 0, sweepMs: 20 });
+    try {
+      const stray2 = add(ticking, 'shared', 6);
+      for (let i = 0; i < 50 && existsSync(stray2.file); i++) await new Promise((r) => setTimeout(r, 20));
+      assert.equal(existsSync(stray2.file), false);
+      assert.ok(existsSync(kept.file));
+    } finally {
+      ticking.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pictures waiting to go into a note are capped per person, and so are all of their pictures', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-notes-'));
+  try {
+    const one = picture(0).length;
+    const notes = new Notes(dir, { ...QUIET, waitingMax: 3 * one, totalMax: 5 * one });
+    const add = (owner: string, n: number) => notes.addImage(owner, { dataURL: dataURL(picture(n)) });
+    const ids = [1, 2, 3].map((n) => add('shared', n)).map((r) => ('id' in r ? r.id : assert.fail(JSON.stringify(r))));
+    const refused = add('shared', 4);
+    assert.ok('error' in refused && refused.status === 429 && /Wait a few minutes/.test(refused.error), JSON.stringify(refused));
+    assert.equal(readdirSync(path.dirname(notes.imagePath('shared', ids[0])!)).length, 3, 'nothing written');
+    assert.deepEqual(add('shared', 1), { id: ids[0] }, 'one it has already is fine');
+    assert.ok('id' in add('account:other', 4), 'someone else has their own room');
+    // In a note, they aren't waiting any more.
+    notes.apply('shared', { action: 'add', id: id(1), folder: 'notes', text: 'pictures', images: ids });
+    assert.ok('id' in add('shared', 4));
+    assert.ok('id' in add('shared', 5));
+    const full = add('shared', 6);
+    assert.ok('error' in full && full.status === 507 && /as much as they can/.test(full.error), JSON.stringify(full));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

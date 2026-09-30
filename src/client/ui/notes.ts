@@ -23,17 +23,7 @@ import {
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, timeAgo, toast } from './dom';
-
-/**
- * Makes a change to your 📝 Notes pad: on screen straight away, and on to the office, whose answer
- * goes under it (see state.ts). False when it changes nothing, or while the office is out of reach:
- * then nothing changes, so what's typed stays in the editor to save once the office is back.
- */
-export function changeNote(net: Net, change: NoteAction): boolean {
-  if (!net.up || !store.changeNote(change)) return false;
-  net.send({ t: 'note', change });
-  return true;
-}
+import { changeNote, draftOf, forgetDraft, keepDraft, onNoteDrafts, unsavedNotes, watchNoteDrafts } from './note-drafts';
 
 /** How many 🔗 Links to watch aren't marked watched yet, for the top bar. */
 export function linksToWatch(): number {
@@ -151,11 +141,10 @@ interface Editor {
   folder: string;
   title: HTMLInputElement;
   body: HTMLTextAreaElement;
-  /** Typed since it was last sent. */
-  dirty: boolean;
-  /** What was last sent (or last came in), to tell a change from elsewhere from one of ours that got lost. */
-  sent: string;
+  /** Typing not handed to the drafts yet (see note-drafts.ts): it goes a moment after you stop. */
   timer?: ReturnType<typeof setTimeout>;
+  /** Saved at least once since it was opened, so the status has something to say. */
+  touched: boolean;
   tools: HTMLElement;
   status: HTMLElement;
   links: HTMLElement;
@@ -182,8 +171,7 @@ export function mountNotesPad(net: Net): NotesPad {
   /** The folder being renamed, and the box its new name goes in. */
   let renaming: { id: string; box: HTMLInputElement } | undefined;
   let ed: Editor | undefined;
-  /** Pad loads (see store.notesLoads) this window has seen. */
-  let loads = store.notesLoads;
+  watchNoteDrafts(net);
 
   const change = (a: NoteAction) => changeNote(net, a);
   const offline = () => toast('Not connected to the office right now — try again once it’s back', 'warn');
@@ -340,7 +328,8 @@ export function mountNotesPad(net: Net): NotesPad {
     if (addLink(linkAdd.value)) linkAdd.value = '';
   });
   const list = h('ul.notes-list', { 'aria-label': 'Notes' });
-  const listPane = h('section.notes-listpane', {}, listHead, list);
+  const unsavedBar = h('div.notes-unsaved-bar', { role: 'status', hidden: true });
+  const listPane = h('section.notes-listpane', {}, unsavedBar, listHead, list);
 
   /** A new note in 🔗 Links to watch for what's pasted: the link, and any words with it. */
   function addLink(raw: string): boolean {
@@ -417,12 +406,14 @@ export function mountNotesPad(net: Net): NotesPad {
   }
 
   function noteRow(n: NoteItem, showFolder: boolean): HTMLElement {
-    const title = noteTitle(n.text) || (n.images.length ? 'Picture' : 'New note');
-    const preview = notePreview(n.text);
+    const draft = draftOf(n.id);
+    const text = draft ?? n.text;
+    const title = noteTitle(text) || (n.images.length ? 'Picture' : 'New note');
+    const preview = notePreview(text);
     const row = h(
       'li.notes-row',
       { 'data-id': n.id, tabindex: 0, draggable: 'true', class: ed?.id === n.id ? 'on' : '', title: 'Drag onto a folder to move it' },
-      h('div.notes-row-title', {}, n.pinned ? h('span.notes-pin', { title: 'Pinned' }, '📌 ') : null, title),
+      h('div.notes-row-title', {}, draft !== undefined ? h('span.notes-unsaved', { title: 'Not saved yet: kept in this browser until the office has it' }, '⚠️ ') : null, n.pinned ? h('span.notes-pin', { title: 'Pinned' }, '📌 ') : null, title),
       h(
         'div.notes-row-sub',
         {},
@@ -530,7 +521,7 @@ export function mountNotesPad(net: Net): NotesPad {
     clearTimeout(was.timer);
     ed = undefined;
     const n = find(was.id);
-    if (n && n.deletedAt === undefined && isBlank(n) && !was.adding) change({ action: 'delete', id: n.id });
+    if (n && n.deletedAt === undefined && isBlank(n) && draftOf(n.id) === undefined && !was.adding) change({ action: 'delete', id: n.id });
   }
 
   function newNote(text = '') {
@@ -560,6 +551,7 @@ export function mountNotesPad(net: Net): NotesPad {
       ed = undefined;
     }
     change({ action: 'delete', id });
+    forgetDraft(id);
     if (!isBlank(n)) toast(forGood ? 'Deleted for good' : `Moved to Recently deleted (kept ${TRASH_DAYS} days)`);
     if (!find(id) || !folderHas(folder, id)) closeEditor();
     else openNote(id, false);
@@ -586,17 +578,18 @@ export function mountNotesPad(net: Net): NotesPad {
   }
 
   function buildEditor(n: NoteItem): Editor {
-    const [first, ...rest] = n.text.split('\n');
+    // What's typed and not saved yet comes back with it.
+    const [first, ...rest] = (draftOf(n.id) ?? n.text).split('\n');
     const title = h('input.notes-title', { type: 'text', maxlength: TITLE_MAX, placeholder: 'Title', 'aria-label': 'Title' });
     const body = h('textarea.notes-body', { maxlength: NOTE_TEXT_MAX - TITLE_MAX - 1, placeholder: 'Write anything. Paste links and pictures too.', 'aria-label': 'Note' });
     title.value = first;
     body.value = rest.join('\n');
-    const e: Editor = { id: n.id, folder: n.folder, title, body, dirty: false, sent: n.text, tools: h('div.notes-tools'), status: h('span.notes-status', { 'aria-live': 'polite' }), links: h('div.notes-links'), images: h('div.notes-images'), adding: 0 };
+    const e: Editor = { id: n.id, folder: n.folder, title, body, touched: false, tools: h('div.notes-tools'), status: h('span.notes-status', { 'aria-live': 'polite' }), links: h('div.notes-links'), images: h('div.notes-images'), adding: 0 };
     const typed = () => {
-      e.dirty = true;
       clearTimeout(e.timer);
       e.timer = setTimeout(() => ((e.timer = undefined), save()), 600);
-      e.status.textContent = 'Saving…';
+      e.touched = true;
+      paintStatus(e);
       paintLinks(e);
     };
     title.addEventListener('input', typed);
@@ -628,6 +621,7 @@ export function mountNotesPad(net: Net): NotesPad {
     }
     editorPane.replaceChildren(h('div.notes-sheet', {}, e.tools, title, body, e.links, e.images));
     paintEditor(e, n);
+    paintStatus(e);
     return e;
   }
 
@@ -696,30 +690,36 @@ export function mountNotesPad(net: Net): NotesPad {
     );
   }
 
-  /** Sends what's typed in the open note, if anything; false while the office is out of reach. */
-  function save(): boolean {
+  /**
+   * Hands what's typed in the open note to the drafts (see note-drafts.ts), which keep it (in this
+   * browser too) and send it, again after a reconnect, until the office has it. Leaving the note, or
+   * closing the board, can't lose it then, even while the office is out of reach.
+   */
+  function save() {
     const e = ed;
-    if (!e) return true;
+    if (!e) return;
     clearTimeout(e.timer);
     e.timer = undefined;
-    if (!e.dirty) return true;
-    const text = compose(e);
     const n = find(e.id);
-    if (!net.up) {
-      e.status.textContent = '⚠️ Not saved yet: the office is out of reach. It saves when it’s back.';
-      return false;
-    }
-    if (n?.deletedAt !== undefined) {
-      e.dirty = false;
-      return true;
-    }
-    // It never reached the office (the connection dropped as it was made): make it again.
-    if (!n) change({ action: 'add', id: e.id, folder: hasFolder(store.notes, e.folder) ? e.folder : 'notes', text });
-    else if (n.text !== text) change({ action: 'edit', id: e.id, text });
-    e.dirty = false;
-    e.sent = text;
-    e.status.textContent = 'Saved';
-    return true;
+    if (n?.deletedAt !== undefined) return;
+    const text = compose(e);
+    if (draftOf(e.id) !== undefined || !n || n.text !== text) keepDraft(e.id, e.folder, text);
+    paintStatus(e);
+  }
+
+  /** Whether what's typed is with the office yet. */
+  function paintStatus(e: Editor) {
+    if (e.adding) return;
+    const unsaved = e.timer !== undefined || draftOf(e.id) !== undefined;
+    e.status.classList.toggle('notes-status-warn', unsaved && !net.up);
+    e.status.textContent = !unsaved ? (e.touched ? 'Saved' : '') : !net.up ? '⚠️ Not saved yet: the office is out of reach. What you typed is kept in this browser and saves when the office is back.' : 'Saving…';
+  }
+
+  /** Says, above the list, that notes are waiting for the office. */
+  function paintUnsaved() {
+    const n = unsavedNotes();
+    unsavedBar.hidden = !n || net.up;
+    unsavedBar.textContent = `⚠️ ${n === 1 ? '1 note isn’t' : `${n} notes aren’t`} saved yet. ${n === 1 ? 'It’s' : 'They’re'} kept in this browser and ${n === 1 ? 'saves' : 'save'} when the office is back.`;
   }
 
   /** Puts pictures in the open note (or a new one). */
@@ -732,6 +732,7 @@ export function mountNotesPad(net: Net): NotesPad {
     if (!e) return;
     save();
     e.adding++;
+    e.status.classList.remove('notes-status-warn');
     e.status.textContent = files.length > 1 ? `Adding ${files.length} pictures…` : 'Adding the picture…';
     try {
       for (const file of files) {
@@ -743,42 +744,39 @@ export function mountNotesPad(net: Net): NotesPad {
         }
         const id = await uploadPicture(file);
         const now = find(e.id);
-        if (id && now && !now.images.includes(id)) change({ action: 'edit', id: e.id, images: [...now.images, id] });
+        if (id && now && !now.images.includes(id) && !change({ action: 'edit', id: e.id, images: [...now.images, id] }) && !net.up) {
+          toast('Couldn’t put the picture in the note: the office is out of reach. Add it again once it’s back.', 'warn');
+          break;
+        }
       }
     } finally {
       e.adding--;
-      if (ed === e) e.status.textContent = e.dirty ? 'Saving…' : 'Saved';
+      if (ed === e) paintStatus(e);
     }
   }
 
-  /** Brings the open note up to date with the pad: a change from another window, or the office's copy after a reconnect. */
+  /** Brings the open note up to date with the pad: a change to it from another window. */
   function syncEditor() {
     const e = ed;
     if (!e) return;
     const n = find(e.id);
+    const typing = e.timer !== undefined || draftOf(e.id) !== undefined;
     if (!n) {
       // Gone (for good, from another window): unless there's typing here that would go with it.
-      if (!e.dirty) {
+      if (!typing) {
         ed = undefined;
         closeEditor();
       }
       return;
     }
-    const mine = compose(e);
-    const reloaded = loads !== store.notesLoads;
-    if (!e.dirty && mine !== n.text) {
-      if (reloaded && mine === e.sent && n.deletedAt === undefined) {
-        // The office came back without what was last typed here (it was lost on the way): send it again.
-        e.dirty = true;
-        save();
-      } else {
-        const [first, ...rest] = n.text.split('\n');
-        e.title.value = first;
-        e.body.value = rest.join('\n');
-        e.sent = n.text;
-      }
+    // What's typed here and not with the office yet wins; otherwise the pad's copy is the one.
+    if (!typing && compose(e) !== n.text) {
+      const [first, ...rest] = n.text.split('\n');
+      e.title.value = first;
+      e.body.value = rest.join('\n');
     }
     paintEditor(e, n);
+    paintStatus(e);
   }
 
   // ---- Putting it together -------------------------------------------------------------------
@@ -820,17 +818,22 @@ export function mountNotesPad(net: Net): NotesPad {
     renderSide();
     renderList();
     syncEditor();
-    loads = store.notesLoads;
+    paintUnsaved();
     paintPane();
     // A box that was redrawn around (the link box, a folder's new name) keeps the cursor.
     if (typing instanceof HTMLInputElement && typing !== document.activeElement && typing.isConnected && el.contains(typing)) typing.focus();
   }
 
   const unsub = store.on('notes', render);
-  // Typing that couldn't be saved while the office was away goes as soon as it's back.
-  const retry = setInterval(() => {
-    if (ed?.dirty && !ed.timer && net.up) save();
-  }, 3000);
+  // Drafts coming and going, and the office going and coming back (the lost-connection screen's own state).
+  const unsubDrafts = onNoteDrafts(() => {
+    renderList();
+    if (ed) paintStatus(ed);
+    paintUnsaved();
+  });
+  // Reloading (the lost-connection screen offers it) or closing the tab mid-word still keeps what's typed.
+  const onHide = () => save();
+  window.addEventListener('pagehide', onHide);
   render();
   const last = read(OPEN_KEY);
   if (last && find(last)) openNote(last, false);
@@ -851,12 +854,15 @@ export function mountNotesPad(net: Net): NotesPad {
     flush: () => {
       save();
       const n = ed && find(ed.id);
-      if (n && n.deletedAt === undefined && isBlank(n) && !ed!.adding) closeEditor();
+      if (n && n.deletedAt === undefined && isBlank(n) && draftOf(n.id) === undefined && !ed!.adding) closeEditor();
     },
     destroy: () => {
       leave();
       unsub();
-      clearInterval(retry);
+      unsubDrafts();
+      window.removeEventListener('pagehide', onHide);
+      const n = unsavedNotes();
+      if (n && !net.up) toast(`⚠️ ${n === 1 ? 'A note isn’t' : `${n} notes aren’t`} saved yet: kept in this browser, and saved when the office is back`, 'warn');
     },
   };
 }

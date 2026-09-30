@@ -57,6 +57,7 @@ import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
 import { activeTodos, issuesWallMode, onIssuesWallMode, setIssuesWallMode } from './ui/todos';
 import { linksToWatch } from './ui/notes';
+import { onNoteDrafts, unsavedNotes, watchNoteDrafts } from './ui/note-drafts';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
@@ -3494,11 +3495,14 @@ const hud = mountHud(
       label: 'Notes',
       section: 'Open',
       status: () => true,
-      chip: () => 'Notes',
+      chip: () => (unsavedNotes() ? '⚠️ Notes' : 'Notes'),
       count: () => linksToWatch(),
+      // Red while typing in a note waits for the office (it's kept in this browser meanwhile).
+      tone: () => (unsavedNotes() ? 'danger' : undefined),
       title: () => {
         const n = linksToWatch();
-        return `Your own notes pad: notes, pictures and links, the same on every floor${n ? ` · ${n} link${n === 1 ? '' : 's'} to watch` : ''}`;
+        const unsaved = unsavedNotes();
+        return `${unsaved ? `⚠️ ${unsaved} note${unsaved === 1 ? '' : 's'} not saved yet: kept in this browser until the office is back · ` : ''}Your own notes pad: notes, pictures and links, the same on every floor${n ? ` · ${n} link${n === 1 ? '' : 's'} to watch` : ''}`;
       },
       run: () => openBoard('issues', net, boardActions(), { view: 'notes' }),
     },
@@ -3598,6 +3602,9 @@ const hud = mountHud(
   () => saveSettings(settings),
 );
 onAuthorUpdates(() => hud.refresh());
+// Typing in a note the office hasn't got yet goes when it's back, even after a reload, without opening the pad.
+watchNoteDrafts(net);
+onNoteDrafts(() => hud.refresh());
 onCalendarChores(() => hud.refresh());
 /** The queue agent on this floor: the one who's been hired, or the one waiting at the kiosk. */
 function queueAgent(): Worker | undefined {

@@ -86,6 +86,15 @@ function png(size) {
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 const PNG = png(16);
+/** Waits here in the test for the fixture's pad to get something. */
+async function until(ok, what, ms = 10000) {
+  const end = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+const drafts = (page) => page.evaluate(() => Object.values(JSON.parse(localStorage.getItem('agent-office.notes.drafts') ?? '{}')).map((d) => d.text));
 const pictures = new Map();
 
 let browser;
@@ -240,18 +249,47 @@ try {
   await page.waitForFunction((n) => window.__office.store.notes.notes.length === n, before);
   assert.equal(kept.notes.length, before);
 
-  // While the office is out of reach, what's typed stays put, and goes once it's back.
+  // While the office is out of reach, what's typed is kept: leaving the note, closing the board, even reloading.
   await pad.locator('.notes-row', { hasText: 'Groceries' }).click();
   await page.evaluate(() => (window.__office.net.up = false));
   const sent = changes.length;
   await body.press('End');
   await body.pressSequentially(' bacon');
-  await pad.locator('.notes-status', { hasText: 'out of reach' }).waitFor();
+  await pad.locator('.notes-status.notes-status-warn', { hasText: 'kept in this browser' }).waitFor();
   assert.equal(changes.length, sent, 'nothing sent while away');
-  assert.match(await body.inputValue(), /bacon$/);
-  await page.evaluate(() => (window.__office.net.up = true));
-  await page.waitForFunction(() => window.__office.store.notes.notes.some((n) => n.text.endsWith('bacon')), null, { timeout: 8000 });
-  await pad.locator('.notes-status', { hasText: 'Saved' }).waitFor();
+  // Off to another folder: the note's editor goes, what was typed in it doesn't.
+  await pad.locator('.notes-folder[data-folder="notes"]').click();
+  await pad.locator('.notes-unsaved-bar', { hasText: '1 note isn’t saved yet' }).waitFor();
+  await pad.locator('.notes-folder', { hasText: 'Recipes' }).click();
+  assert.equal(await pad.locator('.notes-row', { hasText: 'Groceries' }).locator('.notes-unsaved').count(), 1, 'the note says it isn’t saved');
+  await pad.locator('.notes-row', { hasText: 'Groceries' }).click();
+  assert.match(await body.inputValue(), /bacon$/, 'it comes back with the note');
+  // Closing the board says so, and so does the top bar, until the office has it.
+  await pad.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.locator('.toast', { hasText: 'saved yet' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#dock button[aria-label="Notes"]')?.textContent?.includes('⚠️'));
+  assert.equal((await drafts(page)).filter((t) => t.endsWith('bacon')).length, 1, 'kept in this browser too');
+  assert.equal(kept.notes.some((n) => n.text.endsWith('bacon')), false);
+  assert.equal(changes.length, sent);
+  // The office comes back (a real reconnect): the draft goes, and the warnings with it.
+  for (const c of wss.clients) c.terminate();
+  await until(() => kept.notes.some((n) => n.text.endsWith('bacon')), 'the draft, after the reconnect');
+  await page.waitForFunction(() => !document.querySelector('#dock button[aria-label="Notes"]')?.textContent?.includes('⚠️'));
+  assert.deepEqual(await drafts(page), []);
+  // Typed, and the page reloaded straight away (as from the lost-connection screen): the office still gets it.
+  await page.locator('#dock button[aria-label="Notes"]').click();
+  await pad.locator('.notes-pad').waitFor();
+  assert.equal(await title.inputValue(), 'Groceries');
+  await page.evaluate(() => (window.__office.net.up = false));
+  await body.press('End');
+  await body.pressSequentially(' eggs');
+  await page.reload();
+  await page.waitForFunction(() => window.__office?.store);
+  await until(() => kept.notes.some((n) => n.text.endsWith('bacon eggs')), 'the draft kept over a reload');
+  await page.waitForFunction(() => localStorage.getItem('agent-office.notes.drafts') === null);
+  await page.locator('#dock button[aria-label="Notes"]').click();
+  await pad.locator('.notes-pad').waitFor();
+  assert.match(await body.inputValue(), /bacon eggs$/);
 
   // Back over to the To Do board, and back again: the pad is as it was left.
   await pad.getByRole('button', { name: '🔥 To Do', exact: true }).click();

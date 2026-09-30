@@ -166,8 +166,12 @@ class Store {
   private notesBase: NotesState = EMPTY_NOTES;
   /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
   private notesPending: NoteAction[] = [];
-  /** How many times the office has sent the whole pad (on arriving, after a reconnect): the open note checks nothing typed in it went missing. */
+  /** How many times the office has sent the whole pad (on arriving, after a reconnect): unsaved drafts go again after each (see ui/note-drafts.ts). */
   notesLoads = 0;
+  /** Your 📝 Notes pad as the office has it, without your changes still on their way: a draft is let go once it's in here. */
+  get notesOffice(): NotesState {
+    return this.notesBase;
+  }
   /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
   content: readonly ContentItem[] | null = null;
   /** It as the office last sent it. */
