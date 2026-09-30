@@ -2,19 +2,45 @@
 // "Queue agent"; the nameplate is stationLabel('queue').
 
 import * as THREE from 'three';
+import { BALCONY, FLOOR, LOFT, STAIRS } from '../../shared/layout';
+import { walkable } from '../../shared/nav';
+import { doorInto, zoneOf, type Zone } from '../walkto';
 import type { Interactable } from './office';
 
 /** Walking pace, in m/s: the same brisk walk as on the way in to a meeting. */
 const PACE = 2.8;
 /** A worker's feet sit this far above its origin. */
 const FEET = 0.07;
-/** How far in front of you he comes to stand. */
+/** How far in front of you he comes to stand, and a little closer if there's no room there. */
 const BESIDE_SPOT = 1.25;
+const CLOSER_SPOT = 0.9;
 /** Close enough, and not on his way back, that another press sends him back to the kiosk. */
 export const STAFFER_BESIDE = 2.2;
 /** A step he can climb in one stride, and how far underfoot still counts as the floor he's on. */
 const STEP = 0.35;
 const BODY = 0.28;
+/** Anything whose underside is this high over his floor is over his head (the hoop, the loft), not in his way. */
+const HEAD = 1.6;
+/** How far in from a wall or a railing he'll stand. */
+const EDGE = 0.45;
+
+interface Area {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/** Where he can stand on each part of the building you can call him to, in from its walls and railings. */
+const AREAS: Record<Exclude<Zone, 'outside'>, Area> = {
+  floor: inset(FLOOR),
+  loft: inset(LOFT),
+  balcony: inset(BALCONY),
+  stairs: { minX: STAIRS.fromX, maxX: STAIRS.toX, minZ: STAIRS.minZ + EDGE, maxZ: STAIRS.maxZ - EDGE },
+};
+
+/** Which ways from you he tries to stand, turned from the way you face: in front, then either side, then behind. */
+const TURNS = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, (-3 * Math.PI) / 4, Math.PI];
 
 export interface StafferModel {
   root: THREE.Object3D;
@@ -29,6 +55,7 @@ export interface Footing {
   minZ: number;
   maxZ: number;
   top: number;
+  bottom?: number;
   fence?: boolean;
 }
 
@@ -44,9 +71,81 @@ interface Outing {
   stepIn: number;
 }
 
-/** A place to stand just in front of you, so his clipboard faces you. */
-export function summonSpot(at: { x: number; z: number }, facing: number): { x: number; z: number } {
-  return { x: at.x + Math.sin(facing) * BESIDE_SPOT, z: at.z + Math.cos(facing) * BESIDE_SPOT };
+/**
+ * Where he comes to stand when you call him, always on the floor you're on (the office floor, the
+ * loft, the balcony or the stairs; `y` is its height): just in front of you, so his clipboard faces
+ * you. If that's over the edge (out through the loft's glass, over the balcony railing) or in the
+ * furniture, beside or behind you instead, and failing that in front of you, pulled back onto your
+ * floor. Null outside the building, where he doesn't go.
+ */
+export function summonSpot(colliders: readonly Footing[], at: { x: number; y: number; z: number }, facing: number): { x: number; y: number; z: number } | null {
+  const zone = zoneOf(at);
+  if (zone === 'outside') return null;
+  const area = AREAS[zone];
+  // On the stairs, the step you're on: he climbs up (or down) to it.
+  const y = zone === 'loft' ? LOFT.y : zone === 'stairs' ? at.y : 0;
+  const door = doorInto(zone);
+  const fits = (p: { x: number; z: number }) =>
+    inArea(area, p) &&
+    (zone === 'stairs' ||
+      ((zone !== 'floor' || walkable(p.x, p.z)) &&
+        clear(colliders, y, at, p, p, BODY) &&
+        // Nothing between you and him, nor on his way in from the loft's door or the balcony doors.
+        clear(colliders, y, at, at, p, 0.05) &&
+        (!door || clear(colliders, y, at, door, p, BODY))));
+  for (const reach of [BESIDE_SPOT, CLOSER_SPOT]) {
+    for (const turn of TURNS) {
+      const p = { x: at.x + Math.sin(facing + turn) * reach, z: at.z + Math.cos(facing + turn) * reach };
+      if (fits(p)) return { ...p, y };
+    }
+  }
+  const x = at.x + Math.sin(facing) * BESIDE_SPOT;
+  const z = at.z + Math.cos(facing) * BESIDE_SPOT;
+  return { x: THREE.MathUtils.clamp(x, area.minX, area.maxX), y, z: THREE.MathUtils.clamp(z, area.minZ, area.maxZ) };
+}
+
+function inset(a: Area): Area {
+  return { minX: a.minX + EDGE, maxX: a.maxX - EDGE, minZ: a.minZ + EDGE, maxZ: a.maxZ - EDGE };
+}
+
+function inArea(a: Area, p: { x: number; z: number }): boolean {
+  return p.x >= a.minX && p.x <= a.maxX && p.z >= a.minZ && p.z <= a.maxZ;
+}
+
+/**
+ * Whether he can walk from `a` to `b` on the floor at `y` without going through anything (a wall, a
+ * desk, a railing), keeping `pad` from it. What's over his head or underfoot doesn't count, and nor
+ * does whatever you're standing on or in yourself (a desk you've jumped up on).
+ */
+function clear(colliders: readonly Footing[], y: number, you: { x: number; z: number }, a: { x: number; z: number }, b: { x: number; z: number }, pad: number): boolean {
+  for (const c of colliders) {
+    if (c.top <= y + STEP || (c.bottom ?? 0) >= y + HEAD) continue;
+    if (crosses(c, you, you, 0)) continue;
+    if (crosses(c, a, b, pad)) return false;
+  }
+  return true;
+}
+
+/** Whether the line from `a` to `b` comes within `pad` of the box (seen from above). */
+function crosses(c: Area, a: { x: number; z: number }, b: { x: number; z: number }, pad: number): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const axes: [number, number, number, number][] = [
+    [a.x, b.x - a.x, c.minX - pad, c.maxX + pad],
+    [a.z, b.z - a.z, c.minZ - pad, c.maxZ + pad],
+  ];
+  for (const [from, d, lo, hi] of axes) {
+    if (Math.abs(d) < 1e-9) {
+      if (from < lo || from > hi) return false;
+      continue;
+    }
+    const u = (lo - from) / d;
+    const v = (hi - from) / d;
+    t0 = Math.max(t0, Math.min(u, v));
+    t1 = Math.min(t1, Math.max(u, v));
+    if (t0 > t1) return false;
+  }
+  return true;
 }
 
 /**

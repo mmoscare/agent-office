@@ -3590,8 +3590,9 @@ function queueAgent(): Worker | undefined {
 let stafferAnnounced = false;
 
 /**
- * U: the staffer walks to you, wherever you are on the floor (up the stairs, out on the balcony).
- * Beside him, U sends him back to the queue. The roof and the garage he can't reach.
+ * U: the staffer walks to you, wherever you are on the floor (up the stairs, out on the balcony), and
+ * stands on the same floor as you (see summonSpot). Beside him, U sends him back to the queue. The
+ * roof, the garage and the landing outside the exit door he can't reach.
  */
 function summonStaffer() {
   if (trip) return;
@@ -3600,10 +3601,11 @@ function summonStaffer() {
   if (!model) return;
   const at = model.root.getWorldPosition(new THREE.Vector3());
   const beside = staffer.has(model) && staffer.phase !== 'back' && Math.hypot(at.x - player.pos.x, at.z - player.pos.z) < STAFFER_BESIDE && Math.abs(at.y - player.pos.y) < 1.5;
-  const dest = beside ? staffer.kioskAt() : summonSpot(player.pos, player.facing);
-  if (!dest) return;
+  const spot = beside ? null : summonSpot(office.colliders, player.pos, player.facing);
+  const dest = beside ? staffer.kioskAt() : spot;
+  if (!dest) return toast('The staffer stays on the office floor — come back inside', 'warn');
   const from = { x: at.x, y: at.y, z: at.z };
-  const to = { x: dest.x, y: beside ? 0 : player.pos.y, z: dest.z };
+  const to = { x: dest.x, y: spot?.y ?? 0, z: dest.z };
   const way = beside ? [...wayTo(from, to), dest] : wayTo(from, to);
   const which = staffer.call(model, way, beside ? 'back' : 'to');
   const far = Math.hypot(at.x - dest.x, at.z - dest.z) > 2;
