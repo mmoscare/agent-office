@@ -55,6 +55,7 @@ import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from 
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
 import { activeTodos, issuesWallMode, onIssuesWallMode, setIssuesWallMode } from './ui/todos';
+import { linksToWatch } from './ui/notes';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
@@ -3448,6 +3449,20 @@ const hud = mountHud(
         return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'Your own to-do list, the same on every floor';
       },
       run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
+    },
+    // Your own notes pad, the To Do board's other side: up on the top bar next to it, with how many links there are to watch.
+    {
+      id: 'notes',
+      icon: '🗒️',
+      label: 'Notes',
+      section: 'Open',
+      status: () => true,
+      count: () => linksToWatch(),
+      title: () => {
+        const n = linksToWatch();
+        return `Your own notes pad: notes, pictures and links, the same on every floor${n ? ` · ${n} link${n === 1 ? '' : 's'} to watch` : ''}`;
+      },
+      run: () => openBoard('issues', net, boardActions(), { view: 'notes' }),
     },
     { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions(), { view: 'issues' }) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },

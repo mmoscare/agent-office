@@ -1,0 +1,116 @@
+/* Your own 📝 Notes pad (ui/notes.ts): the To Do board turned over, into a notepad. */
+.modal.board.notes-mode header { background: #ffd95a; }
+.modal.board .body.notes-body { flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #fffdf4; background-image: none; }
+.notes-pad {
+  --pad: #fffdf4; --line: #eee5c6; --accent: #d99a00; --accent-soft: #fff1bf; --rule: #e8dcb0;
+  container-type: inline-size; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(170px, 220px) minmax(220px, 320px) minmax(0, 1fr); background: var(--pad);
+}
+.notes-pad button { font-family: var(--font); }
+
+/* The directory down the side. */
+.notes-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; padding: 12px 10px; background: #fbf4dc; border-right: 3px solid var(--ink); }
+.modal .notes-pad input.notes-search { box-sizing: border-box; width: 100%; padding: 7px 10px; font: 800 13px var(--font); color: var(--ink); background: #fff; border: 2px solid var(--rule); border-radius: 10px; outline: none; }
+.modal .notes-pad input.notes-search:focus { border-color: var(--accent); }
+.notes-folders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow: auto; flex: 1; min-height: 0; }
+.notes-folders li { position: relative; border-radius: 10px; }
+.notes-folders-gap { flex: 1; min-height: 8px; }
+.notes-folder { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; font-size: 14px; font-weight: 800; color: var(--ink); text-align: left; background: none; border: 2px solid transparent; border-radius: 10px; cursor: pointer; }
+.notes-folder:hover { background: var(--accent-soft); }
+.notes-folder:focus-visible { outline: 3px solid #118ab2; outline-offset: -2px; }
+.notes-folder[aria-current=true] { background: var(--accent); color: #fff; }
+.notes-folder.notes-drop { border-color: #118ab2; background: #d9f1fa; color: var(--ink); }
+.notes-folder-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-folder-count { font-size: 12px; opacity: .75; }
+.notes-folder-tools { position: absolute; right: 34px; top: 50%; transform: translateY(-50%); display: none; gap: 2px; }
+.notes-folders li:hover .notes-folder-tools, .notes-folders li:focus-within .notes-folder-tools { display: inline-flex; }
+.notes-icon-btn { padding: 1px 5px; font-size: 11px; background: #fff; border: 2px solid var(--ink); border-radius: 6px; cursor: pointer; }
+.modal .notes-pad input.notes-rename, .modal .notes-pad input.notes-folder-name { box-sizing: border-box; width: 100%; padding: 7px 10px; font: 800 14px var(--font); border: 2px solid var(--accent); border-radius: 10px; }
+.notes-side-foot { display: flex; }
+.notes-newfolder { flex: 1; padding: 6px 10px; font-size: 13px; }
+
+/* The notes in the folder picked. */
+.notes-listpane { display: flex; flex-direction: column; min-height: 0; border-right: 3px solid var(--ink); background: #fffcf0; }
+.notes-list-head { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 8px; border-bottom: 2px solid var(--rule); }
+.notes-list-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.notes-list-title h3 { margin: 0; flex: 1; min-width: 0; font-size: 18px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-list-count { font-size: 12px; font-weight: 800; color: var(--muted); }
+.notes-new { padding: 5px 10px; font-size: 13px; background: var(--accent-soft); }
+.notes-mini { padding: 3px 9px; font-size: 12px; }
+.notes-hint { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+.modal .notes-pad input.notes-linkadd { box-sizing: border-box; width: 100%; padding: 8px 10px; font: 800 13px var(--font); border: 2px dashed var(--accent); border-radius: 10px; background: #fff; outline: none; }
+.modal .notes-pad input.notes-linkadd:focus { border-style: solid; }
+.notes-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.notes-tab { padding: 3px 10px; font-size: 12px; }
+.notes-tab[aria-pressed=true] { background: var(--ink); color: #fff; transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+.notes-list { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; min-height: 0; }
+.notes-empty { padding: 18px 12px; text-align: center; font-size: 13px; font-weight: 800; color: var(--muted); }
+.notes-row, .notes-link { padding: 9px 10px; border-radius: 10px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.notes-row:hover, .notes-link:hover { background: #fff6d6; }
+.notes-row:focus-visible, .notes-link:focus-visible { outline: 3px solid #118ab2; outline-offset: -3px; }
+.notes-row.on, .notes-link.on { background: var(--accent-soft); border-bottom-color: transparent; }
+.notes-row-title { font-size: 14px; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-row-sub { display: flex; gap: 8px; margin-top: 2px; font-size: 12px; font-weight: 700; color: var(--muted); min-width: 0; }
+.notes-row-when { flex: none; color: var(--ink); }
+.notes-row-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-row-pics { flex: none; }
+.notes-row-folder { margin-top: 2px; font-size: 11px; font-weight: 800; color: var(--muted); }
+
+/* 🔗 Links to watch. */
+.notes-link { display: flex; align-items: flex-start; gap: 10px; }
+.notes-watch { flex: none; width: 24px; height: 24px; margin-top: 1px; padding: 0; font-size: 14px; font-weight: 900; color: #fff; background: #fff; border: 2px solid var(--ink); border-radius: 50%; cursor: pointer; }
+.notes-watch:hover { background: var(--accent-soft); }
+.notes-watch[aria-pressed=true] { background: #06d6a0; }
+.notes-link-main { flex: 1; min-width: 0; }
+.notes-link-title { display: block; font-size: 14px; font-weight: 900; color: #0b6e99; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-link-title:hover { text-decoration: underline; }
+.notes-link.watched .notes-link-title { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(43, 45, 66, .35); }
+.notes-link-sub { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 2px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.notes-link-sub span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.notes-link-where { color: var(--ink); }
+
+/* The note open on the right: a sheet of ruled paper. */
+.notes-editor { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.notes-sheet { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0 22px 16px; overflow: auto; }
+.notes-tools { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 0; background: var(--pad); border-bottom: 2px solid var(--rule); }
+.notes-edited { flex: 1; min-width: 120px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.notes-tool { padding: 4px 9px; font-size: 12px; border-width: 2px; border-radius: 8px; box-shadow: 0 2px 0 var(--ink); }
+.notes-tool.notes-on { background: var(--accent-soft); }
+.notes-tool.notes-danger { background: #ffd6de; }
+.notes-move { max-width: 170px; padding: 4px 6px; font: 800 12px var(--font); color: var(--ink); background: #fff; border: 2px solid var(--ink); border-radius: 8px; }
+.notes-status { flex-basis: 100%; min-height: 0; font-size: 11px; font-weight: 800; color: var(--muted); }
+.notes-status:empty { display: none; }
+.modal .notes-pad input.notes-title { width: 100%; box-sizing: border-box; margin-top: 14px; padding: 4px 0; font: 900 26px/1.25 var(--font); color: var(--ink); background: transparent; border: none; border-radius: 0; outline: none; }
+.modal .notes-pad textarea.notes-body {
+  flex: 1; width: 100%; box-sizing: border-box; min-height: 220px; margin-top: 4px; padding: 0; resize: none;
+  font: 600 16px/28px var(--font); color: var(--ink); background: transparent; border: none; border-radius: 0; outline: none;
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 27px, var(--line) 27px, var(--line) 28px); background-attachment: local;
+}
+.modal .notes-pad input.notes-title[readonly], .modal .notes-pad textarea.notes-body[readonly] { color: var(--muted); }
+.notes-links { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-top: 8px; }
+.notes-links:empty { display: none; }
+.notes-links-label { font-size: 12px; font-weight: 900; color: var(--muted); }
+.notes-chip { max-width: 100%; padding: 3px 10px; font-size: 12px; font-weight: 800; color: #0b6e99; text-decoration: none; background: #e6f5fb; border: 2px solid #9fd3e6; border-radius: 999px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-chip:hover { border-color: #0b6e99; }
+.notes-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; padding-top: 10px; }
+.notes-images:empty { display: none; }
+.notes-image { position: relative; margin: 0; aspect-ratio: 4 / 3; background: #fff; border: 2px solid var(--ink); border-radius: 10px; overflow: hidden; box-shadow: 0 3px 0 rgba(43, 45, 66, .5); }
+.notes-image a, .notes-image img { display: block; width: 100%; height: 100%; }
+.notes-image img { object-fit: cover; }
+.notes-image-x { position: absolute; top: 6px; right: 6px; padding: 1px 6px; font-size: 12px; font-weight: 900; background: #fff; border: 2px solid var(--ink); border-radius: 8px; cursor: pointer; opacity: 0; transition: opacity .1s; }
+.notes-image:hover .notes-image-x, .notes-image-x:focus-visible { opacity: 1; }
+.notes-blank { margin: auto; padding: 24px; text-align: center; font-weight: 800; color: var(--muted); }
+.notes-blank-icon { font-size: 54px; }
+.notes-back { display: none; padding: 3px 9px; font-size: 12px; }
+
+/* Narrow: one pane at a time, with a way back. */
+@container (max-width: 759px) {
+  .notes-pad { grid-template-columns: minmax(0, 1fr); }
+  .notes-pad > section, .notes-pad > aside { display: none; border-right: none; }
+  .notes-pad[data-pane=side] > .notes-side, .notes-pad[data-pane=list] > .notes-listpane, .notes-pad[data-pane=editor] > .notes-editor { display: flex; }
+  .notes-back { display: inline-block; }
+  .notes-sheet { padding: 0 14px 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notes-image-x { transition: none; }
+}

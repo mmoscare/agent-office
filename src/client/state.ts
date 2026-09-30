@@ -166,6 +166,8 @@ class Store {
   private notesBase: NotesState = EMPTY_NOTES;
   /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
   private notesPending: NoteAction[] = [];
+  /** How many times the office has sent the whole pad (on arriving, after a reconnect): the open note checks nothing typed in it went missing. */
+  notesLoads = 0;
   /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
   content: readonly ContentItem[] | null = null;
   /** It as the office last sent it. */
@@ -460,6 +462,7 @@ class Store {
         break;
       case 'notes':
         if (msg.mine) this.notesPending.shift();
+        this.notesLoads++;
         this.notesBase = msg.state;
         this.replayNotes();
         break;
