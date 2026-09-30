@@ -87,6 +87,16 @@ try {
     assert.ok(requests > before, 'coming back to the tab checks again');
     await pause(300);
   };
+  // A check under way that keeps its answer (what the office knew when asked) until released.
+  const checkUnderWay = async () => {
+    let release;
+    hold = new Promise(resolve => { release = resolve; });
+    const before = requests;
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    for (let i = 0; i < 50 && requests === before; i++) await pause(100);
+    assert.ok(requests > before, 'a check is under way');
+    return () => { hold = null; release(); };
+  };
   if (shots) await mkdir(shots, { recursive: true });
 
   // Step 2 (the floor is fine): the instructions, and a way on.
@@ -125,18 +135,12 @@ try {
 
   // "Done" pressed while a check is already under way (one that began before git pull finished):
   // it waits for that one, then checks again, rather than doing nothing.
-  let release;
-  hold = new Promise(resolve => { release = resolve; });
-  const before = requests;
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  for (let i = 0; i < 50 && requests === before; i++) await pause(100);
-  assert.ok(requests > before, 'a check is under way');
+  const release = await checkUnderWay();
   state = { ...state, behind: 0, target: 'target-a', needs: { pull: false, build: true, restart: false } };
   await doneButton.click();
   await doneButton.filter({ hasText: 'Checking…' }).waitFor();
   assert.equal(await doneButton.isDisabled(), true);
   const held = requests;
-  hold = null;
   release();
   await title.filter({ hasText: 'Step 3: Build' }).waitFor();
   assert.ok(requests > held, 'it checked again after the one under way');
@@ -155,8 +159,17 @@ try {
   await title.filter({ hasText: 'Step 1: Pull the floor' }).waitFor();
   assert.match(await bar.innerText(), /✓ This step is done\./);
   assert.equal(await doneButton.count(), 0);
+  // The build finishes while a poll is under way that asked before it had. Coming back to the tab
+  // then checks again once that poll is back, rather than keeping its old answer until the next one.
+  const releasePoll = await checkUnderWay();
   state = { ...state, builtAt: Date.now(), needs: { pull: false, build: false, restart: true } };
-  await comeBack();
+  // Page timers fire in order, so the return's own 500 ms timer has fired by the time this one does.
+  await page.evaluate(() => { window.dispatchEvent(new Event('focus')); return new Promise(resolve => setTimeout(resolve, 600)); });
+  const polled = requests;
+  releasePoll();
+  // Well inside the 60 s poll, so it's the return that checked.
+  await bar.locator('.update-steps li.now').filter({ hasText: 'Restart' }).waitFor({ timeout: 15_000 });
+  assert.ok(requests > polled, 'coming back checked again after the poll under way');
   assert.equal(await title.innerText(), 'Step 1: Pull the floor');
   assert.equal(await chipState(3), 'done:✓');
   assert.equal(await chipState(4), 'now:4');
@@ -185,7 +198,7 @@ try {
   await bar.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => localStorage.getItem('agent-office.updateBarHidden')), `target-a|${state.startedAt}`);
   assert.deepEqual(errors, []);
-  console.log('PASS: step 2 Done button, not-yet reasons (pull, build, restart, unreachable), next step anyway, chips and back link, no yank on checks, click during a check, re-check on coming back, reload step, Hide key.');
+  console.log('PASS: step 2 Done button, not-yet reasons (pull, build, restart, unreachable), next step anyway, chips and back link, no yank on checks, click during a check, re-check on coming back (also after a poll under way), reload step, Hide key.');
 } finally {
   if (browser) await browser.close();
   if (host && host.exitCode === null) {

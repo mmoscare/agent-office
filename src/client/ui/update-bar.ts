@@ -142,6 +142,15 @@ export function check(fresh = false): Promise<void> {
   return inflight;
 }
 
+/**
+ * Checks again once any check under way is back. That one may have asked before a command in
+ * PowerShell finished (git pull, say), and its answer would leave the bar on that step until the next poll.
+ */
+async function checkAfter(): Promise<void> {
+  await inflight;
+  await check();
+}
+
 async function load(floor: string, fresh: boolean): Promise<void> {
   try {
     const q = new URLSearchParams({ floor, ...(fresh ? { fresh: '1' } : {}) });
@@ -162,8 +171,7 @@ async function done(i: number): Promise<void> {
   checking = i;
   notYet = null;
   render();
-  await inflight;
-  await check();
+  await checkAfter();
   checking = null;
   const list = status ? steps(status) : [];
   if (!unreachable && list[i]?.done) {
@@ -283,12 +291,13 @@ export function mountUpdateBar(): void {
   }, POLL_MS);
   store.on('floor', () => void check());
   // Back from PowerShell (this tab shown again, or the window focused): check straight away, so the
-  // bar has usually moved on to the next step by the time you look.
+  // bar has usually moved on to the next step by the time you look. A poll still under way asked
+  // before you came back, so this check comes after it.
   let backTimer: ReturnType<typeof setTimeout> | undefined;
   const back = () => {
     if (document.visibilityState !== 'visible' || !bar || bar.hidden) return;
     clearTimeout(backTimer);
-    backTimer = setTimeout(() => void check(), BACK_MS);
+    backTimer = setTimeout(() => void checkAfter(), BACK_MS);
   };
   document.addEventListener('visibilitychange', back);
   window.addEventListener('focus', back);
