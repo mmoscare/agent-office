@@ -15,6 +15,7 @@ import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
+import type { StickyAction, StickyNote } from './stickies.js';
 import type { TodoAction, TodoItem } from './todos.js';
 
 export type WorkerStatus =
@@ -1251,7 +1252,9 @@ export type ClientMsg =
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
   /** A change to your own 🔥 To Do board (see shared/todos.ts). */
-  | { t: 'todo'; change: TodoAction };
+  | { t: 'todo'; change: TodoAction }
+  /** A change to your reminder stickies on the wall (see shared/stickies.ts). */
+  | { t: 'sticky'; change: StickyAction };
 
 export type ServerMsg =
   | ({
@@ -1382,5 +1385,7 @@ export type ServerMsg =
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
   | { t: 'todos'; items: TodoItem[] }
+  /** Your reminder stickies as they are now: on arriving, and after every change from any of your windows. */
+  | { t: 'stickies'; items: StickyNote[] }
   /** `now` is the office's clock as it answered, which the jukebox keeps time by. */
   | { t: 'pong'; at: number; now: number };
