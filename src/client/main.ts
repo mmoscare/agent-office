@@ -782,6 +782,8 @@ net.onMessage((msg) => {
     }
     case 'floor.enter': {
       const workerId = trip?.floor === store.floor ? trip.workerId : undefined;
+      // T's circle went around the floor you left: the next press starts from the nearest seat on this one.
+      seatTour.reset();
       // Not a trip of yours: the floor you were on was taken off the building, and the elevator took you away.
       if (!trip) {
         closeAllModals();

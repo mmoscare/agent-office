@@ -11,13 +11,14 @@ export type TourStep = { kind: 'seat'; id: string; n: number; of: number } | { k
 
 const TAU = Math.PI * 2;
 
+/** Around the middle of the floor: south (+z) is 0, east (+x) π/2, north (-z) π, west -π/2. */
 function angle(p: { x: number; z: number }): number {
   return Math.atan2(p.x, p.z);
 }
 
-/** How far clockwise `to` is from `from`, in (0, 2π]. */
+/** How far clockwise `to` is from `from`, in (0, 2π]. Seen from above, clockwise is north, east, south, west: the angle falls. */
 function clockwise(from: number, to: number): number {
-  const d = Math.atan2(Math.sin(to - from), Math.cos(to - from));
+  const d = Math.atan2(Math.sin(from - to), Math.cos(from - to));
   return d > 0 ? d : d + TAU;
 }
 

@@ -13,11 +13,36 @@ test('T starts at the nearest waiting seat, then goes clockwise, then back to th
   const tour = new SeatTour();
   const here = { x: 1, z: -1 };
   assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'east', n: 1, of: 3 });
-  assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'north', n: 2, of: 3 });
-  assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'west', n: 3, of: 3 });
+  // Clockwise from the east goes by the south to the west, then the north.
+  assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'west', n: 2, of: 3 });
+  assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'north', n: 3, of: 3 });
   assert.deepEqual(tour.next(seats, here), { kind: 'office', waiting: true });
   assert.equal(tour.active, false);
   assert.deepEqual(tour.next(seats, here), { kind: 'seat', id: 'east', n: 1, of: 3 });
+});
+
+test('clockwise seen from above, with north at -z: north, east, south, west', () => {
+  const compass: TourSeat[] = [
+    { id: 'west', x: -8, z: 0 },
+    { id: 'south', x: 0, z: 8 },
+    { id: 'north', x: 0, z: -8 },
+    { id: 'east', x: 8, z: 0 },
+  ];
+  const tour = new SeatTour();
+  const here = { x: 0.5, z: -7 };
+  const order = [1, 2, 3, 4].map(() => (tour.next(compass, here) as { id: string }).id);
+  assert.deepEqual(order, ['north', 'east', 'south', 'west']);
+  assert.deepEqual(tour.next(compass, here), { kind: 'office', waiting: true });
+});
+
+test('a new floor starts over: after reset, an empty floor says nobody is waiting', () => {
+  const tour = new SeatTour();
+  tour.next(seats, { x: 1, z: -1 });
+  tour.reset();
+  assert.deepEqual(tour.next([], { x: 1, z: -1 }), { kind: 'office', waiting: false });
+  tour.next(seats, { x: 1, z: -1 });
+  tour.reset();
+  assert.deepEqual(tour.next([{ id: 'far', x: -9, z: 9 }, { id: 'near', x: 2, z: 2 }], { x: 1, z: 1 }), { kind: 'seat', id: 'near', n: 1, of: 2 });
 });
 
 test('the first seat is the one next to you', () => {
