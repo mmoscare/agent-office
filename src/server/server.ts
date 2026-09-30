@@ -44,7 +44,9 @@ import { LeaveOnMerge } from './leave-on-merge.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
+import { Stickies } from './stickies.js';
 import { Todos } from './todos.js';
+import { TODO_IMAGE_MAX_BYTES, TodoImages } from './todo-images.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, GH_LABEL_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
 import { taskStatus, unshippedText } from '../shared/task-status.js';
@@ -54,6 +56,7 @@ import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../s
 import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
+import { checkStickyAction } from '../shared/stickies.js';
 import { checkTodoAction } from '../shared/todos.js';
 import { checkContentAction } from '../shared/content-kanban.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
@@ -223,8 +226,15 @@ export async function startServer(cfg: Config) {
   });
   // Everyone's own 🔥 To Do board: one list each for the whole building, so it follows them onto every floor.
   const todos = new Todos(cfg.dataDir);
-  /** Whose To Do board a connection sees: their account's, or the shared password's one list. */
+  // Reminder stickies on the wall by that board: the same list on every floor, one per person.
+  const stickies = new Stickies(cfg.dataDir);
+  /** Whose To Do board and stickies a connection sees: their account's, or the shared password's one list. */
   const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
+  // The 🏢 Autonomous Tasks whiteboard: the same kind of board, with one list for the whole office.
+  const autonomous = new Todos(cfg.dataDir, 'autonomous.json');
+  const AUTONOMOUS_OWNER = 'office';
+  // The pictures on either board's cards.
+  const todoImages = new TodoImages(cfg.dataDir);
   /** What the office is called where it has no project of its own to go by (webhooks, invites). */
   const officeName = cfg.project ? path.basename(cfg.project) : 'the office';
   const modelCommand = configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentCmd : 'opencode';
@@ -1227,6 +1237,35 @@ export async function startServer(cfg: Config) {
         res.end(r.body);
         return;
       }
+      if (p === '/api/todo-image') {
+        // Pictures on kanban cards (see todo-images.ts). Their names are hashes of what's in them, so they never change.
+        if (req.method === 'GET') {
+          const f = todoImages.get(url.searchParams.get('id') ?? '');
+          if (!f) return send(res, 404, { error: 'No such picture' });
+          res.writeHead(200, {
+            'content-type': f.type,
+            'content-length': String(f.body.length),
+            'cache-control': 'private, max-age=31536000, immutable',
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            'cross-origin-resource-policy': 'same-origin',
+          });
+          res.end(f.body);
+          return;
+        }
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: unknown;
+        try {
+          // Base64 is a third bigger than the picture.
+          body = JSON.parse(await readBody(req, Math.ceil(TODO_IMAGE_MAX_BYTES * 1.4) + 4096));
+        } catch (err) {
+          if ((err as Error).message === 'too large') return send(res, 413, { error: 'That picture is too big' });
+          return send(res, 400, { error: 'Bad request' });
+        }
+        const r = todoImages.add(body);
+        return 'error' in r ? send(res, 400, r) : send(res, 200, r);
+      }
       // Which floor a request is about: its boards and its workers.
       const floor = floors.get(url.searchParams.get('floor') ?? '');
       if (p === '/api/whiteboard/file') {
@@ -1471,6 +1510,8 @@ export async function startServer(cfg: Config) {
     screensOf(client, floor);
     sendTo(client, { t: 'timecard', state: timecard.state(client.timeKey) });
     sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
+    sendTo(client, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)] });
+    sendTo(client, { t: 'stickies', items: [...stickies.list(todoOwner(client))] });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -2311,7 +2352,7 @@ export async function startServer(cfg: Config) {
         const on = msg.on === true;
         if (on === leaveOnMerge.on) break;
         leaveOnMerge.set(on, who);
-        toastAll(on ? `🏠 ${who} set workers to go home by themselves once their pull request merges` : `🪑 ${who} set workers whose pull request merged to stay until they're sent home`);
+        toastAll(on ? `🏠 ${who} set workers to go home by themselves once their pull request merges` : `🪑 ${who} set workers whose pull request merged to stay until they're clocked out`);
         // The ones already merged go now.
         if (on) for (const f of floors.values()) f.sendLandedHome();
         break;
@@ -2520,11 +2561,27 @@ export async function startServer(cfg: Config) {
         break;
       case 'todo': {
         const change = checkTodoAction(msg.change);
+        if (msg.board === 'autonomous') {
+          const items = change && autonomous.apply(AUTONOMOUS_OWNER, change);
+          // Everyone's windows, on any floor: it's the office's board.
+          // `mine` tells the sender this answers its change, so its window can let go of it.
+          if (items) for (const other of clients.values()) if (!other.out) sendTo(other, { t: 'todos', board: 'autonomous', items: [...items], ...(other === c ? { mine: true } : {}) });
+          if (!items) sendTo(c, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)], mine: true });
+          break;
+        }
         const owner = todoOwner(c);
         const items = change && todos.apply(owner, change);
         // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
         if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
         if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
+      case 'sticky': {
+        const change = checkStickyAction(msg.change);
+        const owner = todoOwner(c);
+        const items = change && stickies.apply(owner, change);
+        if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'stickies', items: [...items] });
+        if (!items) sendTo(c, { t: 'stickies', items: [...stickies.list(owner)] });
         break;
       }
       case 'content': {

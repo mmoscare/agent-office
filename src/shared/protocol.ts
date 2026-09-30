@@ -17,7 +17,8 @@ import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
-import type { TodoAction, TodoItem } from './todos.js';
+import type { StickyAction, StickyNote } from './stickies.js';
+import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
 import type { ContentAction, ContentItem } from './content-kanban.js';
 
 export type WorkerStatus =
@@ -644,6 +645,13 @@ export interface NotifyState {
   lastSentAt?: number;
 }
 
+/** One app on the wall's top-CPU list: its share of the machine over the last few seconds. */
+export interface CpuApp {
+  name: string;
+  /** Percent of the whole machine, 0-100, not of a single core. */
+  pct: number;
+}
+
 /**
  * The office's machine (see server/machine.ts): how busy it is, for the wall monitor and a warning
  * before hiring, and the most workers the office runs at once, across every floor.
@@ -667,6 +675,8 @@ export interface MachineState {
   ceiling?: number;
   /** The limit someone set in ⚙️ Settings, when there is one. */
   set?: { limit: number; by: string; at: number };
+  /** The apps using the most CPU, busiest first, at most five. Missing until the first reading. */
+  apps?: CpuApp[];
 }
 
 export interface GhState<T> {
@@ -1328,8 +1338,10 @@ export type ClientMsg =
   /** Your 🗂️ Indirect Time card, please: when you had the office open, per day. */
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
-  /** A change to your own 🔥 To Do board (see shared/todos.ts). */
-  | { t: 'todo'; change: TodoAction }
+  /** A change to your own 🔥 To Do board (see shared/todos.ts), or to the office's 🏢 Autonomous Tasks board. */
+  | { t: 'todo'; change: TodoAction; board?: TodoBoardId }
+  /** A change to your reminder stickies on the wall (see shared/stickies.ts). */
+  | { t: 'sticky'; change: StickyAction }
   /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
   | { t: 'content'; change: ContentAction };
 
@@ -1472,7 +1484,10 @@ export type ServerMsg =
   /** Your role changed. */
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
-  | { t: 'todos'; items: TodoItem[] }
+  /** On the 🏢 Autonomous Tasks board, everyone's changes come to everyone; `mine` is the answer to your own change (every one gets exactly one). */
+  | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId; mine?: boolean }
+  /** Your reminder stickies as they are now: on arriving, and after every change from any of your windows. */
+  | { t: 'stickies'; items: StickyNote[] }
   /**
    * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
    * answer to your own change (every one gets exactly one), so your window knows which are done.

@@ -7,10 +7,13 @@ import { BALANCE_LABEL, BALANCE_PROVIDERS, estimatedBalance, type ApiBalancesSta
 import { fmtCost } from '../../shared/protocol';
 import { $, h, openModal } from './dom';
 import { panelHide } from './menu';
+import { modelLogoEl } from '../world/model-logos';
+import type { ModelBrand } from '../../shared/model-brand';
 
 /** The browser asks this often; the server only calls the providers every 5 minutes. */
 const POLL_MS = 60_000;
 const ENV_NAME: Record<BalanceProvider, string> = { anthropic: 'AGENT_OFFICE_ANTHROPIC_ADMIN_KEY', openai: 'AGENT_OFFICE_OPENAI_ADMIN_KEY', xai: 'AGENT_OFFICE_XAI_MANAGEMENT_KEY' };
+const BALANCE_BRAND: Record<BalanceProvider, ModelBrand> = { anthropic: 'anthropic', openai: 'openai', xai: 'xai' };
 
 let state: ApiBalancesState = { providers: [], at: 0 };
 let loadError = '';
@@ -22,15 +25,16 @@ const anyConfigured = () => state.providers.some((p) => p.configured);
 
 function providerRows(p: ProviderBalance): HTMLElement[] {
   const label = BALANCE_LABEL[p.provider];
+  const mark = modelLogoEl(BALANCE_BRAND[p.provider]);
   if (!p.configured) {
-    return [h('div.row.unset', { title: `No ${label} key yet. ⚙ explains what to paste.` }, h('span.what', {}, label), h('span.muted', {}, 'not set up'))];
+    return [h('div.row.unset', { title: `No ${label} key yet. ⚙ explains what to paste.` }, mark, h('span.what', {}, label), h('span.muted', {}, 'not set up'))];
   }
   const rows: HTMLElement[] = [];
   const when = p.at ? `\nRead ${clock(p.at)}` : '';
   if (p.provider === 'xai') {
     const has = p.reportedBalance !== undefined;
     rows.push(h('div.row', { class: p.error ? 'err' : '', title: `Remaining prepaid credit xAI reports for the team.${when}${p.error ? `\n${p.error}` : ''}` },
-      h('span.what', {}, label), h('b', {}, has ? dollars(p.reportedBalance!) : p.error ? '?' : '…'), h('span.muted', {}, has ? 'balance' : p.error ? 'unavailable' : 'reading')));
+      mark, h('span.what', {}, label), h('b', {}, has ? dollars(p.reportedBalance!) : p.error ? '?' : '…'), h('span.muted', {}, has ? 'balance' : p.error ? 'unavailable' : 'reading')));
   } else {
     const est = estimatedBalance(p);
     const spentMonth = p.spentMonth;
@@ -45,7 +49,7 @@ function providerRows(p: ProviderBalance): HTMLElement[] {
       p.error ?? '',
     ].filter(Boolean).join('\n');
     rows.push(h('div.row', { class: p.error ? 'err' : '', title },
-      h('span.what', {}, label),
+      mark, h('span.what', {}, label),
       h('b', {}, est !== undefined ? `≈ ${dollars(est)}` : spentMonth !== undefined ? dollars(spentMonth) : p.error ? '?' : '…'),
       h('span.muted', {}, est !== undefined ? 'balance est.' : spentMonth !== undefined ? 'spent this month' : p.error ? 'unavailable' : 'reading'),
     ));
@@ -163,7 +167,7 @@ export function openBalancesSetup() {
       forget.addEventListener('click', () => void post({ provider: id, key: null }, () => {}));
       clearCredits?.addEventListener('click', () => void post({ provider: id, credits: null }, () => {}));
       return h('section.balances-setup-provider', {},
-        h('h3', {}, BALANCE_LABEL[id], h('span.state', {}, p.configured ? (fromEnv ? `key from ${ENV_NAME[id]}` : 'key saved') : 'no key')),
+        h('h3', {}, modelLogoEl(BALANCE_BRAND[id]), BALANCE_LABEL[id], h('span.state', {}, p.configured ? (fromEnv ? `key from ${ENV_NAME[id]}` : 'key saved') : 'no key')),
         h('p.note', {}, help.note),
         h('label', {}, h('span', {}, help.key), key),
         h('p.note', {}, help.where),

@@ -1,5 +1,7 @@
 import type { AgentChoice, AgentEffort, AgentProvider, ClaudeModel, ProjectInfo, Usage } from '../../shared/protocol';
 import { AGENT_EFFORTS, CLAUDE_MODELS } from '../../shared/protocol';
+import { modelBrand } from '../../shared/model-brand';
+import { modelLogoEl } from '../world/model-logos';
 import { store } from '../state';
 import { h } from './dom';
 
@@ -316,7 +318,8 @@ export function providerPicker(project: ProjectInfo | null, id: string, label = 
   const element = h('div.provider-pick', {}, h('div.provider-summary', {}, h('span.provider-label', {}, label), current, edit), fields.element);
   const paint = () => {
     const def = officeChoice(project);
-    current.textContent = choiceLabel(def);
+    const brand = modelBrand(def.model, def.provider);
+    current.replaceChildren(...(brand ? [modelLogoEl(brand, def.model)] : []), choiceLabel(def));
     current.title = store.prompts.agent ? 'The office’s default worker, set in ⚙️ Settings' : 'The office’s default worker (its --agent); an admin can pick another in ⚙️ Settings';
     current.classList.toggle('hidden', editing);
     edit.textContent = editing ? '↺ Use the default' : '✏️ Edit';

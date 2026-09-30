@@ -40,18 +40,28 @@ export function workspaceGitHubRepo(remote: string): string {
   return `${host}/${parts.join('/')}`;
 }
 
-/** Refuse paths outside the floor, aliases, and directories inside a repo instead of its root. */
-function source(floor: string, relative: string): string {
+/** The path checks of source(), before Git is asked for the repository root. */
+function candidate(floor: string, relative: string): string {
   if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some(p => p === '..' || p === '.agent-office')) throw new Error('Choose a repository inside this floor');
   const root = realpathSync(floor);
   const dir = realpathSync(path.resolve(root, relative));
   if (!within(root, dir) || path.relative(root, dir).split(path.sep).some(p => p.toLowerCase() === '.agent-office') || !existsSync(path.join(dir, '.git'))) throw new Error(`Not a repository inside this floor: ${relative}`);
+  return dir;
+}
+
+/** Refuse paths outside the floor, aliases, and directories inside a repo instead of its root. */
+function source(floor: string, relative: string): string {
+  const dir = candidate(floor, relative);
   if (path.relative(dir, realpathSync(git(dir, ['rev-parse', '--show-toplevel']))) !== '') throw new Error(`Choose the repository root: ${relative}`);
   return dir;
 }
 
-/** Bounded discovery, ignoring dependency trees and directory links. Never follows a link outside a floor. */
-export async function workspaceRepositories(floor: string): Promise<WorkspaceRepositories> {
+/**
+ * Bounded discovery, ignoring dependency trees and directory links. Never follows a link outside a floor.
+ * Git runs asynchronously so a slow scan never stalls the server. `dirty` counts changed tracked files;
+ * untracked files are walked only when `untracked` is set (the Git board's count).
+ */
+export async function workspaceRepositories(floor: string, { untracked = false } = {}): Promise<WorkspaceRepositories> {
   const root = realpathSync(floor);
   const result: WorkspaceRepositories = { repositories: [], truncated: false };
   let visited = 0;
@@ -60,15 +70,17 @@ export async function workspaceRepositories(floor: string): Promise<WorkspaceRep
     if (existsSync(path.join(dir, '.git'))) {
       const relative = path.relative(root, dir).split(path.sep).join('/') || '.';
       try {
-        source(root, relative);
+        const real = candidate(root, relative);
         const opts = { cwd: dir, encoding: 'utf8' as const, timeout: 10_000, windowsHide: true };
         const [head, status, branches] = await Promise.all([
-          exec('git', ['rev-parse', '--verify', 'HEAD'], opts),
-          exec('git', ['status', '--porcelain=v1', '-z', '-unormal'], opts),
+          // One rev-parse for the repository root, a commit to start from (it fails without one) and the branch.
+          exec('git', ['rev-parse', '--show-toplevel', '--abbrev-ref', '--verify', 'HEAD'], opts),
+          exec('git', ['status', '--porcelain=v1', '-z', untracked ? '-unormal' : '-uno'], opts),
           workspaceBranches(dir),
         ]);
-        if (!head.stdout.trim()) throw new Error('No commits yet');
-        const branch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+        const [top, branch] = head.stdout.trim().split('\n').map(line => line.trim());
+        if (path.relative(real, realpathSync(top)) !== '') throw new Error(`Choose the repository root: ${relative}`);
+        if (!branch) throw new Error('No commits yet');
         result.repositories.push({ path: relative, name: path.basename(dir), branch: branch === 'HEAD' ? undefined : branch, branches, dirty: status.stdout.split('\0').filter(Boolean).length });
       } catch (err) {
         result.repositories.push({ path: relative, name: path.basename(dir), dirty: 0, error: gitError(err) });
