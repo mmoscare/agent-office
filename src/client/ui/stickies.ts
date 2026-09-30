@@ -122,7 +122,11 @@ export function openSticky(net: Net, id: string) {
     change({ action: 'remove', id });
     modal.close();
   });
-  area.focus();
+  // After the E that opened it, which would otherwise land at the end of the note.
+  setTimeout(() => {
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  }, 30);
 }
 
 /** The + on the wall: write a new reminder, or show one you hid. */
@@ -172,5 +176,6 @@ export function openNewSticky(net: Net) {
   area.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit();
   });
-  area.focus();
+  // After the E that opened it, so the new note doesn't start with an "e".
+  setTimeout(() => area.focus(), 30);
 }
