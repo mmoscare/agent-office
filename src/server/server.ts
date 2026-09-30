@@ -34,6 +34,7 @@ import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
+import { ChangeNotes, PlainWriter, claudeSummarizer, floorSources } from './change-notes.js';
 import { PlansError } from './plans.js';
 import { INBOX_SERVE_MAX, InTrayDoor, InboxError, fileType, plainName, readBytes } from './inbox.js';
 import { Mailroom, type MailFloor } from './mailroom.js';
@@ -718,6 +719,20 @@ export async function startServer(cfg: Config) {
     () => clients.size > 0,
     (state) => broadcast({ t: 'limits', state }),
   );
+
+  // ✨ What's new on the queue staffer's clipboard, each change in plain words (change-notes.ts):
+  // one writer for every floor, and each floor's list read when someone opens it.
+  const plainWriter = new PlainWriter(
+    claudeSummarizer(configuredProvider(cfg.agentCmd) === 'claude' ? resolveCommand(cfg.agentCmd) : resolveCommand('claude'), childEnv()),
+    () => !!ledger.hiringPaused,
+  );
+  const whatsNew = new Map<string, ChangeNotes>();
+  const whatsNewOn = (floor: Floor) => {
+    const key = `${floor.id}|${floor.dir}`;
+    let notes = whatsNew.get(key);
+    if (!notes) whatsNew.set(key, (notes = new ChangeNotes(floor.id, path.join(floor.dir, '.agent-office'), () => floorSources(floor.dir), plainWriter)));
+    return notes;
+  };
 
   // The office phone: an agent finishing on one floor rings it on all the others.
   const phone = new PhoneLine();
@@ -1444,6 +1459,10 @@ export async function startServer(cfg: Config) {
         return send(res, 404, { error: 'Not found' });
       }
       if (p === '/api/search' && req.method === 'GET') return send(res, 200, search(url.searchParams.get('q') ?? '', floor));
+      if (p === '/api/whats-new' && req.method === 'GET') {
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        return send(res, 200, await whatsNewOn(floor).list(Number(url.searchParams.get('show'))), { 'cache-control': 'no-store' });
+      }
       if (p.startsWith('/api/gh/') && req.method === 'GET') {
         // What the issue and PR windows show beyond the board cards (see github.ts).
         const n = Number(url.searchParams.get('number'));

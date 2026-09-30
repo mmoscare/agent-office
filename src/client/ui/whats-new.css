@@ -1,0 +1,27 @@
+.clipboard-tabs { flex: 1; min-width: 0; flex-wrap: wrap; }
+.clipboard-tabs .btn[aria-selected="true"] { background: var(--accent); color: #fff; }
+.clipboard-tabs .btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.whats-new-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.whats-new-floor { max-width: 100%; padding: 4px 8px; border: 2px solid var(--ink); border-radius: 10px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 800; }
+.whats-new-floor[hidden] { display: none; }
+.whats-new-status { color: var(--muted); font-size: 12px; font-weight: 700; }
+.whats-new-note { margin: 0 0 12px; padding: 8px 10px; border-radius: 10px; background: var(--paper-2); color: #4a4458; font-size: 13px; font-weight: 600; line-height: 1.35; }
+.whats-new-note.error { background: #ffe0e7; }
+.whats-new .empty { margin: 0; color: var(--muted); font-size: 13px; font-weight: 600; }
+.whats-new-day + .whats-new-day { margin-top: 16px; }
+.whats-new-day h3 { margin: 0 0 8px; font-size: 15px; font-weight: 900; }
+.whats-new-day ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.whats-new-item { padding: 8px 10px; border: 2px solid var(--ink); border-radius: 12px; background: #fff; }
+.whats-new-item.fresh { box-shadow: inset 5px 0 0 var(--accent); padding-left: 14px; }
+.whats-new-text { margin: 0; color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.4; }
+.whats-new-item.rough .whats-new-text { color: #4a4458; font-weight: 600; }
+.whats-new-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.whats-new-tag { padding: 1px 6px; border-radius: 6px; background: #eee6dc; color: var(--ink); }
+.whats-new-tag.fresh { background: var(--accent); color: #fff; }
+.whats-new-tag.author { background: #dfe7ff; }
+.whats-new-tag.rough { background: #fff3c4; }
+.whats-new-tag.repo { background: #c9f4e7; }
+.whats-new-details { margin-left: auto; color: var(--muted); }
+.whats-new-details:hover { color: var(--ink); }
+.whats-new-older { display: block; margin: 14px auto 0; }
+.whats-new-older[hidden] { display: none; }
