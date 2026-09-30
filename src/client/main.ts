@@ -8,6 +8,7 @@ import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, Gong
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
+import { modelBrand } from '../shared/model-brand';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
 import { isAsleep, isBusy, workerPr } from '../shared/status';
@@ -1335,7 +1336,11 @@ function syncWorkers() {
     }
     v.model.setAction(w.action);
     // What it last replied with, or failing that the model it was hired on.
-    v.model.setModel(w.kind === 'agent' ? modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : undefined) : undefined);
+    const modelId = w.runningModel ?? w.model;
+    v.model.setModel(
+      w.kind === 'agent' ? modelTag(modelId, w.runningModel ? w.runningEffort : undefined) : undefined,
+      w.kind === 'agent' ? modelBrand(modelId, w.provider) : undefined,
+    );
     v.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
     const engineBadge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
     v.model.setTask(meetingCard(w) ?? (w.task && w.kind === 'agent' ? { ...w.task, name: `${providerLabel(w.provider, store.project)}${engineBadge ? ` · ${engineBadge}` : ''} · ${w.task.name}` } : w.task));
