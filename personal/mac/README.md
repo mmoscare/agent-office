@@ -26,6 +26,10 @@ This writes `<officeDir>/.agent-office/mac-mirror/`:
 
 Not in the bundle, on purpose: workers and their terminal sessions, scrollback, hooks, worker
 worktrees and workspaces, the password, spend and timecards. Those belong to the machine.
+Origins are recorded without any `user:token@` they carry (clones use the other machine's own git
+credentials), and "unpushed" counts the commits no remote-tracking branch has, so a branch with
+no upstream or a detached HEAD is counted too. Every `--state` export rebuilds the `state/` folder,
+so a file a floor no longer has does not come back on import.
 
 The bundle names your private repositories, so it lives in the git-ignored `.agent-office/` folder.
 Keep it out of this public fork. Add `--quick` to skip the slow uncommitted/unpushed counts.

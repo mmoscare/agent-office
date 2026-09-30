@@ -55,6 +55,24 @@ the Mac side has not been run, because this session has no access to the Mac.
   afterwards, so the manifest records Dock's origin and import clones it like the other
   single-checkout floors.
 
+### Review fixes (same day)
+
+Codex left five findings on the PR; all are fixed, each with a test:
+
+- "unpushed" now counts commits no remote-tracking ref has (`rev-list HEAD --not --remotes`), so a
+  branch with no upstream or a detached HEAD is counted instead of reading as nothing left behind;
+  a repository with no remote is listed under "copy by hand" only, and a count git couldn't give is
+  reported as unknown rather than as zero.
+- A floor whose folder was outside the home folder on the source machine (an absolute path with no
+  meaning here) is skipped and reported until `--map` gives it a place; nothing is created for it
+  and it is left out of floors.json.
+- A floor that is itself a linked worktree is reported as not carried, like nested worktrees,
+  instead of becoming an empty folder and an empty floor.
+- Any `user:token@` in an origin URL is dropped from the manifest and from every log line and report
+  (`safeUrl`); identity comparisons ignore it too.
+- Every `--state` export rebuilds the bundle's `state/` folder, so files a floor no longer has do
+  not come back on import.
+
 ## Verification
 
 - `node --test --test-reporter=spec tests/floors-mirror.test.ts`: 5 tests, 5 passed (about 25 s).

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 // @ts-expect-error — the mirror is plain JavaScript (no build step) so it runs on a Mac straight from the checkout.
-import { exportBundle, findCheckouts, githubRepo, importBundle, sameOrigin, targetDir } from '../personal/mac/floors-mirror.mjs';
+import { exportBundle, findCheckouts, githubRepo, importBundle, safeUrl, sameOrigin, targetDir } from '../personal/mac/floors-mirror.mjs';
 
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 function git(cwd: string, ...args: string[]): string {
@@ -32,6 +32,29 @@ function seedRepo(root: string, name: string, dir: string, branch?: string): str
     git(dir, 'push', '--quiet', '-u', 'origin', branch);
   }
   return bare;
+}
+
+/** A nested repository whose work sits on a branch with no upstream: its last commit is on no remote. */
+function addLocalOnlyBranch(office: string, root: string): string {
+  const dir = path.join(office, 'apps', 'frontend');
+  seedRepo(root, 'frontend', dir);
+  git(dir, 'checkout', '--quiet', '-b', 'wip');
+  writeFileSync(path.join(dir, 'wip.txt'), 'not pushed\n');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '--quiet', '-m', 'local only work');
+  return dir;
+}
+
+/** A nested repository whose origin URL carries a token, as a pasted PAT remote would. */
+function addTokenedRepo(office: string): string {
+  const dir = path.join(office, 'apps', 'tokened');
+  mkdirSync(dir, { recursive: true });
+  git(dir, 'init', '--quiet', '-b', 'main');
+  writeFileSync(path.join(dir, 'README.md'), 'tokened\n');
+  git(dir, 'add', '.');
+  git(dir, 'commit', '--quiet', '-m', 'first');
+  git(dir, 'remote', 'add', 'origin', 'https://user:s3cret@example.com/org/tokened.git');
+  return dir;
 }
 
 /**
@@ -82,6 +105,14 @@ test('github origins are recognised in every spelling', () => {
   assert.ok(!sameOrigin('https://github.com/mmoscare/a.git', 'https://github.com/mmoscare/b.git'));
   assert.ok(sameOrigin('C:\\remotes\\x.git', 'c:/remotes/x.git/'));
   assert.ok(!sameOrigin(null, 'https://github.com/mmoscare/a.git'));
+  // A token pasted into a remote URL never decides identity, and never reaches a message.
+  assert.equal(githubRepo('https://user:tok@github.com/a/b.git'), 'a/b');
+  assert.ok(sameOrigin('https://user:tok@github.com/mmoscare/a.git', 'https://github.com/mmoscare/a'));
+  assert.ok(sameOrigin('https://user:tok@example.com/x.git', 'https://example.com/x'));
+  assert.equal(safeUrl('https://user:tok@example.com/x.git'), 'https://example.com/x.git');
+  assert.equal(safeUrl('ssh://git@github.com/a/b.git'), 'ssh://github.com/a/b.git');
+  assert.equal(safeUrl('git@github.com:a/b.git'), 'git@github.com:a/b.git');
+  assert.equal(safeUrl(null), null);
 });
 
 test('export records every floor, the checkouts in it and what will not travel', () => {
@@ -221,5 +252,83 @@ test('import keeps floors that only exist here, honours --map, and refuses to mi
     const floors = JSON.parse(readFileSync(path.join(office, '.agent-office', 'floors.json'), 'utf8'));
     assert.deepEqual(floors.map((f: any) => [f.id, f.dir]), [['personal-portfolio', office], ['solo', soloHere], ['mac-only', macOnly]]);
     assert.ok(report.backup && existsSync(report.backup));
+  } finally { b.close(); }
+});
+
+test('export counts commits no remote has, upstream or not, and keeps credentials out of the manifest and the log', () => {
+  const b = building();
+  try {
+    addLocalOnlyBranch(b.office, b.root);
+    addTokenedRepo(b.office);
+    const lines: string[] = [];
+    const out = path.join(b.root, 'bundle');
+    const manifest = exportBundle({ officeDir: b.office, out, home: b.home, log: (l: string) => lines.push(l) });
+    const byPath = Object.fromEntries(manifest.floors[0].checkouts.map((c: any) => [c.path, c]));
+    assert.equal(byPath['apps/frontend'].branch, 'wip');
+    assert.equal(byPath['apps/frontend'].unpushed, 1, 'a branch with no upstream still reports its local-only commit');
+    assert.equal(byPath['apps/backend'].unpushed, 0);
+    assert.equal(byPath['tools/local'].unpushed, 1, 'with no remote at all, every commit is unpushed');
+    assert.equal(byPath['apps/tokened'].origin, 'https://example.com/org/tokened.git');
+    assert.ok(!JSON.stringify(manifest).includes('s3cret'));
+    assert.ok(!readFileSync(path.join(out, 'manifest.json'), 'utf8').includes('s3cret'));
+    assert.ok(lines.some((l) => l.includes('apps/tokened https://example.com/org/tokened.git')), lines.join('\n'));
+    assert.ok(!lines.some((l) => l.includes('s3cret')));
+    // The import report names the local-only work, and never the credential.
+    const mac = path.join(b.root, 'mac');
+    const said: string[] = [];
+    const dry = importBundle({ bundle: out, devRoot: path.join(mac, 'Development'), projects: path.join(mac, 'agent-office'), home: mac, dryRun: true, log: (l: string) => said.push(l) });
+    assert.ok(dry.leftBehind.includes('Personal-Portfolio/apps/frontend: 1 unpushed commit on wip stayed on the other machine'), JSON.stringify(dry.leftBehind));
+    assert.ok(!dry.leftBehind.some((s: string) => s.includes('tools/local')), 'a repository with no remote is under "copy by hand", not "left behind"');
+    assert.ok(said.some((l) => l.includes('clone https://example.com/org/tokened.git')), said.join('\n'));
+    assert.ok(!said.some((l) => l.includes('s3cret')));
+    assert.ok(!JSON.stringify(dry).includes('s3cret'));
+  } finally { b.close(); }
+});
+
+test('import leaves out floors it cannot place: absolute paths without --map, and floors that are linked worktrees', () => {
+  const b = building();
+  try {
+    const out = path.join(b.root, 'bundle');
+    exportBundle({ officeDir: b.office, out, home: b.home, quick: true });
+    const file = path.join(out, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    const wt = manifest.floors[0].checkouts.find((c: any) => c.path === 'wt/pr-backend');
+    manifest.floors.push(
+      { id: 'elsewhere', name: 'Elsewhere', repo: null, palette: 2, paletteName: 'Sky', addedBy: 'x', addedAt: 3, backOffice: false, dir: 'Z:\weird\place', base: 'absolute', rel: 'Z:\weird\place', isOffice: false, exists: true, checkouts: [], truncated: false },
+      { id: 'wt-floor', name: 'wt-floor', repo: null, palette: 4, paletteName: 'Peach', addedBy: 'x', addedAt: 4, backOffice: false, dir: path.join(b.office, 'wt', 'pr-backend'), base: 'development', rel: 'Personal-Portfolio/wt/pr-backend', isOffice: false, exists: true, checkouts: [{ ...wt, path: '.' }], truncated: false },
+    );
+    writeFileSync(file, JSON.stringify(manifest));
+    const mac = path.join(b.root, 'mac');
+    const devRoot = path.join(mac, 'Development');
+    const projects = path.join(mac, 'agent-office');
+    const report = importBundle({ bundle: out, devRoot, projects, home: mac });
+    assert.ok(report.problems.some((s: string) => s.startsWith('Elsewhere: Z:\weird\place') && s.includes('--map elsewhere=')), JSON.stringify(report.problems));
+    assert.ok(report.skipped.some((s: string) => s.startsWith('wt-floor: the floor itself is a linked worktree')), JSON.stringify(report.skipped));
+    assert.ok(!existsSync(path.join(devRoot, 'Personal-Portfolio', 'wt')), 'no empty folder for a worktree floor');
+    assert.ok(!existsSync(path.resolve('Z:\weird\place')), 'no folder made from a path that is only absolute on the other machine');
+    assert.deepEqual(report.floors.map((f: any) => f.id), ['personal-portfolio', 'solo']);
+    const office = path.join(devRoot, 'Personal-Portfolio');
+    let floors = JSON.parse(readFileSync(path.join(office, '.agent-office', 'floors.json'), 'utf8'));
+    assert.deepEqual(floors.map((f: any) => f.id), ['personal-portfolio', 'solo']);
+    // Given a place, the absolute floor comes along.
+    const placed = path.join(mac, 'Elsewhere');
+    const again = importBundle({ bundle: out, devRoot, projects, home: mac, map: { elsewhere: placed } });
+    assert.ok(!again.problems.some((s: string) => s.startsWith('Elsewhere')), JSON.stringify(again.problems));
+    assert.ok(existsSync(placed));
+    floors = JSON.parse(readFileSync(path.join(office, '.agent-office', 'floors.json'), 'utf8'));
+    assert.deepEqual(floors.map((f: any) => [f.id, f.dir]), [['personal-portfolio', office], ['solo', path.join(projects, 'owner', 'solo')], ['elsewhere', placed]]);
+  } finally { b.close(); }
+});
+
+test('export --state rebuilds the state folder, so a file a floor no longer has does not come back', () => {
+  const b = building();
+  try {
+    const out = path.join(b.root, 'bundle');
+    exportBundle({ officeDir: b.office, out, home: b.home, quick: true, state: true });
+    assert.ok(existsSync(path.join(out, 'state', 'solo', 'queue.json')));
+    unlinkSync(path.join(b.solo, '.agent-office', 'queue.json'));
+    exportBundle({ officeDir: b.office, out, home: b.home, quick: true, state: true });
+    assert.ok(!existsSync(path.join(out, 'state', 'solo', 'queue.json')), 'the deleted queue is gone from the bundle');
+    assert.ok(existsSync(path.join(out, 'state', 'personal-portfolio', 'todos.json')), 'state that still exists is still there');
   } finally { b.close(); }
 });

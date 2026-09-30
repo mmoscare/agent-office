@@ -23,7 +23,7 @@
 // No dependencies: node >= 20 and git (gh is not needed; clones use your git credentials).
 
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,10 +50,15 @@ function git(dir, args, timeout = 20_000) {
   }
 }
 
+/** A URL fit for a log line, a report or the manifest: any user:token@ in it is dropped. */
+export function safeUrl(url) {
+  return typeof url === 'string' ? url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]+@/i, '$1') : url;
+}
+
 /** owner/name for a github.com origin (https, ssh or git@, with or without .git); null for anything else. */
 export function githubRepo(url) {
   if (typeof url !== 'string') return null;
-  let s = url.trim().replace(/^(?:https?:\/\/|ssh:\/\/)?(?:[\w.-]+@)?github\.com[/:]/i, '');
+  let s = url.trim().replace(/^(?:https?:\/\/|ssh:\/\/)?(?:[^/@\s]+@)?github\.com[/:]/i, '');
   if (s === url.trim()) return null;
   s = s.replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
   const parts = s.split('/');
@@ -66,14 +71,15 @@ export function sameOrigin(a, b) {
   const ga = githubRepo(a);
   const gb = githubRepo(b);
   if (ga && gb) return ga.toLowerCase() === gb.toLowerCase();
-  const norm = (u) => u.trim().replace(/[\\/]+$/, '').replace(/\.git$/i, '').replace(/\\/g, '/').toLowerCase();
+  const norm = (u) => safeUrl(u.trim()).replace(/[\\/]+$/, '').replace(/\.git$/i, '').replace(/\\/g, '/').toLowerCase();
   return norm(a) === norm(b);
 }
 
 function describeCheckout(dir, rel, quick) {
   const dotGit = path.join(dir, '.git');
   const linked = statSync(dotGit).isFile();
-  const origin = git(dir, ['remote', 'get-url', 'origin']);
+  // Kept without any user:token@ it may carry: clones on the other machine use that machine's git credentials.
+  const origin = safeUrl(git(dir, ['remote', 'get-url', 'origin']));
   const branchRaw = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const out = {
     path: rel,
@@ -89,7 +95,9 @@ function describeCheckout(dir, rel, quick) {
   } else if (!quick) {
     const status = git(dir, ['status', '--porcelain', '-unormal'], 120_000);
     out.dirty = status === null ? null : status.split('\n').filter(Boolean).length;
-    const unpushed = git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+    // Commits no remote-tracking ref has: counted on a branch with no upstream and on a detached
+    // HEAD too, and every commit when there is no remote at all. Null only when git can't say.
+    const unpushed = git(dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes']);
     out.unpushed = unpushed === null ? null : Number(unpushed);
   }
   return out;
@@ -213,6 +221,8 @@ export function exportBundle({ officeDir, out, devRoot, projectsDir, home, state
   mkdirSync(out, { recursive: true, mode: 0o700 });
   writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600 });
   if (state) {
+    // Rebuilt from scratch, so a file a floor no longer has doesn't come back on import.
+    rmSync(path.join(out, 'state'), { recursive: true, force: true });
     for (const f of manifest.floors) {
       if (!f.exists) continue;
       for (const rel of PORTABLE_STATE) {
@@ -255,6 +265,12 @@ function isEmptyDir(dir) {
   try { return statSync(dir).isDirectory() && readdirSync(dir).length === 0; } catch { return false; }
 }
 
+/** What a checkout has that no remote has, for the reports; '' when nothing, or when the export skipped the counts. */
+export function leftBehind(c) {
+  if (c.dirty === null || c.unpushed === null) return "work git couldn't count at export time";
+  return [c.dirty ? `${c.dirty} uncommitted change${c.dirty === 1 ? '' : 's'}` : '', c.unpushed ? `${c.unpushed} unpushed commit${c.unpushed === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+}
+
 /**
  * Recreates the manifest's building under `devRoot` (and `projects` for floors the office cloned):
  * clones what's missing, keeps what's there, writes floors.json. Returns the report.
@@ -272,7 +288,7 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
 
   const cloneInto = (origin, dest, branch, label) => {
     if (!clone) { report.skipped.push(`${label}: missing, and --no-clone was given`); say(`skip ${label} (--no-clone)`); return; }
-    run(`clone ${origin} -> ${dest}${branch ? ` @ ${branch}` : ''}`, () => {
+    run(`clone ${safeUrl(origin)} -> ${dest}${branch ? ` @ ${branch}` : ''}`, () => {
       mkdirSync(path.dirname(dest), { recursive: true });
       execFileSync('git', ['clone', '--quiet', origin, dest], { stdio: ['ignore', 'inherit', 'inherit'], timeout: 30 * 60_000, windowsHide: true });
       if (branch && git(dest, ['rev-parse', '--abbrev-ref', 'HEAD']) !== branch) {
@@ -286,12 +302,22 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
     report.cloned.push(label);
   };
 
+  /** The floors that get a folder here. The rest are reported and left out of floors.json. */
+  const carried = [];
   for (const f of manifest.floors) {
-    const dir = targetDir(f, opts);
     const label = f.name;
-    report.floors.push({ id: f.id, name: f.name, from: f.dir, to: dir });
-    if (f.base === 'absolute') report.problems.push(`${label}: ${f.dir} was outside the home folder there, so it stays at the same path here — use --map ${f.id}=<dir> to move it`);
     const root = f.checkouts.find((c) => c.path === '.');
+    if (f.base === 'absolute' && !opts.map[f.id]) {
+      report.problems.push(`${label}: ${f.dir} was outside the home folder there and has no place here — give it one with --map ${f.id}=<dir> (left out of floors.json)`);
+      continue;
+    }
+    if (root?.kind === 'worktree') {
+      report.skipped.push(`${label}: the floor itself is a linked worktree of ${root.gitdir ?? 'another checkout'}${root.branch ? ` (branch ${root.branch})` : ''} — not carried; make it again with git worktree add and add it as a floor if you need it`);
+      continue;
+    }
+    const dir = targetDir(f, opts);
+    report.floors.push({ id: f.id, name: f.name, from: f.dir, to: dir });
+    carried.push({ f, dir });
     if (!existsSync(dir)) {
       if (root?.kind === 'repo' && root.origin) cloneInto(root.origin, dir, root.branch, label);
       else {
@@ -301,8 +327,8 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
       }
     } else if (root?.kind === 'repo' && root.origin) {
       const here = git(dir, ['remote', 'get-url', 'origin']);
-      if (!existsSync(path.join(dir, '.git'))) report.problems.push(`${label}: ${dir} exists but isn't a git checkout of ${root.origin}`);
-      else if (!sameOrigin(here, root.origin)) report.problems.push(`${label}: ${dir} is a checkout of ${here ?? '(no remote)'}, not ${root.origin}`);
+      if (!existsSync(path.join(dir, '.git'))) report.problems.push(`${label}: ${dir} exists but isn't a git checkout of ${safeUrl(root.origin)}`);
+      else if (!sameOrigin(here, root.origin)) report.problems.push(`${label}: ${dir} is a checkout of ${here ? safeUrl(here) : '(no remote)'}, not ${safeUrl(root.origin)}`);
       else { report.kept.push(label); say(`keep ${dir}`); }
     } else {
       report.kept.push(label);
@@ -318,7 +344,7 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
       if (existsSync(dest) && !isEmptyDir(dest)) {
         if (!existsSync(path.join(dest, '.git'))) { report.problems.push(`${clabel}: ${dest} exists and isn't a git checkout — left alone`); continue; }
         const here = git(dest, ['remote', 'get-url', 'origin']);
-        if (!sameOrigin(here, c.origin)) { report.problems.push(`${clabel}: ${dest} is a checkout of ${here ?? '(no remote)'}, not ${c.origin} — left alone`); continue; }
+        if (!sameOrigin(here, c.origin)) { report.problems.push(`${clabel}: ${dest} is a checkout of ${here ? safeUrl(here) : '(no remote)'}, not ${safeUrl(c.origin)} — left alone`); continue; }
         report.kept.push(clabel);
         say(`keep ${dest}`);
         continue;
@@ -326,25 +352,26 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
       cloneInto(c.origin, dest, c.branch, clabel);
     }
     for (const c of f.checkouts) {
-      if (c.kind !== 'repo' || unwanted(f, c)) continue;
-      const what =[c.dirty ? `${c.dirty} uncommitted change${c.dirty === 1 ? '' : 's'}` : '', c.unpushed ? `${c.unpushed} unpushed commit${c.unpushed === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+      // A repository with no remote is under "copy by hand" already: everything in it stayed.
+      if (c.kind !== 'repo' || !c.origin || unwanted(f, c)) continue;
+      const what = leftBehind(c);
       if (what) report.leftBehind.push(`${label}/${c.path}: ${what} on ${c.branch ?? 'a detached HEAD'} stayed on the other machine`);
     }
   }
 
   // The building's own folder: the floor the office is started in, or whatever --office says.
   const officeFloor = manifest.floors.find((f) => f.isOffice);
-  const officeDir = office ? path.resolve(office) : officeFloor ? targetDir(officeFloor, opts) : null;
-  if (!officeDir) report.problems.push('No floor is the office folder in the manifest and --office wasn\'t given: floors.json not written');
+  const officeDir = office ? path.resolve(office) : officeFloor && carried.some((x) => x.f === officeFloor) ? targetDir(officeFloor, opts) : null;
+  if (!officeDir) report.problems.push('No floor is the office folder in the manifest (or it has no place here) and --office wasn\'t given: floors.json not written');
   else {
     const dataDir = path.join(officeDir, '.agent-office');
     const file = path.join(dataDir, 'floors.json');
     const existing = readJson(file, []);
-    const ours = manifest.floors.map((f) => ({
+    const ours = carried.map(({ f, dir }) => ({
       id: f.id,
       name: f.name,
       ...(f.repo ? { repo: f.repo } : {}),
-      dir: targetDir(f, opts),
+      dir,
       palette: f.palette,
       addedBy: f.addedBy,
       addedAt: f.addedAt,
@@ -367,8 +394,7 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
   }
 
   if (state) {
-    for (const f of manifest.floors) {
-      const dir = targetDir(f, opts);
+    for (const { f, dir } of carried) {
       for (const rel of PORTABLE_STATE) {
         const src = path.join(bundleDir, 'state', f.id, rel);
         if (!existsSync(src)) continue;
@@ -439,7 +465,7 @@ export function main(argv = process.argv.slice(2)) {
   const log = (line) => console.log(line);
   if (cmd === 'export') {
     const manifest = exportBundle({ officeDir: arg, out: opts.out, devRoot: opts.devRoot, state: opts.state, quick: opts.quick, log });
-    const left = manifest.floors.flatMap((f) => f.checkouts.filter((c) => c.kind === 'repo' && (c.dirty || c.unpushed)).map((c) => `${f.name}/${c.path}: ${[c.dirty ? `${c.dirty} uncommitted` : '', c.unpushed ? `${c.unpushed} unpushed` : ''].filter(Boolean).join(', ')}`));
+    const left = manifest.floors.flatMap((f) => f.checkouts.filter((c) => c.kind === 'repo' && c.origin && leftBehind(c)).map((c) => `${f.name}/${c.path}: ${leftBehind(c)}`));
     const noRemote = manifest.floors.flatMap((f) => f.checkouts.filter((c) => c.kind === 'repo' && !c.origin).map((c) => `${f.name}/${c.path}`));
     section('Work that only GitHub can\'t carry (commit and push it first, or copy the folders):', left);
     section('Repositories with no remote (copy these folders by hand, or create a remote and push):', noRemote);
