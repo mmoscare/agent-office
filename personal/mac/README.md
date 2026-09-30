@@ -21,11 +21,14 @@ This writes `<officeDir>/.agent-office/mac-mirror/`:
   it — the floor itself, or the repositories nested in a workspace floor — with its relative path,
   origin, branch, and how much uncommitted or unpushed work it has.
 - `state/<floorId>/…` (with `--state`): the per-floor office files that mean the same thing on
-  another machine — the task queue, To Do Next plans, meetings, jukebox, pictures, the dog, the
-  whiteboard, and the building's todos and chat.
+  another machine — the task queue, To Do Next plans, meetings and their notes, jukebox, pictures,
+  the dog, the whiteboard, a floor's Content Kanban and the VP's check recipes, and the building's
+  todos (with their card pictures), Autonomous Tasks, stickies, notes, chat, arcade scores, the
+  ⚙️ Settings prompts and default worker, and the holiday theme.
 
 Not in the bundle, on purpose: workers and their terminal sessions, scrollback, hooks, worker
-worktrees and workspaces, the password, spend and timecards. Those belong to the machine.
+worktrees and workspaces, the VP's standing duty to merge (`vp.json`: two machines on duty would
+both act on the same PRs), the password, spend and timecards. Those belong to the machine.
 Origins are recorded without any `user:token@` they carry (clones use the other machine's own git
 credentials), and "unpushed" counts the commits no remote-tracking branch has, so a branch with
 no upstream or a detached HEAD is counted too. Every `--state` export rebuilds the `state/` folder,
@@ -68,7 +71,8 @@ node personal/mac/floors-mirror.mjs import ~/mac-mirror --dev-root ~/Documents/D
 
 What import does: makes the workspace folders, clones every checkout that has an origin and is not
 there yet (on the recorded branch), keeps anything already in place (and complains if it is a
-checkout of a different repository), copies the `--state` files where none exist yet, backs up any
+checkout of a different repository), copies the `--state` files where none exist yet (picture and
+notes folders file by file, keeping what the Mac already has), backs up any
 existing `floors.json`, and writes a new one with the same floors at their Mac paths. Floors that
 only exist on the Mac are kept, after the mirrored ones. The report at the end lists what it could
 not carry:
@@ -87,7 +91,9 @@ node bin/agent-office.js ~/Documents/Development/Personal-Portfolio --port 4600 
 Give it the same office folder the floors were exported from (mapped to its Mac path). The password
 is per machine; nothing about it is carried over. The first start writes hooks and helper scripts
 into every floor's `.agent-office/`, and the elevator shows the floors in the same order and colours.
-Carried-over queue tasks that were running show as stopped by a restart: requeue them there.
+Carried-over queue tasks that were running show as stopped by a restart: requeue them there, but
+only once the other machine has stopped working on them. Tasks still waiting in a queue start on
+the Mac by themselves, so the two offices would each run them; both work on the same GitHub repos.
 
 The Windows launcher in `personal/windows` does not apply on the Mac; start the office from a
 terminal, or wrap the command above in a launch agent if you want it always on.

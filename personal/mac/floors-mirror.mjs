@@ -12,8 +12,9 @@
 // manifest.json: each floor's id, name, colours, order and its checkouts' relative paths, origins
 // and branches, plus what won't travel through GitHub (uncommitted or unpushed work, repositories
 // with no remote, linked worktrees). With --state it also copies the portable per-floor office
-// files (task queue, To Do Next plans, meetings, jukebox, pictures, dog, whiteboard, the building's
-// todos and chat). Workers, scrollback, hooks, worktrees, the password and spend stay here.
+// files (task queue, To Do Next plans, meetings and their notes, jukebox, pictures, dog, whiteboard,
+// Content Kanban, and the building's todos, Autonomous Tasks, stickies, notes, chat, Settings
+// prompts and theme). Workers, scrollback, hooks, worktrees, the VP's duty, the password and spend stay here.
 //
 // import, on the other machine, recreates the same folder structure under --dev-root, clones every
 // checkout that has an origin and is missing, leaves whatever is already there untouched, writes
@@ -37,7 +38,15 @@ const MAX_DEPTH = 4;
 const MAX_VISITED = 3000;
 const MAX_CHECKOUTS = 60;
 /** Per-floor office files that mean the same thing on another machine. Everything else in .agent-office is this machine's. */
-export const PORTABLE_STATE = ['queue.json', 'plans.json', 'meetings.json', 'jukebox.json', 'decor.json', 'dog.json', 'todos.json', 'chat.jsonl', path.join('whiteboard', 'elements.json')];
+export const PORTABLE_STATE = [
+  'queue.json', 'plans.json', 'meetings.json', 'jukebox.json', 'decor.json', 'dog.json', 'todos.json', 'chat.jsonl', path.join('whiteboard', 'elements.json'),
+  // The building's other shared boards and settings: 🏢 Autonomous Tasks, stickies, notes, the ⚙️ Settings
+  // prompts and default worker, the holiday theme, arcade scores, a floor's 🎬 Content Kanban and the
+  // VP's check recipes. Not vp.json: it holds the VP's standing duty to merge, which is this machine's.
+  'autonomous.json', 'stickies.json', 'notes.json', 'prompts.json', 'theme.json', 'arcade.json', 'content-kanban.json', 'vp-recipes.json',
+];
+/** Folders those files point into (card and note pictures, a meeting's notes), carried whole. */
+export const PORTABLE_FOLDERS = ['todo-images', 'notes-images', 'meetings'];
 
 // ---------------------------------------------------------------------------
 // git
@@ -153,6 +162,17 @@ function joinRel(base, rel) {
   return rel === '.' ? base : path.join(base, ...rel.split('/'));
 }
 
+function isFile(file) {
+  try { return lstatSync(file).isFile(); } catch { return false; }
+}
+
+/** Every file in `dir`/`rel` and the folders under it, relative to `dir`; links aren't followed. */
+function filesUnder(dir, rel) {
+  let entries;
+  try { entries = readdirSync(path.join(dir, rel), { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap((e) => e.isDirectory() ? filesUnder(dir, path.join(rel, e.name)) : e.isFile() ? [path.join(rel, e.name)] : []);
+}
+
 // ---------------------------------------------------------------------------
 // export
 
@@ -225,13 +245,22 @@ export function exportBundle({ officeDir, out, devRoot, projectsDir, home, state
     rmSync(path.join(out, 'state'), { recursive: true, force: true });
     for (const f of manifest.floors) {
       if (!f.exists) continue;
-      for (const rel of PORTABLE_STATE) {
-        const src = path.join(f.dir, '.agent-office', rel);
-        if (!existsSync(src)) continue;
+      const data = path.join(f.dir, '.agent-office');
+      const copy = (rel) => {
         const dst = path.join(out, 'state', f.id, rel);
         mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
-        copyFileSync(src, dst);
+        copyFileSync(path.join(data, rel), dst);
+      };
+      for (const rel of PORTABLE_STATE) {
+        if (!isFile(path.join(data, rel))) continue;
+        copy(rel);
         log(`  state ${f.id}/${rel.split(path.sep).join('/')}`);
+      }
+      for (const folder of PORTABLE_FOLDERS) {
+        const files = filesUnder(data, folder);
+        if (!files.length) continue;
+        files.forEach(copy);
+        log(`  state ${f.id}/${folder}/ (${files.length} file${files.length === 1 ? '' : 's'})`);
       }
     }
   }
@@ -405,6 +434,25 @@ export function importBundle({ bundle, devRoot, projects, office, home, map = {}
           copyFileSync(src, dst);
         });
         report.state.push(`${f.name}/${rel.split(path.sep).join('/')}`);
+      }
+      // A folder is merged file by file: what this machine already has in it is kept.
+      const from = path.join(bundleDir, 'state', f.id);
+      for (const folder of PORTABLE_FOLDERS) {
+        const files = filesUnder(from, folder);
+        const missing = files.filter((rel) => !existsSync(path.join(dir, '.agent-office', rel)));
+        const kept = files.length - missing.length;
+        if (kept === files.length && kept) report.skipped.push(`${f.name}: ${folder}/ is already there — not overwritten`);
+        else if (kept) report.skipped.push(`${f.name}: ${kept} of the ${files.length} files in ${folder}/ ${kept === 1 ? 'is' : 'are'} already there — not overwritten`);
+        if (!missing.length) continue;
+        const shown = `${f.name}/${folder}/ (${missing.length} file${missing.length === 1 ? '' : 's'})`;
+        run(`state ${shown}`, () => {
+          for (const rel of missing) {
+            const dst = path.join(dir, '.agent-office', rel);
+            mkdirSync(path.dirname(dst), { recursive: true, mode: 0o700 });
+            copyFileSync(path.join(from, rel), dst);
+          }
+        });
+        report.state.push(shown);
       }
     }
   }
