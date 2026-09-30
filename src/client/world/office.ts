@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
+import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, CPU_APPS, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
 import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
@@ -13,6 +13,7 @@ import { buildBookshelf } from './bookshelf';
 import { buildBookshelf as buildManualShelf } from './manual-shelf';
 import { buildCabinet, type CabinetModel } from './cabinet';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
+import { buildKanbanStand, type KanbanStand } from './kanban-stand';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
@@ -35,7 +36,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'clipboard' | 'autonomous';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -95,6 +96,8 @@ export interface Office {
   bossScreen: THREE.Mesh;
   /** The monitor on the west wall showing how busy the office's machine is (world/machine.ts). */
   machineScreen: THREE.Mesh;
+  /** The top-CPU list above that monitor (world/cpu-apps.ts). */
+  cpuAppsScreen: THREE.Mesh;
   /** The meeting room's board, showing the meeting's output as it's written, and the sign by its door. */
   meetingBoard: THREE.Mesh;
   meetingSign: THREE.Mesh;
@@ -110,6 +113,8 @@ export interface Office {
   cabinet: CabinetModel;
   /** The rolling whiteboard everyone draws on together. */
   whiteboard: WhiteboardStand;
+  /** The 🏢 Autonomous Tasks whiteboard, south of it (world/kanban-stand.ts). */
+  autonomousBoard: KanbanStand;
   /** The golf tee on the balcony, and the hole across the street it's hit at. */
   tee: Tee;
   green: Green;
@@ -1249,6 +1254,19 @@ export function buildOffice(): Office {
   group.add(monitor);
   fixture('west', MACHINE_MONITOR.z, MACHINE_MONITOR.y, MACHINE_MONITOR.width + 0.2, MACHINE_MONITOR.height + 0.2);
 
+  // The top-CPU list, above the windows in the same column. The pier the monitor sits in is too short.
+  const apps = new THREE.Group();
+  const appsBezel = mesh(roundedBox(CPU_APPS.width + 0.16, 0.1, CPU_APPS.height + 0.16, 0.06), toon(PALETTE.ink), 0, 0, 0);
+  appsBezel.rotation.x = Math.PI / 2;
+  apps.add(appsBezel);
+  const cpuAppsScreen = new THREE.Mesh(new THREE.PlaneGeometry(CPU_APPS.width, CPU_APPS.height), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  cpuAppsScreen.position.z = 0.06;
+  apps.add(cpuAppsScreen);
+  apps.position.set(CPU_APPS.x + 0.07, CPU_APPS.y, CPU_APPS.z);
+  apps.rotation.y = Math.PI / 2;
+  group.add(apps);
+  fixture('west', CPU_APPS.z, CPU_APPS.y, CPU_APPS.width + 0.2, CPU_APPS.height + 0.2);
+
   const couch = new THREE.Group();
   const couchMat = toon('#5b8def');
   couch.add(mesh(roundedBox(1, 0.45, 4.2, 0.2), couchMat, 0, 0.3, 0));
@@ -1381,6 +1399,12 @@ export function buildOffice(): Office {
   colliders.push(...hoop.colliders);
   fixture('west', HOOP.z, (HOOP.board.bottom - 0.6 + HOOP.board.top + 0.1) / 2, HOOP.board.width + 0.2, HOOP.board.top - HOOP.board.bottom + 0.7);
 
+  // The Autonomous Tasks kanban on its own wheels, south of the drawing whiteboard.
+  const autonomousBoard = buildKanbanStand();
+  group.add(autonomousBoard.group);
+  colliders.push(...autonomousBoard.colliders);
+  interactables.push(autonomousBoard.interactable);
+
   // The whiteboard, out on the floor between the desks and the lounge.
   const whiteboard = buildWhiteboard();
   group.add(whiteboard.group);
@@ -1482,7 +1506,7 @@ export function buildOffice(): Office {
     }
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, autonomousBoard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */

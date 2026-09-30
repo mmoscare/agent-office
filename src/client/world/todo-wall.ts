@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TODO_COLUMNS, todosIn, type TodoColumn, type TodoItem } from '../../shared/todos';
+import { hasDetails, TODO_COLUMNS, todosIn, type TodoColumn, type TodoItem } from '../../shared/todos';
 import { ACTIVE_FOCUS, COLUMN_ICON, COLUMN_ORDER, type IssuesWallMode } from '../ui/todos';
 import { wrap } from './boards';
 
@@ -23,8 +23,11 @@ export class TodoWallTexture {
   readonly texture: THREE.CanvasTexture;
   private canvas = document.createElement('canvas');
   private ctx: CanvasRenderingContext2D;
+  /** Whether cards show what's on them (subtasks, notes, pictures), as the board does once double-clicked. */
+  private details = false;
 
-  constructor() {
+  /** `title` across the top: your To Do's, or another board's drawn the same way (the Autonomous Tasks). */
+  constructor(private title = '🔥 My To Do') {
     this.canvas.width = 1200;
     this.canvas.height = 600;
     this.ctx = this.canvas.getContext('2d')!;
@@ -33,7 +36,8 @@ export class TodoWallTexture {
     this.texture.anisotropy = 8;
   }
 
-  render(items: readonly TodoItem[]) {
+  render(items: readonly TodoItem[], details = false) {
+    this.details = details;
     const g = this.ctx;
     const W = this.canvas.width;
     const H = this.canvas.height;
@@ -49,10 +53,11 @@ export class TodoWallTexture {
     g.fillStyle = INK;
     g.font = `900 34px ${FONT}`;
     g.textBaseline = 'alphabetic';
-    g.fillText('🔥 My To Do', 22, 44);
+    g.fillText(this.title, 22, 44);
+    const titleEnd = 22 + g.measureText(this.title).width;
     g.font = `800 20px ${FONT}`;
     g.fillStyle = 'rgba(43,45,66,.75)';
-    g.fillText('Press E to add and move cards', 250, 42);
+    g.fillText(this.details ? 'Press E to open · showing subtasks, notes & pictures' : 'Press E to add and move cards', titleEnd + 28, 42);
 
     const top = 62;
     const pad = 14;
@@ -119,7 +124,8 @@ export class TodoWallTexture {
     for (const item of shown) {
       g.font = `800 ${fs}px ${FONT}`;
       const lines = wrap(g, item.text, inner - 26, column === 'done' ? 1 : 3);
-      const ch = 16 + lines.length * (fs + 6);
+      const badges = this.details && hasDetails(item) ? badgeText(item) : '';
+      const ch = 16 + lines.length * (fs + 6) + (badges ? 24 : 0);
       // Keep room for "+N more" if anything's left after this one.
       const left = shown.length - drawn - 1;
       if (cy + ch > bottom - (left ? 30 : 0)) break;
@@ -140,6 +146,11 @@ export class TodoWallTexture {
           g.fillRect(x + 28, ly + fs * 0.55, Math.min(g.measureText(line).width, inner - 26), 2);
         }
       });
+      if (badges) {
+        g.font = `800 16px ${FONT}`;
+        g.fillStyle = '#5c6378';
+        g.fillText(badges, x + 28, cy + 9 + lines.length * (fs + 6) + 2, inner - 34);
+      }
       g.textBaseline = 'alphabetic';
       cy += ch + 8;
       drawn++;
@@ -161,6 +172,12 @@ export class TodoWallTexture {
     g.beginPath();
     g.roundRect(x, y, w, h, r);
   }
+}
+
+/** What's on a card besides its text, in a few symbols: subtasks done of all, notes, pictures. */
+function badgeText(item: TodoItem): string {
+  const subs = item.subtasks ?? [];
+  return [subs.length ? `☑ ${subs.filter((s) => s.done).length}/${subs.length}` : '', item.notes ? '📝 notes' : '', item.images?.length ? `🖼 ${item.images.length}` : ''].filter(Boolean).join('  ·  ');
 }
 
 /** The switch above the issues board: turns it over to the floor's issues, or back to your To Do. */
