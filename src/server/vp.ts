@@ -520,7 +520,7 @@ export async function handleVp(desk: VpDesk, req: VpRequest): Promise<{ status: 
     case 'duty': {
       const on = b.on === true;
       // Duty is standing approval for merges: only an admin gives it. Anyone may take it back.
-      if (on && !req.admin) return { status: 403, body: { error: 'Only an admin can put the VP on duty: the last person who asked him isn\'t one. An admin can tick On duty in the floor menu, or ask him themselves.' } };
+      if (on && !req.admin) return { status: 403, body: { error: 'Only an admin can put the VP on duty: the last person who asked him isn\'t one. An admin can tick On duty in the floor menu, or ask him themselves' } };
       const every = b.everyMin === undefined ? undefined : Number(b.everyMin) * 60_000;
       const err = desk.setDuty(on, req.by, every);
       return err ? { status: 400, body: { error: err } } : { status: 200, body: { ok: true, duty: desk.duty } };

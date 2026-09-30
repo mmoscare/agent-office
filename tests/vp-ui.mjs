@@ -34,9 +34,12 @@ try {
     agent,
     `import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-let text;
-try { text = execFileSync(process.execPath, [${JSON.stringify(path.join(codeDir, 'bin', 'office-vp.js'))}, 'status'], { encoding: 'utf8' }); }
-catch (e) { text = 'FAILED ' + e.message + (e.stdout ?? '') + (e.stderr ?? ''); }
+const vp = (...args) => {
+  try { return execFileSync(process.execPath, [${JSON.stringify(path.join(codeDir, 'bin', 'office-vp.js'))}, ...args], { encoding: 'utf8' }); }
+  catch (e) { return 'FAILED ' + e.message + (e.stdout ?? '') + (e.stderr ?? ''); }
+};
+// Status, then duty on and off from his own terminal: the person who deployed him is an admin.
+const text = [vp('status'), '---', vp('duty', 'on'), '---', vp('duty', 'off')].join('\\n');
 writeFileSync(${JSON.stringify(said)}, text);
 console.log('The fake VP is at his kiosk.');
 setInterval(() => {}, 1 << 30);
@@ -123,9 +126,13 @@ setInterval(() => {}, 1 << 30);
   // 3. He reaches the office with office-vp (his own command, through /office/vp).
   for (let i = 0; i < 300 && !existsSync(said); i++) await pause(100);
   const status = readFileSync(said, 'utf8');
-  assert.match(status, /Not on duty/, status);
-  assert.match(status, /No stuck workers/, status);
-  console.log('PASS: office-vp status answers the VP from inside his terminal.');
+  const [first, on, off] = status.split('\n---\n');
+  assert.match(first, /Not on duty/, status);
+  assert.match(first, /No stuck workers/, status);
+  assert.match(on, /^On duty: the office sweeps every 10 minutes/, status);
+  assert.match(off, /^Off duty\./, status);
+  await page.waitForFunction(() => window.__office.store.vp.duty?.on === false && /VP, asked by VP test/.test(window.__office.store.vp.duty.by));
+  console.log('PASS: office-vp status answers the VP from inside his terminal, and he can put himself on duty when an admin asked him.');
 
   // 4. Standing duty from the floor menu: on (who and when shows), a first sweep runs, then off.
   await openMenu();

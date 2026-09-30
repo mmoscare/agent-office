@@ -578,7 +578,9 @@ export async function startServer(cfg: Config) {
       }
     }
     // Whoever last typed to the VP is who asked him; an admin only if the office saw that person, signed in as one, do it.
-    const asked = floor.workers.get(agent.id)?.lastInput?.by;
+    const me = floor.workers.get(agent.id);
+    // Just hired, nobody has typed to him since: whoever hired him asked.
+    const asked = me?.lastInput?.by ?? me?.createdBy;
     const asker = askers.get(agent.id);
     const admin = !!asked && asker?.name === asked && asker.admin;
     const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name, admin });
