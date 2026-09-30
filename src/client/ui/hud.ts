@@ -149,6 +149,7 @@ export function openHelp() {
     ['🛗', 'Every project is a floor: step into the elevator on the north wall and press E (or click the project name, top left) to go to another one or add a project'],
     ['🤖', 'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. Open it from Workers to watch its terminal, X clocks it out. The queue agent’s label says staffer/queue agent: press U to summon him, and click his clipboard (or C) to read who’s on what'],
     ['📝', 'The whiteboard on wheels between the desks and the lounge: press E to draw on it with everyone on your floor, live. What you draw stays up on the board'],
+    ['🗒️', 'Reminder stickies hang above the To Do board on every floor. Point at one and press E to edit, resize, recolor, move or hide it. The + beside them adds one, and shows any you hid'],
     ['🕹️', 'The arcade cabinet in the lounge plays BLOCKFALL: arrows (or WASD) move and turn, Space drops, C holds, P pauses. Everyone on the floor sees your game on it, and E there watches whoever is playing. One of your workers needing input pauses it'],
     ['🎉', 'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself'],
     ['O', "Boss's office: stand by the glass looking over the floor. A pull request is still C, then Open PR"],

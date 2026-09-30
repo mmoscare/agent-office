@@ -59,6 +59,8 @@ import { issuePrompt, openBoard } from './ui/boards';
 import { activeAutonomous, activeTodos, issuesWallMode, onIssuesWallMode, openAutonomousBoard, setIssuesWallMode } from './ui/todos';
 import { onTodoDetails, todoDetailsShown } from './ui/todo-details';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
+import { StickyWall } from './world/stickies';
+import { openNewSticky, openSticky } from './ui/stickies';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
 import { authorUpdates, onAuthorUpdates, openAuthorUpdates } from './ui/author-updates';
@@ -283,6 +285,11 @@ const showIssuesWall = () => {
 };
 onIssuesWallMode(showIssuesWall);
 showIssuesWall();
+// Reminder stickies above that board: the same notes on every floor, yours alone.
+const stickies = new StickyWall();
+office.group.add(stickies.group);
+store.on('stickies', () => stickies.sync(store.stickies));
+stickies.sync(store.stickies);
 const pullsTex = new BoardTexture('pulls');
 const renderPullsBoard = () => pullsTex.render(store.pulls, store.workers);
 mountBoard(office.boardMeshes.pulls, pullsTex.texture, renderPullsBoard, ['pulls']);
@@ -2070,6 +2077,8 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
   else if (target.kind === 'pulls') openBoard('pulls', net, boardActions());
   else if (target.kind === 'gitToggle') flipPullsWall();
   else if (target.kind === 'todoToggle') flipIssuesWall();
+  else if (target.kind === 'sticky' && target.stickyId) openSticky(net, target.stickyId);
+  else if (target.kind === 'stickyAdd') openNewSticky(net);
   else if (target.kind === 'manual') openManual();
   else if (target.kind === 'calendar') openCalendar();
   else if (target.kind === 'authorUpdates') showAuthorUpdates();
@@ -2774,6 +2783,15 @@ function hintFor(it: Interactable): Hint {
       return board('Author updates');
     case 'todoToggle':
       return { k: issuesWallMode(), parts: [title(issuesWallMode() === 'todo' ? '📌 GitHub issues' : '🔥 Back to your To Do'), key('E', 'Flip the board')] };
+    case 'sticky': {
+      const note = store.stickies.find((s) => s.id === it.stickyId);
+      const line = note?.text.split('\n')[0] ?? 'Sticky';
+      return { k: `${it.stickyId}|${line}`, parts: [title(`📝 ${clip(line, 42)}`), key('E', 'Edit')] };
+    }
+    case 'stickyAdd': {
+      const hidden = store.stickies.filter((s) => s.hidden).length;
+      return { k: String(hidden), parts: [title('📝 New sticky'), hidden ? aside(`${hidden} hidden`) : aside('by the To Do board'), key('E', hidden ? 'Add or show' : 'Add')] };
+    }
     case 'gitToggle':
       return { k: pullsWallMode(), parts: [title(pullsWallMode() === 'git' ? '🔀 Back to pull requests' : '🌿 Git repositories'), key('E', 'Flip the board')] };
     case 'services':
@@ -3393,7 +3411,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, autonomous: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, autonomous: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5, sticky: 9, stickyAdd: 9 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -3946,11 +3964,14 @@ function frame(ts?: number) {
     if (aim?.near) aimedNote = noteUnder(aim);
   } else {
     target = mySeat() ?? pickTarget();
-    // The mouse selects a floor tile, or the issue note you'd take.
-    if ((target?.kind === 'issues' || target?.kind === 'elevator') && pointer) {
+    // The mouse selects a floor tile, a sticky, or the issue note you'd take.
+    if (pointer) {
       const aim = aimedAt(pointer, 2.5);
-      if (aim?.near && aim.it.kind === 'elevator') target = aim.it;
-      if (target?.kind === 'issues' && aim?.near) aimedNote = noteUnder(aim);
+      if (aim?.near && (aim.it.kind === 'sticky' || aim.it.kind === 'stickyAdd')) target = aim.it;
+      else if (target?.kind === 'issues' || target?.kind === 'elevator') {
+        if (aim?.near && aim.it.kind === 'elevator') target = aim.it;
+        if (target?.kind === 'issues' && aim?.near) aimedNote = noteUnder(aim);
+      }
     }
   }
   issuesTex.lift(aimedNote?.number ?? null);
