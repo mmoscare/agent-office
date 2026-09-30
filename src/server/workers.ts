@@ -20,6 +20,7 @@ import { checkpointNotice, isSlashCommand, retoldTask, withCheckpointNotice, wit
 import { CHECKPOINT_DEADLINE_MS, checkpointWorktrees, type CheckpointTarget } from './wip-checkpoint.js';
 import { isBusy, isStopped } from '../shared/status.js';
 import { findBranchPr, gh } from './github.js';
+import { branchPulls, createPull } from './github-rest.js';
 import { pullForBranch } from '../shared/pulls.js';
 import { officePrompt, type PromptSource } from './prompts.js';
 import type { ServiceOwner } from './services.js';
@@ -728,7 +729,7 @@ export class WorkerManager {
       const sourceDir = repoTree ? path.join(this.dir, repoTree.repository) : this.dir;
       const base = await this.pushedBranch([wt.from, new Worktrees(sourceDir).currentBranch()], wt.branch, sourceDir);
       const { title, body } = draft ?? draftPr(info, commits, by);
-      const out = await gh(['pr', 'create', ...(origin ? ['--repo', origin] : []), '--head', wt.branch, ...(base ? ['--base', base] : []), '--title', title, '--body', body], cwd, 60_000);
+      const out = await createPull(gh, cwd, { repository: origin, head: wt.branch, base, title, body }, 60_000);
       const url = out.trim().split('\n').pop() ?? '';
       const number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
       if (!number) throw new Error(`gh did not return a pull request URL (${truncate(out, 120)})`);
@@ -2123,9 +2124,9 @@ function run(cmd: string, args: string[], cwd: string, timeout = 30_000): Promis
   });
 }
 
+/** The branch's open PR in `repository` (host/owner/name), asked over REST so the GraphQL quota running out doesn't stop it. */
 async function findOpenPr(branch: string, cwd: string, repository?: string): Promise<{ number: number; url: string } | undefined> {
-  const out = await gh(['pr', 'list', ...(repository ? ['--repo', repository] : []), '--head', branch, '--state', 'open', '--limit', '1', '--json', 'number,url'], cwd);
-  const found = (JSON.parse(out || '[]') as { number: number; url: string }[])[0];
+  const found = (await branchPulls(branch, cwd, gh, repository, 'open'))[0];
   return found ? { number: found.number, url: found.url } : undefined;
 }
 

@@ -1,7 +1,7 @@
 import type { UnshippedItem } from '../../shared/protocol';
 import { h, timeAgo } from './dom';
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows } from './pr-board-parts';
-import { groupByRepo, showsRepo, sortUnshipped } from './pr-board-model';
+import { groupByRepo, limitNote, showsRepo, sortUnshipped } from './pr-board-model';
 
 /**
  * The Pull Requests board's 🧳 Unshipped work section: office branches holding work that no open or
@@ -16,6 +16,8 @@ export interface UnshippedListProps {
   error?: string;
   /** Why some PR statuses are unknown (GitHub rate-limited or offline). */
   prNote?: string;
+  /** Set when GitHub's rate limit is why, instead of gh's words in prNote. */
+  prLimit?: { secondary: boolean; resetAt?: number };
   /** A recovery task already on the queue for it. */
   recovery(it: UnshippedItem): { running: boolean; workerName?: string } | undefined;
   /** Its worker's colour, while that worker is still in the office. */
@@ -34,7 +36,8 @@ export function unshippedSection(p: UnshippedListProps): HTMLElement {
   const items = sortUnshipped(p.items, (it) => !!p.recovery(it));
   const rows: Node[] = [];
   if (p.error) rows.push(h('li.prb-note.bad', {}, `⚠️ Couldn't look through the branches: ${p.error}`));
-  if (p.prNote) rows.push(h('li.prb-note', {}, `❔ GitHub couldn't be asked about some branches (${p.prNote}), so they may have a PR after all. Showing what's on disk.`));
+  if (p.prLimit) rows.push(h('li.prb-note', {}, limitNote(p.prLimit)));
+  else if (p.prNote) rows.push(h('li.prb-note', {}, `❔ GitHub couldn't be asked about some branches (${p.prNote}), so they may have a PR after all. Showing what's on disk.`));
   const many = showsRepo(items.map((it) => it.repository));
   for (const g of groupByRepo(items, (it) => (many ? it.repository : undefined))) {
     if (many) rows.push(repoHeading(g.repo || 'this folder', g.items.length));
