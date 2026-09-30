@@ -26,6 +26,31 @@ export interface ChangeNote {
   repo?: string;
 }
 
+/** "Today", "Yesterday", else the date: the heading `at` goes under, seen from `now`. */
+export function dayLabel(at: number, now = Date.now()): string {
+  const day = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const ago = Math.round((day(now) - day(at)) / 86_400_000);
+  if (ago <= 0) return 'Today';
+  if (ago === 1) return 'Yesterday';
+  const d = new Date(at);
+  const thisYear = d.getFullYear() === new Date(now).getFullYear();
+  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', ...(thisYear ? {} : { year: 'numeric' }) });
+}
+
+/** Changes (newest first) under their days' headings, in order. */
+export function byDay<T extends { at: number }>(notes: T[], now = Date.now()): { day: string; notes: T[] }[] {
+  const days: { day: string; notes: T[] }[] = [];
+  for (const n of notes) {
+    const day = dayLabel(n.at, now);
+    if (days[days.length - 1]?.day !== day) days.push({ day, notes: [] });
+    days[days.length - 1].notes.push(n);
+  }
+  return days;
+}
+
 export interface WhatsNew {
   floor: string;
   /** The branch the changes landed on, when the floor is one repository. */
