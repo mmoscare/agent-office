@@ -15,7 +15,6 @@ import type { Floor } from './floor.js';
 import { gh } from './github.js';
 import { branchPulls, type BranchPull } from './github-rest.js';
 import { missingCommits } from './unshipped.js';
-import { floorRepository } from './workspaces.js';
 import { gitError } from './worktrees.js';
 
 const execFileP = promisify(execFile);
@@ -118,17 +117,8 @@ export interface WorkerCheckout {
 }
 
 export function workerCheckouts(floorDir: string, w: WorkerInfo, floorBranch?: string): WorkerCheckout[] {
-  if (w.workspace) {
-    return w.workspace.repositories.map((r) => {
-      let repo: string;
-      try {
-        repo = floorRepository(floorDir, r.repository);
-      } catch {
-        repo = path.resolve(floorDir, r.repository);
-      }
-      return { repo, dir: path.join(floorDir, r.path), rel: r.path, branch: r.branch, start: r.base, base: r.from };
-    });
-  }
+  // Only read here, so no need for Workspaces.check's (blocking) look at each one: sending home does that.
+  if (w.workspace) return w.workspace.repositories.map((r) => ({ repo: path.resolve(floorDir, r.repository), dir: path.join(floorDir, r.path), rel: r.path, branch: r.branch, start: r.base, base: r.from }));
   const wt = w.worktree;
   if (wt) return [{ repo: floorDir, dir: path.join(floorDir, wt.path), rel: wt.path, branch: wt.branch, start: wt.base, base: wt.from ?? floorBranch }];
   return [{ repo: floorDir, dir: floorDir, rel: '.' }];

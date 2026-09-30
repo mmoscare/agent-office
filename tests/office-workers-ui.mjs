@@ -19,12 +19,13 @@ const remote = path.join(root, 'project.git');
 const agents = path.join(root, 'agents');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-async function until(what, fn, ms = 90_000) {
+/** Waits for `fn` to come back truthy; `state` says how things stood if it never does. */
+async function until(what, fn, state = async () => '', ms = 180_000) {
   for (const end = Date.now() + ms; Date.now() < end; await pause(250)) {
     const v = await fn();
     if (v) return v;
   }
-  throw new Error(`Timed out waiting for ${what}`);
+  throw new Error(`Timed out waiting for ${what}. ${await state()}\n${hostErrors}`);
 }
 let host, browser;
 let hostErrors = '';
@@ -45,16 +46,30 @@ try {
   writeFileSync(fixture, `
 const fs = require('fs'), http = require('http'), path = require('path');
 const e = process.env, id = e.AGENT_OFFICE_WORKER_ID;
+const log = (s) => fs.appendFileSync(path.join(${JSON.stringify(root)}, 'agent-' + id + '.log'), s + '\\n');
+log('started with ' + process.argv.length + ' arguments in ' + process.cwd());
+process.on('uncaughtException', (err) => { log('crashed: ' + (err && err.stack || err)); process.exit(1); });
+process.on('exit', (code) => log('exit ' + code));
 const pathKey = Object.keys(e).find((k) => k.toUpperCase() === 'PATH');
 fs.writeFileSync(path.join(${JSON.stringify(agents)}, id + '.json'), JSON.stringify({ id, url: e.AGENT_OFFICE_HOOK_URL, token: e.AGENT_OFFICE_HOOK_TOKEN, path: e[pathKey], cwd: process.cwd() }));
-const hook = (event) => new Promise((ok) => {
+// Each hook until the office takes it: a busy machine can leave it unreachable for a while.
+const post = (event) => new Promise((ok) => {
   const u = new URL(e.AGENT_OFFICE_HOOK_URL + '/hooks/claude');
   u.searchParams.set('worker', id);
   u.searchParams.set('event', event);
-  const req = http.request(u, { method: 'POST', headers: { authorization: 'Bearer ' + e.AGENT_OFFICE_HOOK_TOKEN, 'content-type': 'application/json' } }, (res) => { res.resume(); res.on('end', ok); });
-  req.on('error', ok);
+  const req = http.request(u, { method: 'POST', timeout: 10000, headers: { authorization: 'Bearer ' + e.AGENT_OFFICE_HOOK_TOKEN, 'content-type': 'application/json' } }, (res) => { res.resume(); res.on('end', () => ok(res.statusCode)); });
+  req.on('timeout', () => req.destroy());
+  req.on('error', () => ok(0));
   req.end('{}');
 });
+const hook = async (event) => {
+  for (let i = 0; i < 60; i++) {
+    const status = await post(event);
+    log(event + ' ' + status);
+    if (status === 200) return;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+};
 process.stdout.write('Fixture agent ready\\r\\n');
 (async () => { await hook('SessionStart'); await hook('UserPromptSubmit'); await hook('Stop'); })();
 process.stdin.resume();
@@ -90,7 +105,12 @@ process.stdin.resume();
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => window.__office?.store.floor);
-  const workers = () => page.evaluate(() => [...window.__office.store.workers.values()].map((w) => ({ id: w.id, name: w.name, deskId: w.deskId, status: w.status, worktree: w.worktree })));
+  // Toasts only last a few seconds, and the commands below block this script: the page keeps them all.
+  await page.evaluate(() => {
+    window.__toastsSeen = [];
+    new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) window.__toastsSeen.push(n.textContent); }).observe(document.getElementById('toasts'), { childList: true });
+  });
+  const workers = () => page.evaluate(() => [...window.__office.store.workers.values()].map((w) => ({ id: w.id, name: w.name, deskId: w.deskId, status: w.status, exitCode: w.exitCode, activity: w.activity, worktree: w.worktree })));
 
   // The PR agent at its kiosk, and two workers with worktrees of their own.
   await page.evaluate(() => {
@@ -99,10 +119,27 @@ process.stdin.resume();
     n.send({ t: 'worker.spawn', deskId: 'desk-1', prompt: 'What does app.txt do?', worktree: true });
     n.send({ t: 'worker.spawn', deskId: 'desk-2', prompt: 'Start on the login page', worktree: true });
   });
+  const how = async () => `Workers: ${JSON.stringify(await workers())}. Agents that noted their token: ${readdirSync(agents).join(', ')}. Toasts: ${JSON.stringify(await page.evaluate(() => window.__toastsSeen))}. Logs: ${readdirSync(root).filter((f) => f.endsWith('.log')).map((f) => `${f}: ${readFileSync(path.join(root, f), 'utf8')}`).join(' | ')}`;
+  // On a busy Windows machine a terminal's process now and then dies as it launches (exit -1, before
+  // any of the fixture runs): wake it again, as R at its desk would, a few times.
+  const retries = new Map();
+  const woken = new Map();
   const seated = await until('three agents done at their desks', async () => {
     const ws = await workers();
+    for (const w of ws) {
+      if (w.status !== 'exited') woken.delete(w.id);
+      // Once per failed start, and not again until that wake-up has shown.
+      else if (!woken.has(w.id) || Date.now() - woken.get(w.id) > 15_000) {
+        const n = (retries.get(w.id) ?? 0) + 1;
+        if (n > 6) throw new Error(`${w.name} didn't start. ${await how()}`);
+        retries.set(w.id, n);
+        woken.set(w.id, Date.now());
+        await page.evaluate((id) => window.__office.net.send({ t: 'worker.resume', workerId: id }), w.id);
+      }
+    }
     return ws.length === 3 && ws.every((w) => w.status === 'done') && ws;
-  });
+  }, how, 300_000);
+  if (retries.size) console.log(`Relaunched after a failed start: ${JSON.stringify([...retries])}`);
   const byDesk = Object.fromEntries(seated.map((w) => [w.deskId, w]));
   const [kiosk, first, second] = [byDesk['station-pulls'], byDesk['desk-1'], byDesk['desk-2']];
   assert.ok(first.worktree && second.worktree);
@@ -125,10 +162,11 @@ process.stdin.resume();
   const json = JSON.parse(run(kiosk, 'list', '--json').out);
   assert.equal(json.workers.length, 3);
 
-  // A desk worker can't use it at all.
-  const desk = run(first, 'list');
-  assert.equal(desk.code, 1);
-  assert.match(desk.err, /The office said no \(403\): Only the agents standing by the boards can use office-workers/);
+  // A desk worker doesn't have it, and can't use it with its own token either.
+  assert.notEqual(run(first, 'list').code, 0);
+  const direct = spawnSync(process.execPath, [path.join(codeDir, 'bin/office-workers.js'), 'list'], { env: envOf(first), encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+  assert.equal(direct.status, 1);
+  assert.match(direct.stderr, /The office said no \(403\): Only the agents standing by the boards can use office-workers/);
 
   // Unsafe: uncommitted work, a board agent, a name instead of an id.
   writeFileSync(path.join(floor, second.worktree.path, 'login.txt'), 'half done\n');
@@ -138,12 +176,9 @@ process.stdin.resume();
   assert.match(run(kiosk, 'home', kiosk.id).err, /\(409\): PR agent is a board agent: only a person clocks those out/);
   assert.match(run(kiosk, 'home', second.name).err, /\(400\): Give the worker's id, not its name, since names are reused/);
 
-  // Safe: the clean one goes, its worktree and branch with it, and the floor hears who sent it. The
-  // toasts only last a few seconds and the command blocks this script, so the page keeps a note of them,
-  // and of the worker walking out (the clock-out wave X plays too).
+  // Safe: the clean one goes, its worktree and branch with it, and the floor hears who sent it. The page
+  // keeps a note of the worker walking out too (the clock-out wave X plays).
   await page.evaluate(() => {
-    window.__toastsSeen = [];
-    new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) window.__toastsSeen.push(n.textContent); }).observe(document.getElementById('toasts'), { childList: true });
     const d = window.__office.departures;
     const add = d.add.bind(d);
     window.__waved = 0;
@@ -155,7 +190,7 @@ process.stdin.resume();
   const seen = await until('the toasts', async () => {
     const t = await page.evaluate(() => window.__toastsSeen);
     return t.includes(`🏠 The PR agent clocked out ${first.name}`) && t.includes(`Deleted ${first.name}'s worktree and branch ${first.worktree.branch}`) && t;
-  });
+  }, async () => `Toasts: ${JSON.stringify(await page.evaluate(() => window.__toastsSeen))}`);
   assert.ok(seen);
   await until('the worker to leave', async () => !(await workers()).some((w) => w.id === first.id));
   assert.equal(await page.evaluate(() => window.__waved), 1);

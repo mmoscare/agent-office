@@ -120,7 +120,8 @@ test('home says who went and what became of the worktree', async () => {
   assert.equal(failed.err, "office-workers: Couldn't delete Pixel's worktree: locked");
 });
 
-test('clear errors when the environment is missing, the command line is wrong, or the office says no', async () => {
+test('clear errors when the environment is missing, the command line is wrong, the office is too slow, or it says no', async () => {
+  let slowErr = '';
   const noEnv = await run(['list'], { env: {} });
   assert.equal(noEnv.code, 1);
   assert.equal(noEnv.sent.length, 0);
@@ -135,6 +136,10 @@ test('clear errors when the environment is missing, the command line is wrong, o
   assert.equal(busy.code, 1);
   assert.equal(busy.out, '');
   assert.equal(busy.err, 'office-workers: The office said no (409): Byte has 3 uncommitted changes in .agent-office/worktrees/byte-20f8: clocking it out would leave that work unshipped with nobody on it. Name it for the owner instead.');
+
+  const slow = await main(['list'], { env: ENV, fetch: async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }, out: () => {}, err: (s: string) => (slowErr = s) });
+  assert.equal(slow, 1);
+  assert.equal(slowErr, "office-workers: The office at http://127.0.0.1:4455 didn't answer within 120s. Is it very busy?");
 
   const desk = await run(['list'], { status: 403, body: { error: 'Only the agents standing by the boards can use office-workers' } });
   assert.equal(desk.err, 'office-workers: The office said no (403): Only the agents standing by the boards can use office-workers.');

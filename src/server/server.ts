@@ -495,12 +495,13 @@ export async function startServer(cfg: Config) {
     const r = await clockOut(here, str(body?.id, 64), body?.removeWorktree === true);
     if (!r.ok) return send(res, r.status, { error: r.error });
     toastFloor(floor, `🏠 The ${agent.name} clocked out ${r.worker.name}`);
-    void r.done.then(({ note, error }) => {
+    const done = r.done.catch((e: Error) => ({ note: undefined, error: `Clocking ${r.worker.name} out went wrong: ${e.message}` }));
+    void done.then(({ note, error }) => {
       if (note) toastFloor(floor, note);
       if (error) toastFloor(floor, error, 'warn');
     });
     // Deleting a big worktree can take a while: the agent hears how it went if it's quick, the floor either way.
-    const settled = await Promise.race([r.done, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 10_000).unref())]);
+    const settled = await Promise.race([done, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 60_000).unref())]);
     return send(res, 200, { ok: true, worker: { id: r.worker.id, name: r.worker.name }, cleanup: r.cleanup, ...(r.kept ? { kept: r.kept } : {}), ...(settled ?? { pending: true }) });
   };
   /** The Receptionist, and only her: the one board agent who writes email. */

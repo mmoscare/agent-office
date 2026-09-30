@@ -18,6 +18,9 @@ const USAGE = `Usage:
                                                 unpushed work. Its worktree and branch are kept, or with
                                                 --remove-worktree deleted once its branch has merged`;
 
+/** The office asks git about every worker's checkout, which a busy machine can make slow. */
+const TIMEOUT_MS = 120_000;
+
 /**
  * What the command line asks for:
  * { cmd: 'help' } | { cmd: 'list', json } | { cmd: 'home', id, removeWorktree }.
@@ -121,7 +124,7 @@ export async function main(argv, io = {}) {
       return 0;
     }
     const office = officeEnv(env);
-    const res = await send(buildRequest(cmd, office), fetchImpl);
+    const res = await send(buildRequest(cmd, office), fetchImpl, TIMEOUT_MS);
     if (res.status < 200 || res.status >= 300) {
       err(`office-workers: ${refusal(res.status, res.body)}`);
       return 1;
