@@ -1,21 +1,17 @@
-import type { OfficeStatus } from '../../shared/git-board';
+import { UPDATE_STEPS, type OfficeUpdateState } from '../../shared/office-update';
 import { store } from '../state';
-import { codeBox } from './copy-code';
-import { h, toast } from './dom';
-import { openManual } from './manual';
+import { h } from './dom';
+import { checkOfficeUpdate, currentStep, officeUpdateState, onOfficeUpdate, openOfficeUpdate } from './office-update';
 
 // The update bar across the top of the screen: after a pull request for Agent Office itself is
-// merged (in the office or on GitHub), the steps to get the office running it, ticked off as each
-// gets done: pull the floor, pull the app, build, restart, reload this page. "Hide" puts it away
-// until the next merge. It reads the same status as the Git board's 🏢 bar (/api/git/office).
+// merged (in the office or on GitHub), which pull requests are waiting and how far the update has
+// got, with a button that opens the step-by-step walkthrough (ui/office-update.ts). After the
+// restart it says the update is live and who to tell "continue". "Hide" puts it away until the next
+// merge. It reads the walkthrough's state (/api/git/office/update).
 
 const HIDE_KEY = 'agent-office.updateBarHidden';
 const POLL_MS = 60_000;
-/** When this page loaded: an office started after it is running code this page doesn't have. */
-const pageLoadedAt = Date.now();
 
-let status: OfficeStatus | null = null;
-let busy = false;
 let bar: HTMLElement | null = null;
 
 function hiddenKey(): string {
@@ -26,116 +22,32 @@ function hiddenKey(): string {
   }
 }
 
-interface Step {
-  title: string;
-  done: boolean;
-  body: () => (Node | string)[];
+/** Which update this is: a newer merge brings the bar back after "Hide". */
+function keyOf(s: OfficeUpdateState): string {
+  return `${s.target ?? s.app.head ?? ''}|${s.last && !s.last.acknowledged ? s.last.at : ''}`;
 }
 
-function steps(s: OfficeStatus): Step[] {
-  const floors = s.floors ?? [];
-  const behindFloors = floors.filter((f) => f.behind > 0);
-  const app = `cd "${s.dir}"`;
-  const pullFloor = (f: { dir: string }) => {
-    const b = h('button.btn.primary', { type: 'button' }, '⬇️ Pull it');
-    b.addEventListener('click', async () => {
-      b.disabled = true;
-      b.textContent = 'Pulling…';
-      const error = await post('office/pull-floor', { dir: f.dir });
-      if (error) toast(error, 'error');
-      else toast('⬇️ Pulled the floor');
-      void check(true);
-    });
-    return b;
-  };
-  return [
-    {
-      title: 'Pull the floor',
-      done: behindFloors.length === 0,
-      body: () =>
-        behindFloors.flatMap((f) => [
-          h('p', {}, `The ${f.name} floor is ${f.behind} commit${f.behind === 1 ? '' : 's'} behind GitHub. `, pullFloor(f), ' or in PowerShell:'),
-          codeBox(`git -C "${f.dir}" pull --ff-only`).el,
-        ]),
-    },
-    {
-      title: 'Pull the app',
-      done: !s.needs.pull,
-      body: () => [
-        h('p', {}, 'In PowerShell, go to the folder the office runs from and pull:'),
-        ...(s.dirty ? [h('p.update-warn', {}, `⚠️ ${s.dirty} file${s.dirty === 1 ? ' has' : 's have'} uncommitted changes there (someone’s work in progress). Commit or finish them first.`)] : []),
-        codeBox(`${app}\ngit pull`).el,
-        h('p.update-note', {}, 'If it says CONFLICT: run ', h('code', {}, 'git merge --abort'), ' and ask Claude to “update the app folder”.'),
-      ],
-    },
-    {
-      title: 'Build',
-      done: !s.needs.pull && !s.needs.build,
-      body: () => [h('p', {}, 'Still in that folder:'), codeBox(s.needs.pull ? 'npm run build' : `${app}\nnpm run build`).el],
-    },
-    {
-      title: 'Restart',
-      done: !s.needs.pull && !s.needs.build && !s.needs.restart,
-      body: () => {
-        const cmd = h('button.btn', { type: 'button' }, '📘 The start command');
-        cmd.addEventListener('click', () => openManual('merge-steps'));
-        return [h('p', {}, 'When your workers are idle: press ', h('b', {}, 'Ctrl+C'), ' in the office’s window, then start it again. Tell busy workers “continue” afterwards.'), cmd];
-      },
-    },
-    {
-      title: 'Reload this page',
-      done: s.startedAt <= pageLoadedAt,
-      body: () => {
-        const b = h('button.btn.primary', { type: 'button' }, '🔄 Reload now');
-        b.addEventListener('click', () => location.reload());
-        return [h('p', {}, 'The office restarted with the new code. Reload to see it. '), b];
-      },
-    },
-  ];
+function prLabel(s: OfficeUpdateState): string {
+  const prs = s.prs;
+  if (prs.length === 1) return `PR #${prs[0].number}: ${prs[0].title}`;
+  if (prs.length > 1) return `${prs.length} pull requests (${prs.slice(0, 3).map((p) => `#${p.number}`).join(', ')}${prs.length > 3 ? '…' : ''})`;
+  return '';
 }
 
-async function post(path: string, body: unknown): Promise<string | undefined> {
-  try {
-    const q = new URLSearchParams({ floor: store.floor ?? '' });
-    const res = await fetch(`/api/git/${path}?${q}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const r = (await res.json().catch(() => ({}))) as { error?: string };
-    return r.error ?? (res.ok ? undefined : `HTTP ${res.status}`);
-  } catch (err) {
-    return (err as Error).message;
-  }
-}
-
-/** Asks the office how its own code stands. `fresh`: a PR was just merged, so look at GitHub now. */
-export async function check(fresh = false): Promise<void> {
-  if (busy || !store.floor) return;
-  busy = true;
-  try {
-    const q = new URLSearchParams({ floor: store.floor, ...(fresh ? { fresh: '1' } : {}) });
-    const res = await fetch(`/api/git/office?${q}`, { credentials: 'same-origin', cache: 'no-store' });
-    if (res.ok) status = ((await res.json()) as { office: OfficeStatus | null }).office;
-  } catch {
-    // Offline for a moment (a restart): keep what we had.
-  } finally {
-    busy = false;
-  }
-  render();
-}
-
-/** A pull request was merged here: its steps are wanted now, not at the next poll. */
+/** A PR was merged here: look at GitHub now, not at the next poll. */
 export function mergedJustNow(): void {
   // GitHub takes a moment to show the merge on the branch.
-  setTimeout(() => void check(true), 1500);
-  setTimeout(() => void check(true), 20_000);
+  setTimeout(() => void checkOfficeUpdate(true), 1500);
+  setTimeout(() => void checkOfficeUpdate(true), 20_000);
 }
 
 function render() {
-  const s = status;
+  const s = officeUpdateState();
   bar ??= (document.getElementById('app') ?? document.body).appendChild(h('div.update-bar', { role: 'region', 'aria-label': 'Update the office' }));
-  const list = s ? steps(s) : [];
-  const current = list.findIndex((st) => !st.done);
-  // Everything's done up to the reload, or the reload itself: which update this is, for "Hide".
-  const key = s ? `${s.target ?? ''}|${current === 4 ? s.startedAt : ''}` : '';
-  if (!s || current < 0 || s.error || hiddenKey() === key) {
+  const step = s ? currentStep(s) : null;
+  const last = s?.last && !s.last.acknowledged && s.last.verdict !== 'pending' ? s.last : undefined;
+  const key = s ? keyOf(s) : '';
+  if (!s || s.error || (!step && !last) || hiddenKey() === key) {
     bar.hidden = true;
     bar.replaceChildren();
     return;
@@ -149,26 +61,51 @@ function render() {
     }
     bar!.hidden = true;
   });
+  const open = (label: string) => {
+    const b = h('button.btn.primary', { type: 'button' }, label);
+    b.addEventListener('click', openOfficeUpdate);
+    return b;
+  };
+  bar.hidden = false;
+  if (!step && last) {
+    // After the restart: how it went.
+    const live = last.verdict === 'live';
+    const prs = last.prs;
+    const what = prs.length === 1 ? `PR #${prs[0].number} is live` : prs.length ? `${prs.length} pull requests are live` : 'The office runs the new code';
+    const waiting = last.now.filter((w) => !w.gone && w.status !== 'working' && w.status !== 'starting').length;
+    bar.replaceChildren(
+      h('div.update-head', { class: live ? 'ok' : 'bad' },
+        h('b', {}, live ? `✅ Done: ${what}.` : '❌ The office update didn’t finish.'),
+        h('span.update-sub', {}, live ? (waiting ? `Tell ${waiting} worker${waiting === 1 ? '' : 's'} “continue”.` : '') : 'It’s still on the old version.'),
+        h('span.update-grow', {}),
+        open(live ? (waiting ? '💬 Who to tell' : 'Details') : 'See what happened'),
+        hide,
+      ),
+    );
+    return;
+  }
+  const index = UPDATE_STEPS.findIndex((st) => st.id === step);
   const chips = h(
     'ol.update-steps',
-    {},
-    // Everything before the current step is done; everything after it is still to come.
-    ...list.map((st, i) => h('li', { class: i < current ? 'done' : i === current ? 'now' : 'later' }, h('span.update-num', {}, i < current ? '✓' : String(i + 1)), st.title)),
+    { 'aria-label': `Step ${index + 1} of ${UPDATE_STEPS.length}` },
+    ...UPDATE_STEPS.map((st, i) => h('li', { class: i < index ? 'done' : i === index ? 'now' : 'later' }, h('span.update-num', {}, i < index ? '✓' : String(i + 1)), st.title)),
   );
-  bar.hidden = false;
+  const title = s.app.behind > 0 || s.floors.some((f) => f.behind > 0) ? '🔀 New Agent Office code' : '🛠 The office’s code changed';
+  const label = prLabel(s);
   bar.replaceChildren(
-    h('div.update-head', {}, h('b', {}, current === 4 ? '✨ The office was updated' : s.needs.pull || current === 0 ? '🔀 New Agent Office code on GitHub' : '🛠 The office’s code changed'), h('span.update-sub', {}, current === 4 ? '' : 'To run it:'), chips, hide),
-    h('div.update-now', {}, h('b.update-now-title', {}, `Step ${current + 1}: ${list[current].title}`), ...list[current].body()),
+    h('div.update-head', {}, h('b', {}, title), label ? h('span.update-pr', { title: label }, label) : null, h('span.update-grow', {}), open('👉 Walk me through it'), hide),
+    h('div.update-now', {}, h('span.update-sub', {}, `Step ${index + 1} of ${UPDATE_STEPS.length}: ${UPDATE_STEPS[index].title}`), chips),
   );
 }
 
 /** Starts watching; call once when the page is up. */
 export function mountUpdateBar(): void {
-  void check();
+  onOfficeUpdate(render);
+  void checkOfficeUpdate();
   setInterval(() => {
-    if (document.visibilityState === 'visible') void check();
+    if (document.visibilityState === 'visible') void checkOfficeUpdate();
   }, POLL_MS);
-  store.on('floor', () => void check());
+  store.on('floor', () => void checkOfficeUpdate());
   // A PR the boards now show as merged (on GitHub, by a worker, by anyone here): check at once.
   let merged: Set<string> | null = null;
   store.on('pulls', () => {

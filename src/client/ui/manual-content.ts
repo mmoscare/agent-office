@@ -25,6 +25,9 @@ export interface ManualChapter {
 /** The folder the office runs from (see “The three copies of agent-office”). */
 const APP_DIR = 'C:\\Users\\Owner\\Documents\\Development\\Agent-Office\\agent-office';
 
+/** How the office is started from PowerShell, with the password in place of YOUR-PASSWORD. */
+export const START_COMMAND = 'agent-office.cmd "C:\\Users\\Owner\\Documents\\Development\\Personal-Portfolio" --agent "C:/Users/Owner/.local/bin/claude.exe" --password \'YOUR-PASSWORD\'';
+
 export const MANUAL: ManualChapter[] = [
   {
     id: 'about',
@@ -36,15 +39,12 @@ export const MANUAL: ManualChapter[] = [
       {
         steps: [
           'Merge the PR on GitHub (into `personal`).',
-          'Wait until your workers are idle. Restarting stops them.',
-          'In the app folder `' + APP_DIR + '`: `git pull`',
-          'Only if the pull changed `package.json` or `package-lock.json`: `npm ci`',
-          '`npm run build`. The office runs the built code, so without this you’d still see the old version.',
-          'Restart the office: tray icon near the clock → **Restart Agent Office**, or Ctrl+C in its PowerShell window and start it again.',
-          'Open http://localhost:4600, press **Ctrl+F5**, and try it. Tell any worker that was busy: “continue”.',
+          'A bar appears across the top of the office. Click **👉 Walk me through it**.',
+          'Press the big button for each step: pull the floor, pull the app folder, new packages (often skipped), build, restart. Each one checks it worked and says so before the next.',
+          'After the restart the page comes back by itself and says **✅ Done: PR #… is live**, with a **💬 Say “continue”** button for each worker that was busy.',
         ],
       },
-      { note: 'Steps 3–7 are only for agent-office PRs; for other floors just ⬇️ Pull on the Git board. For the full version, see **📝 To-do list** and **📋 Merging an agent-office PR, step by step**.' },
+      { note: 'This is only for agent-office PRs; for other floors just ⬇️ Pull on the Git board. To do it by hand in PowerShell, see **📋 Merging an agent-office PR, step by step**.' },
     ],
   },
   {
@@ -59,13 +59,13 @@ export const MANUAL: ManualChapter[] = [
       { h: 'Only for agent-office PRs' },
       {
         checklist: [
-          'Wait until your workers are idle or waiting on you',
-          'In the app folder `C:\\Users\\Owner\\Documents\\Development\\Agent-Office\\agent-office`: `git pull`',
-          'Only if the pull changed `package.json` or `package-lock.json`: `npm ci`',
-          '`npm run build`',
-          'Restart the office: tray icon near the clock → **Restart Agent Office**, or Ctrl+C in its window and start it again',
-          'Open http://localhost:4600 and press **Ctrl+F5**',
-          'Tell each worker that was busy: “continue”',
+          'Click **👉 Walk me through it** on the bar across the top (or 🏢 on the Git board → **👉 Update the office step by step**)',
+          'Step 1: **⬇️ Pull the floor**',
+          'Step 2: **⬇️ Pull the app folder**',
+          'Step 3: **📦 Get the new packages**, only when it asks (usually “No new packages needed ✅”)',
+          'Step 4: **🛠 Build it**',
+          'Step 5: **🔄 Restart now**, or **⏳ Restart as soon as everyone is idle** when workers are busy',
+          'After the restart: **💬 Say “continue”** to each worker it lists',
         ],
       },
       { h: 'Do I need npm run build every time?' },
@@ -74,7 +74,7 @@ export const MANUAL: ManualChapter[] = [
           '**No.** Only when the Agent Office code in the **app folder** changed: after you pull an agent-office PR there, or after someone edits that folder directly.',
           '**Not** after merges in your other projects (Personal-Portfolio, MFT-Trading-Dashboard, …). They aren’t the office’s code.',
           '**Not** after ⬇️ Pull on the Git board. That updates a floor, not the running office.',
-          'A build only takes effect after a restart.',
+          'A build only takes effect after a restart. The walkthrough builds in a separate folder, so the office keeps working until then.',
         ],
       },
     ],
@@ -84,7 +84,9 @@ export const MANUAL: ManualChapter[] = [
     icon: '📋',
     title: 'Merging an agent-office PR, step by step',
     blocks: [
-      { p: 'Copy each command into PowerShell. Type the PR’s number here first and every command below uses it.' },
+      { p: '**The easy way:** after merging, click **👉 Walk me through it** on the bar across the top. It does steps 3 to 9 below with one button each, checks each one worked, and builds in a separate folder so the running office isn’t touched until the restart.' },
+      { h: 'By hand, in PowerShell' },
+      { p: 'The same steps, for when the walkthrough can’t do one. Copy each command into PowerShell. Type the PR’s number here first and every command below uses it.' },
       { prNumber: true },
       { h: '1. Look at the PR' },
       { p: 'Opens it in your browser. Read the description and the “Files changed” tab.' },
@@ -109,7 +111,7 @@ export const MANUAL: ManualChapter[] = [
       { code: 'npm run build', dir: APP_DIR },
       { h: '8. Restart the office' },
       { p: 'Wait until your workers are idle. If the office runs from the tray icon near the clock: right-click it → **Restart Agent Office**. If it runs in a PowerShell window: press **Ctrl+C** there, then start it again with your password in place of YOUR-PASSWORD:' },
-      { code: 'agent-office.cmd "C:\\Users\\Owner\\Documents\\Development\\Personal-Portfolio" --agent "C:/Users/Owner/.local/bin/claude.exe" --password \'YOUR-PASSWORD\'' },
+      { code: START_COMMAND },
       { h: '9. Back in' },
       { p: 'Open http://localhost:4600, press **Ctrl+F5** so the browser loads the new build, and tell any worker that was busy: “continue”.' },
       { h: 'If step 5 says CONFLICT' },
@@ -180,8 +182,19 @@ export const MANUAL: ManualChapter[] = [
       {
         steps: [
           '**Floor:** Git board → the repository → **⬇️ Pull**. New workers then start from the latest code.',
-          '**App**, only if the PR changed Agent Office itself: in `C:\\Users\\Owner\\Documents\\Development\\Agent-Office\\agent-office`, run `git pull`, then `npm run build` (building turns the code into what the office runs). If that folder has uncommitted work in it, commit or finish that first.',
-          '**Restart the office** when your workers are idle (see “Restarting the office”).',
+          '**App**, only if the PR changed Agent Office itself: click **👉 Walk me through it** on the bar across the top. It pulls the floor and the app folder, gets new packages if needed, builds and restarts, one button at a time.',
+          '**Restart** is the walkthrough’s last step. It lists the workers who are busy first, and can wait until everyone is idle.',
+        ],
+      },
+      { h: 'What the walkthrough does for you' },
+      {
+        list: [
+          '**Unfinished work in the app folder:** it stops and lists the files under “Show details”. It never stashes, resets or throws anything away.',
+          '**Commits in the app folder that aren’t on GitHub:** it still pulls, as a normal merge, and reminds you that ⬆️ Push can upload them.',
+          '**Files that clash:** it undoes the pull straight away, checks the folder is back as it was, and says which files clash. Ask Claude to “update the app folder”.',
+          '**New packages:** they’re installed into a separate copy, never into the running office’s folder, and switch in at the restart.',
+          '**The build:** made in a separate folder (`.agent-office\\app-update` inside the app folder). If it fails, the running office is untouched.',
+          '**The restart:** the launcher switches the new build in while the office is stopped. If the new version doesn’t start, it goes back to the previous one by itself.',
         ],
       },
       { note: 'Merging on GitHub never updates the running office by itself. If a new feature doesn’t show up, the app copy hasn’t been pulled, built and restarted yet.' },
@@ -240,15 +253,26 @@ export const MANUAL: ManualChapter[] = [
           'A worker that never got going comes back as a fresh one.',
         ],
       },
-      { h: 'A safe restart' },
+      { h: 'Restarting from the walkthrough' },
+      {
+        list: [
+          'Step 5 lists the workers who are busy right now. **🔄 Restart now** asks you to confirm when anyone is; **⏳ Restart as soon as everyone is idle** waits for them.',
+          'It saves who was busy before it restarts. Afterwards it lists them, each with a **💬 Say “continue”** button.',
+          'It works when the office runs from the **Agent Office** launcher (the tray icon near the clock), installed after this feature. Otherwise it shows how to restart by hand.',
+        ],
+      },
+      { h: 'Restarting by hand' },
       {
         steps: [
           'Check **Needs you** and the desks. Restart when workers are idle or waiting on you.',
-          'Stop the office with Ctrl+C in its window.',
-          'Update if you need to (see “After you merge a pull request”).',
-          'Start it again, then walk past each desk that was busy and say “continue”.',
+          'Launcher: right-click the tray icon near the clock → **Restart Agent Office**. PowerShell: press Ctrl+C in its window, then start it again with the start command (see “Merging an agent-office PR, step by step”, step 8).',
+          'A build the walkthrough made switches in as the office stops. New packages need the launcher, or `npm ci` in the app folder while the office is stopped.',
+          'Walk past each desk that was busy and say “continue”.',
         ],
       },
+      { h: 'Set up the launcher once' },
+      { p: 'So the walkthrough can restart the office itself: stop the office (tray icon → **Stop Agent Office and exit**, or Ctrl+C), run this in PowerShell, then double-click **Agent Office** on your Desktop.' },
+      { code: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + APP_DIR + '\\personal\\windows\\Install-Launcher.ps1"' },
     ],
   },
   {

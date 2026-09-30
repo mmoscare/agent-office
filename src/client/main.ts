@@ -56,6 +56,7 @@ import { authorUpdates, onAuthorUpdates, openAuthorUpdates } from './ui/author-u
 import { mountAuthorUpdatesWall } from './world/author-updates';
 import { openManual } from './ui/manual';
 import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
+import { mountOfficeUpdate } from './ui/office-update';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -280,7 +281,7 @@ const gallery = new Gallery();
 office.group.add(gallery.group);
 store.on('decor', () => gallery.sync(store.decor));
 
-// The bar across the top after Agent Office's own code changes on GitHub: the steps to run it (ui/update-bar.ts).
+// The bar across the top after Agent Office's own code changes on GitHub: how far its update has got (ui/update-bar.ts).
 mountUpdateBar();
 
 // The whiteboard shows what everyone's drawn on it.
@@ -360,6 +361,8 @@ const drunkVision = new DrunkVision(renderer);
 // ---- Networking & state -------------------------------------------------------------------------
 const net = new Net(() => store.profile);
 const voice = new Voice(net);
+// The step-by-step office update, reopened after a restart it asked for (ui/office-update.ts).
+mountOfficeUpdate(net);
 
 const me = new Person(store.profile.name, store.profile.color, store.profile.look);
 me.showLabel(false);

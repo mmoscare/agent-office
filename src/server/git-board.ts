@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeRepo } from '../shared/floors.js';
 import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitFileStatus, GitRepoDetail, GitRepoList, GitRepoSummary, OfficeStatus } from '../shared/git-board.js';
-import type { PullRequestRef } from '../shared/protocol.js';
+import type { PullRequestRef, WorkerInfo } from '../shared/protocol.js';
 import { findBranchPr, gh } from './github.js';
 import { floorRepository, workspaceRepositories } from './workspaces.js';
 
@@ -582,6 +582,8 @@ async function fetchNowAndThen(dir: string, fresh: boolean) {
 export interface OfficeFloor {
   name: string;
   dir: string;
+  /** Its workers, for the guided update's restart step (office-update.ts). */
+  workers?: () => WorkerInfo[];
 }
 
 /**

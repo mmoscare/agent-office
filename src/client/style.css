@@ -1352,6 +1352,7 @@ a.when:hover { text-decoration: underline; }
 .office-note { margin: 4px 0 8px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
 .office-note code, .office-warn code { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 4px; border-radius: 4px; }
 .office-warn { margin: 4px 0 8px; font-size: 12.5px; font-weight: 800; color: #b5651d; }
+.office-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .office-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .office-step { background: #fffdf7; border: 2px solid rgba(43,45,66,.18); border-radius: 12px; padding: 8px 10px; }
 .office-step-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
@@ -1418,6 +1419,11 @@ a.when:hover { text-decoration: underline; }
 .update-now .btn { align-self: flex-start; }
 .update-now p .btn { margin-left: 4px; }
 .update-now-title { font-size: 14px; }
+.update-head.ok { background: #e0f2e6; }
+.update-head.bad { background: #ffe3e3; }
+.update-pr { font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+.update-grow { flex: 1; }
+.update-now .update-steps { flex: none; }
 .update-warn { color: #b5651d; }
 .update-note { color: var(--muted); font-size: 12px; }
 .update-note code { font: 12px ui-monospace, Menlo, Consolas, monospace; background: rgba(43,45,66,.08); padding: 1px 4px; border-radius: 4px; }
