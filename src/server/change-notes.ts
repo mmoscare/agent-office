@@ -134,8 +134,9 @@ function branchOf(ref: string): string {
   return ref.replace(/^refs\/(?:heads|remotes)\//, '').replace(/^(?:origin|upstream)\//, '');
 }
 
+/** A copy of the branch itself (a `git pull` of it), not the author's (upstream's) branch of that name. */
 function sameBranch(ref: string, branch: string): boolean {
-  return branchOf(ref) === branch;
+  return ref.replace(/^refs\/(?:heads|remotes)\//, '').replace(/^origin\//, '') === branch;
 }
 
 /** The original author's code: their main, or anything from the upstream remote, merged into another branch. */
