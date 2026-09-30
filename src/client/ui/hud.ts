@@ -6,6 +6,8 @@ import type { ChatLine } from '../../shared/protocol';
 import { $, h, openModal, STATUS_LABEL } from './dom';
 import { usageLabel, usageTitle } from './usage';
 import { providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelLogoEl } from '../world/model-logos';
 import { whereabouts } from './whereabouts';
 import { isMac } from './terminal-clipboard';
 import { DESK_BY_ID } from '../../shared/layout';
@@ -68,12 +70,14 @@ export function renderWorkers(onOpen: (id: string) => void) {
     const usageState = w.kind === 'agent' ? providerUsageState(w.provider, store.project, w.usage) : undefined;
     const usageNote = usageState === 'untracked' ? ' · usage untracked' : usageState === 'waiting' && providerKind === 'opencode' ? ' · waiting for metrics' : usageState === 'waiting' && providerKind === 'codex' ? ' · waiting for first report' : '';
     const badge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
+    const brand = w.kind === 'agent' ? modelBrand(w.runningModel ?? w.model, w.provider) : undefined;
     const sub = [provider && `⚙️ ${provider}${badge ? ` · ${badge}` : ''}${usageNote}`, w.workspace ? `${w.workspace.repositories.length} repositories` : w.worktree && `🌿 ${w.worktree.branch}`, w.pr && `🔀 PR #${w.pr.number}`, w.activity || w.title || w.prompt].filter(Boolean).join(' · ');
     const kind = w.kind === 'agent' && w.task?.kind ? WORK_KINDS[w.task.kind] : undefined;
     ul.append(
       h(
         'li',
         { onclick: () => onOpen(w.id), title: `Open ${w.name}'s terminal`, class: kind && 'has-kind', style: kind && `--kind:${kind.color}` },
+        brand ? modelLogoEl(brand, w.runningModel ?? w.model) : null,
         h('span.dot', { style: `background:${w.color}` }),
         h('span.name', {}, w.name,
           kind ? h('span.work-kind', { style: `background:${kind.color};color:${kind.ink}`, title: `Working on: ${kind.label}${w.task ? ` — ${w.task.name}` : ''}` }, `${kind.emoji} ${kind.label}`) : null,
