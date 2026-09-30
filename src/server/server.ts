@@ -1234,7 +1234,8 @@ export async function startServer(cfg: Config) {
             return send(res, 400, { error: 'Bad request' });
           }
         }
-        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input, [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })));
+        const officeFloors = [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir, workers: () => f.workers.list() }));
+        const [status, body] = await routeGitBoard(p, req.method ?? 'GET', url.searchParams, floor.dir, input, officeFloors, { admin: meOf(session.account?.id).admin, name: session.account?.name ?? 'the office' });
         return send(res, status, body);
       }
       if (p === '/api/floors/local' && req.method === 'POST') {

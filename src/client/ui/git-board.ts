@@ -541,7 +541,7 @@ export function openGitBoard(actions: GitBoardActions, startRepo?: string) {
         if (ok && path === 'pull' && office && detail?.github && detail.github === office.github && office.dir) {
           officeOpen = true;
           if (!closed) renderOfficeStatus(officeBar, office, officeOpen);
-          if (office.needs.pull || office.needs.build || office.needs.restart) toast('Pulled. Next: update the running office: the steps are in the 🏢 bar at the top.');
+          if (office.needs.pull || office.needs.build || office.needs.restart) toast('Pulled. Next: update the running office with 👉 Update the office step by step, in the 🏢 bar at the top.');
         }
       });
     }

@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: AssemblyTitle("Agent Office")]
 [assembly: AssemblyProduct("Agent Office")]
 [assembly: AssemblyDescription("Launcher for your personal Agent Office")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
 
 public sealed class LauncherConfig {
     public string CodeDir { get; set; }
@@ -144,6 +144,12 @@ internal static class Program {
 }
 
 internal sealed class OfficeContext : ApplicationContext {
+    // host.mjs exits with these to be started again: the office asked for a restart (to switch to a
+    // new build), or a new build didn't start and the previous one was put back.
+    internal const int RestartExitCode = 75;
+    internal const int RolledBackExitCode = 76;
+    internal static bool StartsAgain(int exitCode) { return exitCode == RestartExitCode || exitCode == RolledBackExitCode; }
+
     private Process server;
     private Process terminal;
     private readonly NotifyIcon tray;
@@ -163,6 +169,14 @@ internal sealed class OfficeContext : ApplicationContext {
             if (stopping) return;
             if (server != null && server.HasExited) {
                 monitor.Stop();
+                int code = server.ExitCode;
+                if (StartsAgain(code)) {
+                    // The page reconnects by itself, so no new browser window.
+                    Program.Log("--- Agent Office asked to be started again (exit code " + code + ") ---");
+                    server.Dispose(); server = null;
+                    if (!StartOffice(false)) ExitThread();
+                    return;
+                }
                 MessageBox.Show("Agent Office stopped. See server.log in " + Program.InstallDir + " for details.", "Agent Office");
                 ExitThread();
                 return;
@@ -171,33 +185,44 @@ internal sealed class OfficeContext : ApplicationContext {
         };
     }
 
-    internal bool StartOffice() {
+    internal bool StartOffice(bool openBrowser = true) {
         try {
-            var config = Program.Config;
             string password = Program.Password();
-            var start = new ProcessStartInfo(config.NodePath) {
-                Arguments = Program.Quote(Path.Combine(Program.InstallDir, "host.mjs")) + " " + Program.Quote(config.CodeDir) + " " + Program.Quote(config.OfficeDir) + " " + config.Port,
-                WorkingDirectory = config.CodeDir, UseShellExecute = false, CreateNoWindow = true,
-                WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
-            };
-            if (password != null) start.EnvironmentVariables["AGENT_OFFICE_PASSWORD"] = password;
-            server = new Process { StartInfo = start };
-            server.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { Program.Log(e.Data); };
-            server.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Program.Log(e.Data); };
-            Program.Log("--- Agent Office started " + DateTime.Now.ToString("s") + " ---");
-            server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine();
-            ShowTerminal();
-            // Wait by the clock, not by attempt count: a refused probe returns instantly, a hung one takes the whole timeout.
-            DateTime deadline = DateTime.UtcNow.AddSeconds(90);
-            while (DateTime.UtcNow < deadline) {
-                if (server.HasExited) throw new Exception("Agent Office could not start. See server.log in " + Program.InstallDir);
-                if (terminal != null && terminal.HasExited) throw new Exception("The server terminal was closed before Agent Office was ready.");
-                if (Program.Healthy()) { monitor.Start(); Program.OpenBrowser(); return true; }
-                Thread.Sleep(300);
+            for (int attempt = 1; ; attempt++) {
+                Launch(password);
+                // Wait by the clock, not by attempt count: a refused probe returns instantly, a hung one takes the whole timeout.
+                DateTime deadline = DateTime.UtcNow.AddSeconds(90);
+                bool again = false;
+                while (DateTime.UtcNow < deadline) {
+                    if (server.HasExited) {
+                        // A new build that didn't start: host.mjs put the previous one back, so start that.
+                        if (StartsAgain(server.ExitCode) && attempt < 3) { server.Dispose(); server = null; again = true; break; }
+                        throw new Exception("Agent Office could not start. See server.log in " + Program.InstallDir);
+                    }
+                    if (terminal != null && terminal.HasExited) throw new Exception("The server terminal was closed before Agent Office was ready.");
+                    if (Program.Healthy()) { monitor.Start(); if (openBrowser) Program.OpenBrowser(); return true; }
+                    Thread.Sleep(300);
+                }
+                if (!again) throw new Exception("Agent Office did not become ready. See server.log in " + Program.InstallDir);
             }
-            throw new Exception("Agent Office did not become ready. See server.log in " + Program.InstallDir);
         } catch (OperationCanceledException) { return false; }
         catch (Exception error) { StopOffice(); MessageBox.Show(error.Message, "Agent Office", MessageBoxButtons.OK, MessageBoxIcon.Error); return false; }
+    }
+
+    private void Launch(string password) {
+        var config = Program.Config;
+        var start = new ProcessStartInfo(config.NodePath) {
+            Arguments = Program.Quote(Path.Combine(Program.InstallDir, "host.mjs")) + " " + Program.Quote(config.CodeDir) + " " + Program.Quote(config.OfficeDir) + " " + config.Port,
+            WorkingDirectory = config.CodeDir, UseShellExecute = false, CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        if (password != null) start.EnvironmentVariables["AGENT_OFFICE_PASSWORD"] = password;
+        server = new Process { StartInfo = start };
+        server.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { Program.Log(e.Data); };
+        server.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Program.Log(e.Data); };
+        Program.Log("--- Agent Office started " + DateTime.Now.ToString("s") + " ---");
+        server.Start(); server.BeginOutputReadLine(); server.BeginErrorReadLine();
+        ShowTerminal();
     }
 
     // The server itself stays hidden (a console of its own kept it from coming up); this window follows server.log live.
