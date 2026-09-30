@@ -91,7 +91,7 @@ import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { contentGlance, openContentKanban } from './ui/content-kanban';
 import { ContentKanbanTexture } from './world/content-kanban';
-import { renderLimits } from './ui/limits';
+import { renderLimits, watchLimitBudget } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
@@ -1464,6 +1464,8 @@ store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
 setInterval(renderLimits, 30_000);
 $('limits').addEventListener('click', () => net.send({ t: 'limits.refresh' }));
+// Today's equal share of the week used up: a warning in the office and on the desktop, once a day.
+watchLimitBudget((title, body) => notifier.notice(title, body, 'limit-budget'));
 // Pay-as-you-go API balances, read over HTTP rather than the socket: they're slow, cached and optional.
 mountBalances();
 

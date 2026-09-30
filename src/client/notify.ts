@@ -73,6 +73,14 @@ export class DesktopNotifier {
     }
   }
 
+  /** Something the whole office should know, like today's Claude budget being used up; `tag` replaces an earlier one. */
+  notice(title: string, body: string, tag: string) {
+    if (!this.enabled() || notifyPermission() !== 'granted') return;
+    if (!document.hidden && document.hasFocus()) return;
+    const n = this.show(title, { body, tag });
+    if (n) n.onclick = () => (window.focus(), n.close());
+  }
+
   /** What one looks like, from ⚙️ Settings. */
   sample() {
     const n = this.show('🔔 Notifications are on', { body: 'This is how a worker that needs input or is done gets your attention while you are in another tab.' });
