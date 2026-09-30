@@ -34,7 +34,7 @@ import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
-import { ChangeNotes, PlainWriter, claudeSummarizer } from './change-notes.js';
+import { ChangeNotes, PlainWriter, claudeSummarizer, floorSources } from './change-notes.js';
 import { PlansError } from './plans.js';
 import { INBOX_SERVE_MAX, InTrayDoor, InboxError, fileType, plainName, readBytes } from './inbox.js';
 import { Mailroom, type MailFloor } from './mailroom.js';
@@ -657,10 +657,7 @@ export async function startServer(cfg: Config) {
   const whatsNewOn = (floor: Floor) => {
     const key = `${floor.id}|${floor.dir}`;
     let notes = whatsNew.get(key);
-    if (!notes) {
-      const sources = () => (floor.github.checkouts.length ? floor.github.checkouts : [{ dir: floor.dir }]);
-      whatsNew.set(key, (notes = new ChangeNotes(floor.id, path.join(floor.dir, '.agent-office'), sources, plainWriter)));
-    }
+    if (!notes) whatsNew.set(key, (notes = new ChangeNotes(floor.id, path.join(floor.dir, '.agent-office'), () => floorSources(floor.dir), plainWriter)));
     return notes;
   };
 

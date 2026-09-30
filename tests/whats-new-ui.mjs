@@ -122,9 +122,13 @@ try {
   }, extraFloor || other);
   assert.equal(added.status, 200, JSON.stringify(added));
   await page.waitForFunction(() => window.__office.store.floors.length === 2);
-  const home = await page.evaluate(() => window.__office.store.floor);
-  // This browser last looked when the notepad was the newest: what came after it is new.
-  await page.evaluate(([floor, at]) => localStorage.setItem('agent-office.whats-new.seen', JSON.stringify({ [floor]: at })), [home, yesterdayNoon * 1000]);
+  // This browser last looked when the notepad was the newest: what came after it is new. The marks
+  // go by the floor's folder (seenKey in src/shared/whats-new.ts), not its id.
+  await page.evaluate(at => {
+    const o = window.__office;
+    const here = o.store.floors.find(f => f.id === o.store.floor);
+    localStorage.setItem('agent-office.whats-new.seen', JSON.stringify({ [`dir:${here.dir.replace(/\\/g, '/').replace(/\/+$/, '')}`]: at }));
+  }, yesterdayNoon * 1000);
 
   // Call the staffer over (U) and click his clipboard, as tests/staffer-ui.mjs does.
   await page.evaluate(() => {

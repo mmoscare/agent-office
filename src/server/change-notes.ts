@@ -14,21 +14,28 @@
 // own title, tidied up.
 
 import { execFile } from 'node:child_process';
-import { readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeRepo } from '../shared/floors.js';
 import { WHATS_NEW_MAX, WHATS_NEW_PAGE, type ChangeNote, type WhatsNew } from '../shared/whats-new.js';
 import { gh } from './github.js';
 import { mergedPulls, type MergedPull } from './github-rest.js';
 import { run } from './tasks.js';
+import { workspaceRepositories } from './workspaces.js';
 
 const STORE = 'whats-new.json';
 /** First-parent commits read, at most. */
 const HISTORY_MAX = 5000;
-/** The history is read again after this. */
+/** The history is read again after this (in the background, once there's a list to show). */
 const GIT_STALE_MS = 20_000;
-/** GitHub is asked again after this, and origin fetched. */
+/** GitHub is asked again after this, and origin fetched; on a floor of several repositories, less often. */
 const GITHUB_STALE_MS = 2 * 60_000;
+const GITHUB_FOLDER_STALE_MS = 5 * 60_000;
+/** A floor that's a folder of repositories is looked through again after this. */
+const SOURCES_MS = 5 * 60_000;
+/** Repositories read at once, and asked of GitHub at once: the machine is often busy. */
+const READ_AT_ONCE = 3;
+const GITHUB_AT_ONCE = 2;
 /** A pull request's description, as kept. */
 const BODY_MAX = 1500;
 /** What the model is told about one change, at most. */
@@ -40,8 +47,6 @@ const CONCURRENCY = 2;
 /** After this many failed calls in a row (not signed in, no network), stop asking for a while. */
 const FAILS_BEFORE_BACKOFF = 3;
 const BACKOFF_MS = 10 * 60_000;
-/** Repositories read on a floor that's a folder of them. */
-const SOURCES_MAX = 10;
 
 /** gh, as github.ts runs it. */
 type Query = (args: string[], cwd: string, timeout?: number) => Promise<string>;
@@ -447,11 +452,40 @@ export class PlainWriter {
 
 // ---- A floor's list -------------------------------------------------------------------------------
 
-/** A repository the floor's changes are read from: the floor itself, or one of the checkouts in its folder. */
+/** A repository the floor's changes are read from: the floor itself, or one of the repositories in its folder. */
 export interface Source {
   dir: string;
-  /** owner/name, on a floor of several. */
-  repo?: string;
+  /**
+   * Where it is in the floor's folder, on a floor that's a folder of repositories: its changes, lines
+   * and GitHub's answers are kept under it, so they stay its own whatever else is in the folder.
+   */
+  path?: string;
+}
+
+/**
+ * The repositories a floor's changes come from: the floor itself when it's one, else every repository
+ * in its folder, GitHub or not, found by the same bounded walk multi-repository desks use (workspaces.ts).
+ */
+export async function floorSources(floorDir: string): Promise<{ sources: Source[]; truncated: boolean }> {
+  if (existsSync(path.join(floorDir, '.git'))) return { sources: [{ dir: floorDir }], truncated: false };
+  const found = await workspaceRepositories(floorDir);
+  // Without commits (or unreadable), a repository has no changes to tell of.
+  const sources = found.repositories.filter((r) => !r.error).map((r) => ({ dir: path.join(floorDir, r.path), path: r.path }));
+  return { sources, truncated: found.truncated };
+}
+
+/** `fn` over every item, at most `limit` at a time; the results in the items' order. */
+export async function inTurn<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), items.length) }, worker));
+  return out;
 }
 
 interface PullCache {
@@ -462,9 +496,9 @@ interface PullCache {
 }
 
 interface Stored {
-  /** The plain words, by `pr:<n>` and `commit:<sha>` (after `owner/name ` on a floor of several). */
+  /** The plain words, by `pr:<n>` and `commit:<sha>` (after the repository's path and a space, on a floor of several). */
   lines: Record<string, { text: string; at: number }>;
-  /** What GitHub said of the merged pull requests, by repository ('' on a floor that is one). */
+  /** What GitHub said of the merged pull requests, by the repository's path ('' on a floor that is one). */
   pulls: Record<string, PullCache>;
 }
 
@@ -478,11 +512,15 @@ function load(file: string): Stored {
 }
 
 interface Read {
+  /** Each with the repository it's in, and on a floor of several, what to call that repository. */
   list: (Landed & { dir: string; repo?: string })[];
   branch?: string;
   error?: string;
   at: number;
 }
+
+/** Where a floor's changes come from, as found. */
+type Found = { sources: Source[]; truncated: boolean };
 
 export interface ChangeNotesOptions {
   /** gh, for the REST calls (tests pass their own). */
@@ -506,11 +544,16 @@ export class ChangeNotes {
   private githubError?: string;
   private query: Query;
   private fetchBranch: (dir: string, branch: string) => Promise<void>;
+  /** The floor's repositories as last looked for, and when. */
+  private found?: { at: number; found: Promise<Found> };
+  /** How many there were at the last read: a floor of several asks GitHub less often. */
+  private sourceCount = 1;
 
+  /** @param sources where the floor's changes come from: floorSources() in the office, fixed lists in tests */
   constructor(
     private floorId: string,
     dataDir: string,
-    private sources: () => Source[],
+    private sources: () => Source[] | Found | Promise<Source[] | Found>,
     private writer: PlainWriter,
     opts: ChangeNotesOptions = {},
   ) {
@@ -523,8 +566,11 @@ export class ChangeNotes {
   /** The newest `show` changes, each in plain words or on its way there. Never waits for Claude or GitHub. */
   async list(show = WHATS_NEW_PAGE): Promise<WhatsNew> {
     show = Math.min(WHATS_NEW_MAX, Math.max(1, Math.floor(show) || WHATS_NEW_PAGE));
-    if (!this.read || (Date.now() - this.read.at > GIT_STALE_MS && !this.refreshing)) await this.fromGit();
-    if (Date.now() - this.githubAt > GITHUB_STALE_MS && !this.refreshing) this.refresh();
+    // Only the very first look waits for git; after that the history is read again in the background.
+    if (!this.read) await this.fromGit();
+    else if (Date.now() - this.read.at > GIT_STALE_MS && !this.reading && !this.refreshing) void this.fromGit().catch(() => {});
+    const githubEvery = this.sourceCount > 1 ? GITHUB_FOLDER_STALE_MS : GITHUB_STALE_MS;
+    if (Date.now() - this.githubAt > githubEvery && !this.refreshing) this.refresh();
     const read = this.read!;
     const prefix = `${this.floorId}|`;
     const shown = read.list.slice(0, show);
@@ -537,7 +583,6 @@ export class ChangeNotes {
           .map((l) => ({ id: prefix + l.key, input: () => this.input(l), done: (text: string) => this.keep(l, text) })),
       );
     }
-    const multi = this.sources().length > 1;
     const notes: ChangeNote[] = shown.map((l) => {
       const line = this.line(l);
       return {
@@ -548,7 +593,7 @@ export class ChangeNotes {
         title: l.title,
         ...(l.author ? { author: true } : {}),
         ...(l.url ? { url: l.url } : {}),
-        ...(multi && l.repo ? { repo: l.repo } : {}),
+        ...(l.repo ? { repo: l.repo } : {}),
       };
     });
     const resting = this.writer.resting;
@@ -558,15 +603,28 @@ export class ChangeNotes {
       notes,
       total: read.list.length,
       writing: this.writer.writing(prefix),
-      refreshing: !!this.refreshing,
+      refreshing: !!this.refreshing || !!this.reading,
       ...(resting && notes.some((n) => !n.plain) ? { writer: resting } : {}),
       ...(read.error || this.githubError ? { error: [read.error, this.githubError].filter(Boolean).join(' ') } : {}),
     };
   }
 
-  /** Waits for GitHub to be asked (for tests, and for whoever wants the list complete). */
+  /** Waits for GitHub to be asked and the history read (for tests, and for whoever wants the list complete). */
   async settled(): Promise<void> {
-    while (this.refreshing) await this.refreshing;
+    while (this.refreshing || this.reading) await Promise.resolve(this.refreshing ?? this.reading).catch(() => {});
+  }
+
+  /** The floor's repositories, looked for again every few minutes (while the last look is still used). */
+  private async repositories(): Promise<Found> {
+    if (!this.found || Date.now() - this.found.at > SOURCES_MS) {
+      const found = Promise.resolve()
+        .then(() => this.sources())
+        .then((s) => (Array.isArray(s) ? { sources: s, truncated: false } : s));
+      const entry = { at: Date.now(), found };
+      this.found = entry;
+      found.catch(() => this.found === entry && (this.found = undefined));
+    }
+    return this.found.found;
   }
 
   private line(l: Landed): string | undefined {
@@ -607,31 +665,38 @@ export class ChangeNotes {
 
   private fromGit(): Promise<Read> {
     this.reading ??= (async () => {
-      const sources = this.sources().slice(0, SOURCES_MAX);
-      const multi = sources.length > 1;
-      const list: Read['list'] = [];
       const errors: string[] = [];
-      let branch: string | undefined;
-      for (const src of sources) {
+      const { sources, truncated } = await this.repositories().catch((err): Found => {
+        errors.push(`This floor's folder couldn't be looked through (${((err as Error).message || String(err)).split('\n')[0]}).`);
+        return { sources: [], truncated: false };
+      });
+      this.sourceCount = sources.length;
+      // Every repository, a few at a time.
+      const read = await inTurn(sources, READ_AT_ONCE, async (src) => {
         try {
           const b = await workingBranch(src.dir);
           const tip = await tipOf(src.dir, b);
           if (!tip) throw new Error('it has no commits yet');
-          const cache = this.stored.pulls[src.repo ?? ''];
+          const cache = this.stored.pulls[src.path ?? ''];
           const origin = normalizeRepo(await gitMaybe(['remote', 'get-url', 'origin'], src.dir));
           const web = cache?.web ?? (origin ? `https://github.com/${origin}` : undefined);
           const changes = landedChanges(await branchLine(src.dir, [tip], b), b, cache && cache.base === b ? cache.items : [], web);
-          const prefix = multi && src.repo ? `${src.repo} ` : '';
-          for (const c of changes) list.push({ ...c, key: prefix + c.key, keys: c.keys.map((k) => prefix + k), dir: src.dir, ...(src.repo ? { repo: src.repo } : {}) });
-          if (!multi) branch = b;
+          // On a floor of several, each repository's keys start with its path; it's called by its GitHub name, or else its path.
+          const prefix = src.path ? `${src.path} ` : '';
+          const repo = src.path ? (origin ?? src.path) : undefined;
+          return { branch: b, list: changes.map((c) => ({ ...c, key: prefix + c.key, keys: c.keys.map((k) => prefix + k), dir: src.dir, ...(repo ? { repo } : {}) })) };
         } catch (err) {
           const why = (err as Error).message || String(err);
-          errors.push(/not a git repository/i.test(why) ? "This floor's folder isn't a git repository, so there's no history to read." : `${src.repo ?? 'This floor'}: its history couldn't be read (${why.split('\n')[0]}).`);
+          errors.push(/not a git repository/i.test(why) ? "This floor's folder isn't a git repository, so there's no history to read." : `${src.path ?? 'This floor'}: its history couldn't be read (${why.split('\n')[0]}).`);
+          return { branch: undefined, list: [] };
         }
-      }
-      if (multi) list.sort((a, b) => b.at - a.at);
-      if (!sources.length) errors.push('There is nothing on this floor to read changes from yet.');
-      return { list, branch, error: errors.join(' ') || undefined, at: Date.now() };
+      });
+      const list = read.flatMap((r) => r.list);
+      if (sources.length > 1) list.sort((a, b) => b.at - a.at);
+      if (!sources.length && !errors.length) errors.push("There's no repository on this floor to read changes from yet.");
+      if (truncated) errors.push(`This folder holds more repositories than are looked through; these are the first ${sources.length}.`);
+      const single = sources.length === 1 && !sources[0].path;
+      return { list, branch: single ? read[0]?.branch : undefined, error: errors.join(' ') || undefined, at: Date.now() };
     })();
     const reading = this.reading;
     return reading.then(
@@ -653,12 +718,14 @@ export class ChangeNotes {
     this.refreshing = (async () => {
       const errors: string[] = [];
       let answered = false;
-      for (const src of this.sources().slice(0, SOURCES_MAX)) {
+      const { sources } = await this.repositories();
+      // Every GitHub repository on the floor, a couple at a time; the others have nothing to ask.
+      await inTurn(sources, GITHUB_AT_ONCE, async (src) => {
         const origin = normalizeRepo(await gitMaybe(['remote', 'get-url', 'origin'], src.dir));
         const branch = origin ? await workingBranch(src.dir) : undefined;
-        if (!origin || !branch) continue;
+        if (!origin || !branch) return;
         await this.fetchBranch(src.dir, branch);
-        const key = src.repo ?? '';
+        const key = src.path ?? '';
         const cache = this.stored.pulls[key];
         const same = cache?.base === branch;
         const asked = Date.now();
@@ -670,11 +737,14 @@ export class ChangeNotes {
           this.stored.pulls[key] = { base: branch, web: r.web, syncedAt: asked, items: [...byNumber.values()].sort((a, b) => b.mergedAt - a.mergedAt) };
           answered = true;
         } catch (err) {
-          errors.push(`GitHub didn't answer just now (${((err as Error).message || 'no answer').split('\n')[0]}), so this is what this computer already knew.`);
+          const why = ((err as Error).message || 'no answer').split('\n')[0];
+          errors.push(`GitHub didn't answer just now${src.path ? ` about ${origin}` : ''} (${why}), so this is what this computer already knew.`);
         }
-      }
-      this.githubError = errors[0];
+      });
+      this.githubError = errors.length > 1 ? `${errors[0]} (And ${errors.length - 1} more like it.)` : errors[0];
       if (answered) this.save();
+      // A read that began before the fetch has the old history: this one starts after it.
+      await Promise.resolve(this.reading).catch(() => {});
       await this.fromGit();
     })()
       .catch((err) => {

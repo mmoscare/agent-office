@@ -1,32 +1,22 @@
-import { WHATS_NEW_PAGE, byDay, type ChangeNote, type WhatsNew } from '../../shared/whats-new';
+import { WHATS_NEW_PAGE, byDay, markSeen, seenAt, seenKey, type ChangeNote, type WhatsNew } from '../../shared/whats-new';
 import { store } from '../state';
 import { h } from './dom';
 import './whats-new.css';
 
 /** How often an open page asks again while lines are being written or GitHub is being asked. */
 const POLL_MS = 3000;
-/** The newest change this browser has shown, per floor: anything after it is new next time. */
-const SEEN = 'agent-office.whats-new.seen';
 
-function seenAt(floor: string): number | undefined {
+/** This browser's storage, when it has any it lets the page use. */
+function storage(): Storage | undefined {
   try {
-    const v = JSON.parse(localStorage.getItem(SEEN) ?? '{}')?.[floor];
-    return typeof v === 'number' ? v : undefined;
+    return window.localStorage;
   } catch {
     return undefined;
   }
 }
 
-function markSeen(floor: string, at: number) {
-  try {
-    const all = JSON.parse(localStorage.getItem(SEEN) ?? '{}') ?? {};
-    if (typeof all !== 'object' || (all[floor] ?? 0) >= at) return;
-    all[floor] = at;
-    localStorage.setItem(SEEN, JSON.stringify(all));
-  } catch {
-    // Private windows and full storage: nothing is marked new, which is fine.
-  }
-}
+/** What floor `id`'s New marks are kept under: its folder (see seenKey). */
+const seenOf = (id: string) => seenKey(store.floors.find((f) => f.id === id) ?? { id });
 
 export interface WhatsNewPage {
   el: HTMLElement;
@@ -49,7 +39,7 @@ export function whatsNewPage(): WhatsNewPage {
   let active = false;
   let timer: number | undefined;
   let asked = 0;
-  /** What this browser had seen of each floor before this look: changes after it are marked new. */
+  /** What this browser had seen of each floor (by seenKey) before this look: changes after it are marked new. */
   const before = new Map<string, number | undefined>();
 
   const picker = h('select.whats-new-floor', { 'aria-label': 'Which floor' });
@@ -90,8 +80,9 @@ export function whatsNewPage(): WhatsNewPage {
       if (!res.ok) throw new Error(body?.error || `The list couldn't be read (${res.status})`);
       data = body as WhatsNew;
       error = '';
-      if (!before.has(f)) before.set(f, seenAt(f));
-      if (data.notes[0]) markSeen(f, data.notes[0].at);
+      const key = seenOf(f);
+      if (!before.has(key)) before.set(key, seenAt(storage(), key));
+      if (data.notes[0]) markSeen(storage(), key, data.notes[0].at);
     } catch (err) {
       if (mine !== asked) return;
       error = (err as Error).message || "The list couldn't be read";
@@ -104,7 +95,7 @@ export function whatsNewPage(): WhatsNewPage {
     fillPicker();
     const scroller = el.parentElement;
     const top = scroller?.scrollTop ?? 0;
-    const seen = before.get(floor);
+    const seen = before.get(seenOf(floor));
     const n = data?.writing ?? 0;
     status.textContent = !data
       ? error

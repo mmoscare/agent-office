@@ -1,12 +1,12 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ChangeNotes, PlainWriter, claudeSummarizer, cleanNotes, describeChanges, parseLines, tidyTitle, type PlainInput, type Summarize } from '../src/server/change-notes.js';
+import { ChangeNotes, PlainWriter, claudeSummarizer, cleanNotes, describeChanges, floorSources, inTurn, parseLines, tidyTitle, type PlainInput, type Summarize } from '../src/server/change-notes.js';
 import { mergedPulls } from '../src/server/github-rest.js';
-import { byDay, dayLabel, type WhatsNew } from '../src/shared/whats-new.js';
+import { WHATS_NEW_SEEN, byDay, dayLabel, markSeen, seenAt, seenKey, type WhatsNew } from '../src/shared/whats-new.js';
 
 // No real Claude or GitHub here: the summarizer and gh are stand-ins, and fetching is switched off.
 // The history is built once (git is slow to start on Windows) and only read; each test keeps its
@@ -96,6 +96,17 @@ function build() {
   git(['checkout', '-q', 'main']);
   const bells = merge('feature/bells', 80, "Merge branch 'feature/bells'");
   return { ...f, sha: { first, notepad, typo, logos, author, wave, readme, pull, bells } };
+}
+
+/** A repository at `dir` whose main has these commits, oldest first, dated T0 + `start` s on: one `git fast-import`. */
+function tinyRepo(dir: string, messages: string[], start = 100) {
+  mkdirSync(dir, { recursive: true });
+  gitIn(dir)(['init', '-q', '-b', 'main']);
+  const data = (s: string) => `data ${Buffer.byteLength(s)}\n${s}\n`;
+  const stream = messages
+    .map((m, i) => `commit refs/heads/main\nmark :${i + 1}\ncommitter Test <t@example.invalid> ${T0 + start + i} +0000\n${data(m)}${i ? `from :${i}\n` : ''}M 644 inline f${i}.txt\n${data(m)}`)
+    .join('');
+  execFileSync('git', ['fast-import', '--quiet'], { cwd: dir, input: stream, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
 }
 
 /** A summarizer that writes "Plain: <title>", counting its calls; `fail` makes every call fail. */
@@ -313,6 +324,101 @@ test('merged pull requests are paged until they reach back past the last look', 
   assert.equal(since.complete, true);
   asked.length = 0;
   assert.equal((await mergedPulls('personal', dir, query, 0, 1)).complete, false);
+});
+
+test('a floor that is a folder of repositories: GitHub ones and local-only ones alike, each under its own path', async () => {
+  const h = history();
+  const folder = mkdtempSync(path.join(root, 'folder-'));
+  // A GitHub repository (a copy of the history), a local-only one two levels down, one with no commits
+  // yet, and a checkout inside node_modules that isn't the floor's.
+  const app = path.join(folder, 'app');
+  execFileSync('git', ['clone', '-q', '--no-hardlinks', h.dir, app], { windowsHide: true, stdio: 'ignore' });
+  gitIn(app)(['remote', 'set-url', 'origin', 'https://github.com/me/app.git']);
+  tinyRepo(path.join(folder, 'tools', 'notes'), ['Start a notes app', 'Notes can be pinned']);
+  mkdirSync(path.join(folder, 'empty'));
+  gitIn(path.join(folder, 'empty'))(['init', '-q']);
+  tinyRepo(path.join(folder, 'node_modules', 'dep'), ['Not ours']);
+
+  const found = await floorSources(folder);
+  assert.deepEqual(found.sources.map((s) => s.path), ['app', 'tools/notes']);
+  assert.equal(found.truncated, false);
+
+  const calls: string[][] = [];
+  const query = async (args: string[]) => {
+    calls.push(args);
+    return JSON.stringify([{ number: 1, title: 'Add a notepad you can click to jot notes', body: '', html_url: 'https://github.com/me/app/pull/1', merged_at: new Date(at(20)).toISOString(), updated_at: new Date(at(20)).toISOString(), merge_commit_sha: h.sha.notepad, head: { ref: 'feature/notepad' } }]);
+  };
+  const data = dataDir();
+  const notes = new ChangeNotes('f6', data, () => floorSources(folder), new PlainWriter(null), { query, ...noFetch });
+  const r = await whenWritten(notes);
+  assert.equal(r.error, undefined);
+  assert.equal(r.branch, undefined, 'a floor of several has no one branch');
+  assert.equal(r.total, 10);
+  const byRepo = (repo: string) => r.notes.filter((n) => n.repo === repo);
+  assert.equal(byRepo('me/app').length, 8, 'the GitHub one goes by its GitHub name');
+  assert.deepEqual(byRepo('tools/notes').map((n) => [n.key.split(' ')[0], n.text]), [
+    ['tools/notes', 'Notes can be pinned.'],
+    ['tools/notes', 'Start a notes app.'],
+  ]);
+  assert.ok(r.notes.every((n) => n.key.startsWith(n.repo === 'me/app' ? 'app commit:' : 'tools/notes commit:')));
+  // GitHub is asked about the one with a GitHub origin, and its answer kept under its path.
+  assert.deepEqual(calls.map((c) => c[c.length - 1].split('?')[0]), ['repos/me/app/pulls']);
+  assert.equal(r.notes.find((n) => n.key === `app commit:${h.sha.notepad}`)?.title, 'Add a notepad you can click to jot notes');
+  assert.ok(JSON.parse(readFileSync(path.join(data, 'whats-new.json'), 'utf8')).pulls.app);
+
+  // A folder of local-only repositories has history too.
+  const local = new ChangeNotes('f7', dataDir(), () => floorSources(path.join(folder, 'tools')), new PlainWriter(null), noFetch);
+  const l = await whenWritten(local);
+  assert.equal(l.error, undefined);
+  assert.deepEqual(l.notes.map((n) => [n.repo, n.title]), [['notes', 'Notes can be pinned'], ['notes', 'Start a notes app']]);
+});
+
+test('every repository on the floor is read, however many, a few at a time', async () => {
+  const folder = mkdtempSync(path.join(root, 'many-'));
+  const names = Array.from({ length: 11 }, (_, i) => `r${String(i + 1).padStart(2, '0')}`);
+  names.forEach((name, i) => tinyRepo(path.join(folder, name), [`Change in ${name}`], 200 + i));
+  const notes = new ChangeNotes('f8', dataDir(), () => floorSources(folder), new PlainWriter(null), noFetch);
+  const r = await whenWritten(notes);
+  assert.equal(r.total, 11);
+  assert.deepEqual(new Set(r.notes.map((n) => n.repo)), new Set(names));
+  assert.equal(r.notes[0].title, 'Change in r11', 'newest first across them all');
+
+  // At most `limit` at once, each item once, results in order.
+  let now = 0;
+  let most = 0;
+  const done = await inTurn(Array.from({ length: 12 }, (_, i) => i), 3, async (i) => {
+    most = Math.max(most, ++now);
+    await new Promise((resolve) => setTimeout(resolve, 5 + (i % 4) * 3));
+    now--;
+    return i * 2;
+  });
+  assert.equal(most, 3);
+  assert.deepEqual(done, Array.from({ length: 12 }, (_, i) => i * 2));
+  assert.deepEqual(await inTurn([], 3, async () => 1), []);
+});
+
+test("a floor's New marks go by its folder, so an id used again for another folder starts afresh", () => {
+  const box = new Map<string, string>();
+  const storage = { getItem: (k: string) => box.get(k) ?? null, setItem: (k: string, v: string) => void box.set(k, v) };
+  const before = seenKey({ id: 'app', dir: 'C:\\Users\\me\\one\\app\\' });
+  const after = seenKey({ id: 'app', dir: 'C:\\Users\\me\\two\\app' });
+  assert.equal(before, 'dir:C:/Users/me/one/app');
+  assert.notEqual(before, after);
+  assert.equal(seenKey({ id: 'app' }), 'id:app');
+  markSeen(storage, before, 500);
+  assert.equal(seenAt(storage, before), 500);
+  assert.equal(seenAt(storage, after), undefined, "the new folder doesn't inherit the old one's mark");
+  markSeen(storage, before, 300);
+  assert.equal(seenAt(storage, before), 500, 'never moves back');
+  markSeen(storage, after, 100);
+  assert.deepEqual(JSON.parse(box.get(WHATS_NEW_SEEN)!), { [before]: 500, [after]: 100 });
+  // No storage, broken storage or garbage in it: nothing is marked, nothing throws.
+  const broken = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } };
+  assert.equal(seenAt(broken, before), undefined);
+  assert.doesNotThrow(() => markSeen(broken, before, 1));
+  assert.equal(seenAt(undefined, before), undefined);
+  box.set(WHATS_NEW_SEEN, '[1,2]');
+  assert.equal(seenAt(storage, before), undefined);
 });
 
 test('changes go under Today, Yesterday, then their dates', () => {
