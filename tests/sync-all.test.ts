@@ -348,6 +348,22 @@ test('a commit made after the review is never uploaded: Go asks for a fresh revi
   assert.deepEqual(again.outgoing, ['Unreviewed']);
 });
 
+// The same guard: the review was of one branch, so another one checked out since is looked at afresh.
+test('a different branch checked out after the review is left alone: Go asks for a fresh review', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(path.join(fx.floor, 'app.txt'), 'reviewed edit\n');
+  const plan = await syncPlan(fx.floor, true, { app: fx.app });
+  const github = git(fx.floorOrigin, 'rev-parse', 'personal');
+  // Another branch that follows GitHub too, so only the switch itself can stop it.
+  git(fx.floor, 'checkout', '-q', '-b', 'other', '--track', 'origin/personal');
+  const result = (await syncRun(fx.floor, plan.token, defaults(plan), [], { restartable: true })) as SyncResult;
+  const floor = byKind(result, 'floor');
+  assert.equal(floor.state, 'skipped');
+  assert.equal(floor.message, 'floor is on a different branch now (other), so nothing was saved, pulled or uploaded there. Press Sync again to review it.');
+  assert.equal(git(fx.floorOrigin, 'rev-parse', 'personal'), github, 'nothing reached GitHub');
+  assert.equal(git(fx.floor, 'status', '--porcelain'), 'M app.txt');
+});
+
 // Codex on #92 (P2): fetch --prune, so a deleted branch isn't merged from a stale copy and recreated.
 test('a branch deleted on GitHub after the review is not pulled from a stale copy or brought back', async (t) => {
   const fx = fixture(t);

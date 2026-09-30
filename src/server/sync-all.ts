@@ -386,9 +386,10 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
   const done = await withGitRepository(repo.dir, '.', 'syncing', async (dir): Promise<SyncRepoResult> => {
     const t = await tracking(dir, repo.name);
     if (t.problem) return outcome(repo, { state: 'skipped', message: t.problem });
-    if (t.branch !== repo.branch) return outcome(repo, { state: 'skipped', message: `${repo.name} is on a different branch now (${t.branch}), so nothing was done. Press Sync again to check it.` });
-    // The review showed what's uploaded as of this commit: one made since (a worker's, a terminal's) was never reviewed.
-    if (t.head !== reviewed.head) return outcome(repo, { state: 'skipped', message: `New commits were made in ${repo.name} since you looked, so nothing was saved, pulled or uploaded there. Press Sync again to review them.` });
+    // The review showed what goes up as of this branch and this commit. Another branch, or commits made
+    // since (a worker's, a terminal's), were never reviewed: Go asks for a fresh look rather than upload them.
+    const moved = t.branch !== repo.branch ? `${repo.name} is on a different branch now (${t.branch})` : t.head !== reviewed.head ? `New commits were made in ${repo.name} since you looked` : undefined;
+    if (moved) return outcome(repo, { state: 'skipped', message: `${moved}, so nothing was saved, pulled or uploaded there. Press Sync again to review ${t.branch !== repo.branch ? 'it' : 'them'}.` });
     const start = t.head!;
     const lines: string[] = [];
 
