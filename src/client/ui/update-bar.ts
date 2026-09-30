@@ -1,37 +1,21 @@
-import type { OfficeStatus } from '../../shared/git-board';
+import { UPDATE_STEPS, type OfficeUpdateState } from '../../shared/office-update';
 import { store } from '../state';
-import { codeBox } from './copy-code';
-import { h, toast } from './dom';
-import { openManual } from './manual';
+import { h } from './dom';
+import { checkOfficeUpdate, checkOfficeUpdateAfter, currentStep, officeUpdateState, onOfficeUpdate, openOfficeUpdate } from './office-update';
 
 // The update bar across the top of the screen: after a pull request for Agent Office itself is
-// merged (in the office or on GitHub), the steps to get the office running it, ticked off as each
-// gets done: pull the floor, pull the app, build, restart, reload this page. "Hide" puts it away
-// until the next merge. It reads the same status as the Git board's 🏢 bar (/api/git/office).
-// The steps done by hand in PowerShell (pull the app, build, restart) each end in "Done, next step",
-// which checks at once and says what's still to do if it isn't done; the step chips open any step.
+// merged (in the office or on GitHub), which pull requests are waiting and how far the update has
+// got, with a button that opens the step-by-step walkthrough (ui/office-update.ts). After the
+// restart it says the update is live and who to tell "continue". "Hide" puts it away until the next
+// merge. It reads the walkthrough's state (/api/git/office/update). The step chips open the walkthrough
+// too, and coming back to this tab (from a restart done by hand, say) checks again.
 
 const HIDE_KEY = 'agent-office.updateBarHidden';
 const POLL_MS = 60_000;
-/** Back on this tab (from PowerShell, say): check this long after, once the switch has settled. */
+/** Back on this tab: check this long after, once the switch has settled. */
 const BACK_MS = 500;
-/** The steps done by hand in PowerShell: pull the app, build, restart. */
-const BY_HAND = new Set([1, 2, 3]);
-/** When this page loaded: an office started after it is running code this page doesn't have. */
-const pageLoadedAt = Date.now();
 
-let status: OfficeStatus | null = null;
-/** The check under way: another caller shares it rather than starting a second. */
-let inflight: Promise<void> | null = null;
-/** The last check couldn't reach the office (it's restarting, say). */
-let unreachable = false;
 let bar: HTMLElement | null = null;
-/** The step the owner chose to read (a chip, "next step anyway"); null follows the current step. */
-let viewing: number | null = null;
-/** The step whose "Done, next step" is being checked. */
-let checking: number | null = null;
-/** The step whose "Done, next step" found it not done yet: say why beside its button. */
-let notYet: number | null = null;
 
 function hiddenKey(): string {
   try {
@@ -41,195 +25,36 @@ function hiddenKey(): string {
   }
 }
 
-interface Step {
-  title: string;
-  done: boolean;
-  body: () => (Node | string)[];
+/** Which update this is: a newer merge brings the bar back after "Hide". */
+function keyOf(s: OfficeUpdateState): string {
+  return `${s.target ?? s.app.head ?? ''}|${s.last && !s.last.acknowledged ? s.last.at : ''}`;
 }
 
-function steps(s: OfficeStatus): Step[] {
-  const floors = s.floors ?? [];
-  const behindFloors = floors.filter((f) => f.behind > 0);
-  const app = `cd "${s.dir}"`;
-  const pullFloor = (f: { dir: string }) => {
-    const b = h('button.btn.primary', { type: 'button' }, '⬇️ Pull it');
-    b.addEventListener('click', async () => {
-      b.disabled = true;
-      b.textContent = 'Pulling…';
-      const error = await post('office/pull-floor', { dir: f.dir });
-      if (error) toast(error, 'error');
-      else toast('⬇️ Pulled the floor');
-      void check(true);
-    });
-    return b;
-  };
-  return [
-    {
-      title: 'Pull the floor',
-      done: behindFloors.length === 0,
-      body: () =>
-        behindFloors.flatMap((f) => [
-          h('p', {}, `The ${f.name} floor is ${f.behind} commit${f.behind === 1 ? '' : 's'} behind GitHub. `, pullFloor(f), ' or in PowerShell:'),
-          codeBox(`git -C "${f.dir}" pull --ff-only`).el,
-        ]),
-    },
-    {
-      title: 'Pull the app',
-      done: !s.needs.pull,
-      body: () => [
-        h('p', {}, 'In PowerShell, go to the folder the office runs from and pull:'),
-        ...(s.dirty ? [h('p.update-warn', {}, `⚠️ ${s.dirty} file${s.dirty === 1 ? ' has' : 's have'} uncommitted changes there (someone’s work in progress). Commit or finish them first.`)] : []),
-        codeBox(`${app}\ngit pull`).el,
-        h('p.update-note', {}, 'If it says CONFLICT: run ', h('code', {}, 'git merge --abort'), ' and ask Claude to “update the app folder”.'),
-      ],
-    },
-    {
-      title: 'Build',
-      done: !s.needs.pull && !s.needs.build,
-      body: () => [h('p', {}, 'Still in that folder:'), codeBox(s.needs.pull ? 'npm run build' : `${app}\nnpm run build`).el],
-    },
-    {
-      title: 'Restart',
-      done: !s.needs.pull && !s.needs.build && !s.needs.restart,
-      body: () => {
-        const cmd = h('button.btn', { type: 'button' }, '📘 The start command');
-        cmd.addEventListener('click', () => openManual('merge-steps'));
-        return [h('p', {}, 'When your workers are idle: press ', h('b', {}, 'Ctrl+C'), ' in the office’s window, then start it again. Tell busy workers “continue” afterwards.'), cmd];
-      },
-    },
-    {
-      title: 'Reload this page',
-      done: s.startedAt <= pageLoadedAt,
-      body: () => {
-        const b = h('button.btn.primary', { type: 'button' }, '🔄 Reload now');
-        b.addEventListener('click', () => location.reload());
-        const early = s.needs.pull || s.needs.build || s.needs.restart;
-        return [h('p', {}, early ? 'Once the office has restarted, reload this page to see the new code. ' : 'The office restarted with the new code. Reload to see it. '), b];
-      },
-    },
-  ];
-}
-
-/** Why step `i` isn't done yet, in plain words ('' when it is). Each step needs the ones before it. */
-function stillToDo(s: OfficeStatus, i: number): string {
-  if (i >= 1 && s.needs.pull) return `The app folder is still ${s.behind} commit${s.behind === 1 ? '' : 's'} behind ${s.upstream ?? 'GitHub'}. Did git pull finish? Look for an error in PowerShell.`;
-  if (i >= 2 && s.needs.build) return 'There’s no new build yet. Is npm run build still running, or did it stop with an error? Look in PowerShell, then check again once it has finished.';
-  if (i >= 3 && s.needs.restart) return 'The office hasn’t restarted since the build. Restart it as above, then check again.';
+function prLabel(s: OfficeUpdateState): string {
+  const prs = s.prs;
+  if (prs.length === 1) return `PR #${prs[0].number}: ${prs[0].title}`;
+  if (prs.length > 1) return `${prs.length} pull requests (${prs.slice(0, 3).map((p) => `#${p.number}`).join(', ')}${prs.length > 3 ? '…' : ''})`;
   return '';
 }
 
-async function post(path: string, body: unknown): Promise<string | undefined> {
-  try {
-    const q = new URLSearchParams({ floor: store.floor ?? '' });
-    const res = await fetch(`/api/git/${path}?${q}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const r = (await res.json().catch(() => ({}))) as { error?: string };
-    return r.error ?? (res.ok ? undefined : `HTTP ${res.status}`);
-  } catch (err) {
-    return (err as Error).message;
-  }
-}
-
-/**
- * Asks the office how its own code stands. `fresh`: a PR was just merged, so look at GitHub now.
- * While a check is under way, this returns that one instead of starting another.
- */
-export function check(fresh = false): Promise<void> {
-  if (!store.floor) return Promise.resolve();
-  inflight ??= load(store.floor, fresh).finally(() => {
-    inflight = null;
-    render();
-  });
-  return inflight;
-}
-
-/**
- * Checks again once any check under way is back. That one may have asked before a command in
- * PowerShell finished (git pull, say), and its answer would leave the bar on that step until the next poll.
- */
-async function checkAfter(): Promise<void> {
-  await inflight;
-  await check();
-}
-
-async function load(floor: string, fresh: boolean): Promise<void> {
-  try {
-    const q = new URLSearchParams({ floor, ...(fresh ? { fresh: '1' } : {}) });
-    const res = await fetch(`/api/git/office?${q}`, { credentials: 'same-origin', cache: 'no-store' });
-    unreachable = !res.ok;
-    if (res.ok) status = ((await res.json()) as { office: OfficeStatus | null }).office;
-  } catch {
-    // Offline for a moment (a restart): keep what we had.
-    unreachable = true;
-  }
-}
-
-/**
- * "Done, next step" on step `i`: check now, then show the next step to do, or say what's still left.
- * A check already under way may have started before the command finished, so this one comes after it.
- */
-async function done(i: number): Promise<void> {
-  checking = i;
-  notYet = null;
-  render();
-  await checkAfter();
-  checking = null;
-  const list = status ? steps(status) : [];
-  if (!unreachable && list[i]?.done) {
-    const next = list.findIndex((st, j) => j > i && !st.done);
-    viewing = next < 0 ? null : next;
-  } else notYet = i;
-  render();
-}
-
-/** The "Done, next step" button under a step done by hand, and why it isn't done when the check says so. */
-function nextRow(s: OfficeStatus, i: number): HTMLElement {
-  const waiting = checking === i;
-  const b = h(
-    'button.btn.primary.update-done',
-    { type: 'button', disabled: waiting },
-    waiting ? 'Checking…' : notYet === i ? '↻ Check again' : '✓ Done, next step',
-  );
-  b.addEventListener('click', () => {
-    if (checking === null) void done(i);
-  });
-  const row = h('div.update-next', {}, b);
-  if (notYet === i && !waiting) {
-    const anyway = h('button.update-link', { type: 'button' }, 'Show me the next step anyway →');
-    anyway.addEventListener('click', () => {
-      viewing = i + 1;
-      notYet = null;
-      render();
-    });
-    const why = unreachable ? 'Couldn’t reach the office just now. If it’s restarting, wait a moment and check again.' : stillToDo(s, i);
-    row.append(h('p.update-why', { role: 'status' }, why), anyway);
-  }
-  return row;
-}
-
-/** A pull request was merged here: its steps are wanted now, not at the next poll. */
+/** A PR was merged here: look at GitHub now, not at the next poll. */
 export function mergedJustNow(): void {
   // GitHub takes a moment to show the merge on the branch.
-  setTimeout(() => void check(true), 1500);
-  setTimeout(() => void check(true), 20_000);
+  setTimeout(() => void checkOfficeUpdate(true), 1500);
+  setTimeout(() => void checkOfficeUpdate(true), 20_000);
 }
 
 function render() {
-  const s = status;
+  const s = officeUpdateState();
   bar ??= (document.getElementById('app') ?? document.body).appendChild(h('div.update-bar', { role: 'region', 'aria-label': 'Update the office' }));
-  const list = s ? steps(s) : [];
-  const current = list.findIndex((st) => !st.done);
-  // Everything's done up to the reload, or the reload itself: which update this is, for "Hide".
-  const key = s ? `${s.target ?? ''}|${current === 4 ? s.startedAt : ''}` : '';
-  if (!s || current < 0 || s.error || hiddenKey() === key) {
+  const step = s ? currentStep(s) : null;
+  const last = s?.last && !s.last.acknowledged && s.last.verdict !== 'pending' ? s.last : undefined;
+  const key = s ? keyOf(s) : '';
+  if (!s || s.error || (!step && !last) || hiddenKey() === key) {
     bar.hidden = true;
     bar.replaceChildren();
-    viewing = notYet = null;
     return;
   }
-  // The step on show: the current one, unless the owner opened another. Checks don't move that.
-  if (viewing === current || (viewing !== null && !list[viewing])) viewing = null;
-  const shown = viewing ?? current;
-  if (notYet !== null && (notYet !== shown || list[notYet].done)) notYet = null;
   const hide = h('button.btn.update-hide', { type: 'button', title: 'Put this away until the next merge' }, 'Hide');
   hide.addEventListener('click', () => {
     try {
@@ -239,65 +64,67 @@ function render() {
     }
     bar!.hidden = true;
   });
+  // Space jumps in the office: a button left focused in the bar would be pressed again.
+  const opener = (b: HTMLButtonElement) => {
+    b.addEventListener('click', () => {
+      b.blur();
+      openOfficeUpdate();
+    });
+    return b;
+  };
+  const open = (label: string) => opener(h('button.btn.primary', { type: 'button' }, label));
+  bar.hidden = false;
+  if (!step && last) {
+    // After the restart: how it went.
+    const live = last.verdict === 'live';
+    const prs = last.prs;
+    const what = prs.length === 1 ? `PR #${prs[0].number} is live` : prs.length ? `${prs.length} pull requests are live` : 'The office runs the new code';
+    const waiting = last.now.filter((w) => !w.gone && w.status !== 'working' && w.status !== 'starting').length;
+    bar.replaceChildren(
+      h('div.update-head', { class: live ? 'ok' : 'bad' },
+        h('b', {}, live ? `✅ Done: ${what}.` : '❌ The office update didn’t finish.'),
+        h('span.update-sub', {}, live ? (waiting ? `Tell ${waiting} worker${waiting === 1 ? '' : 's'} “continue”.` : '') : 'It’s still on the old version.'),
+        h('span.update-grow', {}),
+        open(live ? (waiting ? '💬 Who to tell' : 'Details') : 'See what happened'),
+        hide,
+      ),
+    );
+    return;
+  }
+  const index = UPDATE_STEPS.findIndex((st) => st.id === step);
   const chips = h(
     'ol.update-steps',
-    {},
-    // Everything before the current step is done; everything after it is still to come.
-    ...list.map((st, i) => {
-      const chip = h(
-        'button',
-        { type: 'button', 'aria-current': i === shown ? 'step' : undefined, title: i === shown ? undefined : `Show step ${i + 1}` },
-        h('span.update-num', {}, i < current ? '✓' : String(i + 1)),
-        st.title,
-      );
-      chip.addEventListener('click', () => {
-        viewing = i;
-        render();
-      });
-      return h('li', { class: `${i < current ? 'done' : i === current ? 'now' : 'later'}${i === shown && i !== current ? ' shown' : ''}` }, chip);
-    }),
-  );
-  const st = list[shown];
-  // A step the owner went back (or ahead) to that's already done: say so, and no "Done" to press.
-  const doneAlready = shown < current || (BY_HAND.has(shown) && st.done);
-  const title = h('div.update-now-head', {}, h('b.update-now-title', {}, `Step ${shown + 1}: ${st.title}`));
-  if (shown !== current) {
-    const back = h('button.update-link', { type: 'button' }, `← Back to the current step (${current + 1})`);
-    back.addEventListener('click', () => {
-      viewing = null;
-      render();
-    });
-    title.append(back);
-  }
-  bar.hidden = false;
-  bar.replaceChildren(
-    h('div.update-head', {}, h('b', {}, current === 4 ? '✨ The office was updated' : s.needs.pull || current === 0 ? '🔀 New Agent Office code on GitHub' : '🛠 The office’s code changed'), h('span.update-sub', {}, current === 4 ? '' : 'To run it:'), chips, hide),
-    h(
-      'div.update-now',
-      {},
-      title,
-      ...(doneAlready ? [h('p.update-ok', {}, '✓ This step is done.')] : []),
-      ...st.body(),
-      ...(BY_HAND.has(shown) && !doneAlready ? [nextRow(s, shown)] : []),
+    { 'aria-label': `Step ${index + 1} of ${UPDATE_STEPS.length}` },
+    // Each chip opens the walkthrough, where the step is explained.
+    ...UPDATE_STEPS.map((st, i) =>
+      h('li', { class: i < index ? 'done' : i === index ? 'now' : 'later' },
+        opener(h('button', { type: 'button', title: 'Open the walkthrough', 'aria-current': i === index ? 'step' : undefined }, h('span.update-num', {}, i < index ? '✓' : String(i + 1)), st.title)),
+      ),
     ),
+  );
+  const title = s.app.behind > 0 || s.floors.some((f) => f.behind > 0) ? '🔀 New Agent Office code' : '🛠 The office’s code changed';
+  const label = prLabel(s);
+  bar.replaceChildren(
+    h('div.update-head', {}, h('b', {}, title), label ? h('span.update-pr', { title: label }, label) : null, h('span.update-grow', {}), open('👉 Walk me through it'), hide),
+    h('div.update-now', {}, h('span.update-sub', {}, `Step ${index + 1} of ${UPDATE_STEPS.length}: ${UPDATE_STEPS[index].title}`), chips),
   );
 }
 
 /** Starts watching; call once when the page is up. */
 export function mountUpdateBar(): void {
-  void check();
+  onOfficeUpdate(render);
+  void checkOfficeUpdate();
   setInterval(() => {
-    if (document.visibilityState === 'visible') void check();
+    if (document.visibilityState === 'visible') void checkOfficeUpdate();
   }, POLL_MS);
-  store.on('floor', () => void check());
-  // Back from PowerShell (this tab shown again, or the window focused): check straight away, so the
-  // bar has usually moved on to the next step by the time you look. A poll still under way asked
-  // before you came back, so this check comes after it.
+  store.on('floor', () => void checkOfficeUpdate());
+  // Back on this tab (from the tray icon or PowerShell): check again, after any check under way,
+  // which may have asked before whatever was done out there had finished.
   let backTimer: ReturnType<typeof setTimeout> | undefined;
   const back = () => {
     if (document.visibilityState !== 'visible' || !bar || bar.hidden) return;
     clearTimeout(backTimer);
-    backTimer = setTimeout(() => void checkAfter(), BACK_MS);
+    backTimer = setTimeout(() => void checkOfficeUpdateAfter(), BACK_MS);
   };
   document.addEventListener('visibilitychange', back);
   window.addEventListener('focus', back);
