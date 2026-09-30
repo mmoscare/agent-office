@@ -17,6 +17,7 @@ import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
+import type { StickyAction, StickyNote } from './stickies.js';
 import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
 import type { ContentAction, ContentItem } from './content-kanban.js';
 import type { VpView } from './vp.js';
@@ -1345,6 +1346,8 @@ export type ClientMsg =
   | { t: 'ping'; at: number }
   /** A change to your own 🔥 To Do board (see shared/todos.ts), or to the office's 🏢 Autonomous Tasks board. */
   | { t: 'todo'; change: TodoAction; board?: TodoBoardId }
+  /** A change to your reminder stickies on the wall (see shared/stickies.ts). */
+  | { t: 'sticky'; change: StickyAction }
   /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
   | { t: 'content'; change: ContentAction };
 
@@ -1491,6 +1494,8 @@ export type ServerMsg =
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
   /** On the 🏢 Autonomous Tasks board, everyone's changes come to everyone; `mine` is the answer to your own change (every one gets exactly one). */
   | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId; mine?: boolean }
+  /** Your reminder stickies as they are now: on arriving, and after every change from any of your windows. */
+  | { t: 'stickies'; items: StickyNote[] }
   /**
    * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
    * answer to your own change (every one gets exactly one), so your window knows which are done.

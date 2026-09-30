@@ -102,7 +102,18 @@ fetch(process.env.AGENT_OFFICE_HOOK_URL + '/hooks/codex?worker=' + process.env.A
   };
   await atDesk(); await page.keyboard.press('e');
   const hire = page.getByRole('dialog', { name: /Hire a worker at/ }); await hire.waitFor();
+  // Hire pressed before the list arrives waits for it, then asks which of the several repositories to use.
+  let release; const slow = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/workspace/repositories**', async route => { await slow; await route.continue(); });
   await hire.getByRole('button', { name: 'Choose starting branch…' }).click();
+  await hire.getByRole('button', { name: 'Hire & start' }).click();
+  await hire.getByRole('button', { name: 'Finding repositories…' }).waitFor();
+  release();
+  await hire.getByText('Select at least one repository (12 per worker maximum).').waitFor({ timeout: 90000 }); // a real scan of three repos
+  assert.equal(await hire.getByText(/Wait for the repository list/).count(), 0);
+  assert.equal(await page.evaluate(() => window.__office.store.workers.size), 0);
+  await page.unroute('**/api/workspace/repositories**');
+  console.log('Hire pressed mid-search waited for the list, then asked for a repository choice.');
   assert.equal(await hire.getByRole('checkbox', { name: 'Work in separate git worktrees & branches' }).isChecked(), true);
   await hire.getByRole('checkbox', { name: 'Use frontend', exact: true }).check();
   await hire.getByRole('checkbox', { name: 'Use backend', exact: true }).check();
