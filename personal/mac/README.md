@@ -121,7 +121,8 @@ has the tray icon and its server terminal:
   Windows launcher uses (it is plain node), and opens Chrome once the office is ready.
 - **The server log.** The server's output shows in the window and also goes to `server.log`.
 - **Stopping.** Press **Ctrl+C** in the window, or close it. This stops the office and its workers,
-  as Stop does on Windows.
+  as Stop does on Windows. A second **Ctrl+C**, or an office that hasn't stopped after 15 seconds,
+  is ended by force.
 - **Restarting and reopening.** Type **r** and press Enter to restart. On a Mac the workers keep
   running through a restart, in their terminal host, and the new office picks them up. Type **o**
   and press Enter to open the office in Chrome again.
@@ -135,7 +136,8 @@ starts get your login shell's `PATH` (Homebrew, `claude`, `gh`).
 The installer writes these, and changes nothing else:
 
 - `~/Library/Application Support/Agent Office/`: `settings.json` (checkout, office folder, port,
-  branch), `Agent Office.command` (the server window), and later `server.log` and `launcher.pid`;
+  branch), `Agent Office.command` (the server window), and later `server.log` and `launcher.pid`
+  (a running launcher's pid; it counts only while that pid still runs `launcher.mjs`);
 - `~/Applications/Agent Office.app`, whose icon is made from `personal/windows/Agent Office.png`
   with `sips` and `iconutil`.
 
@@ -157,7 +159,9 @@ things:
 - a restart for an update comes back up;
 - a failed build is retried;
 - Chrome opens only once;
-- stop and restart reach the office as Ctrl+C and SIGTERM.
+- stop and restart reach the office as Ctrl+C and SIGTERM;
+- an office that doesn't stop, or hangs while starting, is ended by force;
+- a saved launcher pid counts only while it runs `launcher.mjs`.
 
 They also check the installer's files and the shell quoting.
 

@@ -66,12 +66,13 @@ ${Object.entries(keys).map(([k, v]) => `  <key>${k}</key><string>${xml(v)}</stri
 export function appScript({ supportDir, port }) {
   return `#!/bin/bash
 # Agent Office.app, made by personal/mac/install-launcher.mjs. Opens the office in Chrome when it's
-# running (or a launcher is starting it), and otherwise starts it in a Terminal window.
+# running (or a launcher is starting it), and otherwise starts it in a Terminal window. A saved pid
+# counts only while it runs launcher.mjs: the kernel gives a dead launcher's pid out again.
 SUPPORT=${sh(supportDir)}
 URL=${sh(`http://localhost:${port}`)}
 running() {
   curl -fsS -m 1 ${sh(`http://127.0.0.1:${port}/api/health`)} 2>/dev/null | grep -Eq '"ok" *: *true' && return 0
-  pid=$(cat "$SUPPORT/launcher.pid" 2>/dev/null) && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  pid=$(cat "$SUPPORT/launcher.pid" 2>/dev/null) && [ -n "$pid" ] && ps -p "$pid" -o command= 2>/dev/null | grep -Eq '(^|[ /])launcher\\.mjs( |$)'
 }
 if running; then
   open -a 'Google Chrome' "$URL" 2>/dev/null || open "$URL"

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error — the launcher is plain JavaScript (no build step) so it runs on a Mac straight from the checkout.
-import { currentBranch, healthy, loadSettings, officePassword, problem, supervise } from '../personal/mac/launcher.mjs';
+import { currentBranch, healthy, isLauncher, keychain, loadSettings, officePassword, problem, supervise } from '../personal/mac/launcher.mjs';
 // @ts-expect-error — as above.
 import { appScript, BUNDLE_ID, commandScript, install, sh } from '../personal/mac/install-launcher.mjs';
 
@@ -15,7 +15,11 @@ import { appScript, BUNDLE_ID, commandScript, install, sh } from '../personal/ma
 // and starts it again on 75/76, as Launcher.cs does on Windows; install-launcher.mjs writes the
 // Agent Office.app that opens it. The "office" here is a stand-in host, so no real office starts.
 
-/** A stand-in for host.mjs: answers /api/health, stops on "stop", and exits as plan.json says for each start. */
+/**
+ * A stand-in for host.mjs: answers /api/health, stops on "stop", and exits as plan.json says for each
+ * start. A "hang" step never listens or reads stdin (a start stuck before host.mjs's reader); an
+ * "ignoreStop" step reads the stop line and carries on.
+ */
 const FAKE_HOST = `import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,15 +33,18 @@ fs.appendFileSync(at('env'), (process.env.AGENT_OFFICE_PASSWORD ?? '-') + '\\n')
 const step = plan[Math.min(n, plan.length - 1)];
 console.log('fake office start ' + (n + 1));
 if (step.exitBeforeReady !== undefined) process.exit(step.exitBeforeReady);
+if (step.hang) { setInterval(() => {}, 1000); } else {
 const server = http.createServer((req, res) => res.end('{"ok": true}')).listen(Number(port), '127.0.0.1', () => {
   if (step.exitAfterReady !== undefined) setTimeout(() => process.exit(step.exitAfterReady), 1000);
 });
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (line !== 'stop') return;
   fs.appendFileSync(at('stops'), 'stop\\n');
+  if (step.ignoreStop) return;
   server.close();
   process.exit(0);
 });
+}
 `;
 
 function freePort(): Promise<number> {
@@ -58,7 +65,7 @@ async function until(what: string, check: () => boolean | Promise<boolean>, ms =
   }
 }
 
-async function office(plan: object[]) {
+async function office(plan: object[], options: { readyMs?: number; stopMs?: number } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'mac-launcher-'));
   writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(plan));
   const host = path.join(dir, 'host.mjs');
@@ -66,7 +73,7 @@ async function office(plan: object[]) {
   const port = await freePort();
   const lines: string[] = [];
   let opens = 0;
-  const run = supervise({ codeDir: dir, officeDir: dir, port, host, env: { AGENT_OFFICE_PASSWORD: 'pw' }, open: () => opens++, out: (l: string) => lines.push(l) });
+  const run = supervise({ codeDir: dir, officeDir: dir, port, host, env: { AGENT_OFFICE_PASSWORD: 'pw' }, open: () => opens++, out: (l: string) => lines.push(l), ...options });
   const starts = () => (existsSync(path.join(dir, 'starts')) ? Number(readFileSync(path.join(dir, 'starts'), 'utf8')) : 0);
   return { dir, port, run, lines, starts, opens: () => opens, close: () => rmSync(dir, { recursive: true, force: true }) };
 }
@@ -120,6 +127,42 @@ test('supervise: restart() stops the office and starts it again', async () => {
     o.run.stop();
     assert.equal(await o.run.done, 0);
     assert.equal(o.opens(), 1, 'no second tab: the page reconnects by itself');
+  } finally { o.close(); }
+});
+
+test('supervise: an office that ignores its stop line is ended by force after the deadline, and at once by a second stop()', async () => {
+  const slow = await office([{ ignoreStop: true }], { stopMs: 1000 });
+  try {
+    await until('the first start', () => slow.opens() === 1);
+    const asked = Date.now();
+    slow.run.stop();
+    assert.equal(await slow.run.done, 1, 'a forced end is not a clean exit');
+    assert.ok(Date.now() - asked >= 900, 'the office got its deadline first');
+    assert.equal(readFileSync(path.join(slow.dir, 'stops'), 'utf8'), 'stop\n', 'the graceful stop was tried');
+    assert.ok(slow.lines.some((l) => l.includes('did not stop within 1 s')) && slow.lines.includes('Ending Agent Office now.'));
+    assert.ok(!(await healthy(slow.port)), 'the office is gone');
+  } finally { slow.close(); }
+  const twice = await office([{ ignoreStop: true }], { stopMs: 60_000 });
+  try {
+    await until('the first start', () => twice.opens() === 1);
+    twice.run.stop();
+    await until('the stop line', () => existsSync(path.join(twice.dir, 'stops')));
+    const again = Date.now();
+    twice.run.stop();
+    assert.equal(await twice.run.done, 1);
+    assert.ok(Date.now() - again < 5000, 'a second Ctrl+C does not wait for the deadline');
+    assert.ok(!twice.lines.some((l) => l.includes('did not stop within')));
+  } finally { twice.close(); }
+});
+
+test('supervise: a start that hangs before host.mjs reads its stdin is ended after the readiness and stop deadlines', async () => {
+  const o = await office([{ hang: true }], { readyMs: 800, stopMs: 800 });
+  try {
+    assert.equal(await o.run.done, 1);
+    assert.equal(o.opens(), 0);
+    assert.equal(o.starts(), 1, 'a hang is not retried');
+    assert.ok(o.lines.some((l) => l.includes('did not become ready')) && o.lines.some((l) => l.includes('did not stop within 1 s')), o.lines.join('\n'));
+    assert.equal(o.run.pid, undefined, 'the launcher no longer has a child');
   } finally { o.close(); }
 });
 
@@ -201,6 +244,53 @@ test('the password: from the keychain, asked for once, or none when the office k
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('a saved launcher pid counts only while that pid runs launcher.mjs', async () => {
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+  const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()));
+  try {
+    const pid = child.pid as number;
+    assert.equal(isLauncher(pid, () => '/opt/homebrew/bin/node personal/mac/launcher.mjs'), true);
+    assert.equal(isLauncher(pid, () => 'node /Users/me/agent-office/personal/mac/launcher.mjs --forget-password'), true);
+    assert.equal(isLauncher(pid, () => 'node personal/mac/install-launcher.mjs'), false, 'the installer is not a launcher');
+    assert.equal(isLauncher(pid, () => '/Applications/Safari.app/Contents/MacOS/Safari'), false, 'a reused pid');
+    assert.equal(isLauncher(pid, () => null), false, 'nothing known about it');
+    assert.equal(isLauncher(process.pid, () => 'node personal/mac/launcher.mjs'), false, 'not this launcher itself');
+    assert.equal(isLauncher(0, () => 'node personal/mac/launcher.mjs'), false);
+    child.kill();
+    await exited;
+    await until('the pid to be gone', () => { try { process.kill(pid, 0); return false; } catch { return true; } });
+    assert.equal(isLauncher(pid, () => 'node personal/mac/launcher.mjs'), false, 'a dead launcher');
+  } finally { child.kill(); }
+});
+
+test('the keychain: security is asked to prompt (a trailing -w), and the password is never on its command line', () => {
+  // security(1): "-w password  Specify password to be added. Put at end of command to be prompted (recommended)".
+  const calls: { args: string[]; options: { stdio?: unknown } }[] = [];
+  const real = keychain.security;
+  keychain.security = (args: string[], options: { stdio?: unknown }) => {
+    calls.push({ args, options });
+    if (args[0] === 'find-generic-password') return 'from the keychain\n';
+    return '';
+  };
+  try {
+    keychain.ask('/Users/me/Personal-Portfolio');
+    const [ask] = calls;
+    assert.equal(ask.args[0], 'add-generic-password');
+    assert.equal(ask.args.at(-1), '-w', 'a bare -w at the end makes security prompt');
+    assert.ok(ask.args.includes('-U') && ask.args.includes('/Users/me/Personal-Portfolio'), 'updates an item kept for this office folder');
+    assert.equal(ask.options.stdio, 'inherit', 'the prompt happens in this terminal');
+    assert.equal(keychain.find('/Users/me/Personal-Portfolio'), 'from the keychain');
+    assert.deepEqual(calls[1].args, ['find-generic-password', '-s', 'Agent Office', '-a', '/Users/me/Personal-Portfolio', '-w']);
+    assert.equal(keychain.forget('/Users/me/Personal-Portfolio'), true);
+    assert.equal(calls[2].args[0], 'delete-generic-password');
+    assert.ok(calls.every((c) => !c.args.includes('from the keychain')), 'no call carries the password');
+    keychain.security = () => { throw new Error('User interaction is not allowed.'); };
+    assert.equal(keychain.find('/Users/me/Personal-Portfolio'), null);
+    assert.doesNotThrow(() => keychain.ask('/Users/me/Personal-Portfolio'), 'a cancelled prompt is reported by officePassword, not thrown here');
+    assert.equal(keychain.forget('/Users/me/Personal-Portfolio'), false);
+  } finally { keychain.security = real; }
+});
+
 test('install writes the settings, the server window and Agent Office.app, and only ever replaces its own app', () => {
   const dir = mkdtempSync(path.join(tmpdir(), "mac launcher's install-"));
   try {
@@ -217,6 +307,7 @@ test('install writes the settings, the server window and Agent Office.app, and o
     const exe = path.join(done.app, 'Contents', 'MacOS', 'Agent Office');
     const script = readFileSync(exe, 'utf8');
     assert.ok(script.includes(`SUPPORT=${sh(support)}`) && script.includes("'http://127.0.0.1:4611/api/health'"));
+    assert.ok(script.includes('ps -p "$pid" -o command= 2>/dev/null | grep -Eq'), 'a saved pid counts only while it runs launcher.mjs');
     assert.equal(readFileSync(done.command, 'utf8'), commandScript({ codeDir: code, node: '/opt/homebrew/bin/node' }));
     if (process.platform !== 'win32') {
       assert.equal(statSync(exe).mode & 0o111, 0o111);
