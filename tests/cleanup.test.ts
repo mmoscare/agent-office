@@ -184,7 +184,7 @@ test('protected: the checked-out, default, main and personal branches, pr-assets
   assert.equal(item(s, open.branch).pr?.state, 'OPEN');
   assert.equal(item(s, open.branch).remoteDeletable, false);
   assert.equal(why(live.branch).kind, 'worker');
-  assert.match(why(live.branch).text, /Gizmo's \(desk-5\): send Gizmo home from the office instead/);
+  assert.match(why(live.branch).text, /Gizmo's \(desk-5\): clock Gizmo out from the office instead/);
   assert.match(why('office/bolt-0003-todo-wall').text, /^Bolt's/);
   assert.match(why(bolt.branch).text, /^Bolt's/);
   assert.match(why(meeting.branch).text, /meeting room/);
