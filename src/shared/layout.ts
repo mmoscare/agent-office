@@ -125,7 +125,7 @@ export function stationLabel(kind: StationKind): string {
 /** The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks. */
 export const LOFT = { minX: 9, maxX: FLOOR.maxX, minZ: 8, maxZ: FLOOR.maxZ, y: 3, height: 2.8 } as const;
 /**
- * Where O stands you, and where T's circle of waiting seats ends: in the boss's office, clear of the
+ * Where J stands you, and where T's circle of waiting seats ends: in the boss's office, clear of the
  * desk, the telescope and the glass, looking west over the floor. `facing` is the player's heading.
  */
 export const OFFICE_SPOT = { x: 11.2, y: LOFT.y, z: 9.4, facing: -Math.PI / 2, pitch: -0.28 } as const;
