@@ -431,10 +431,12 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
       if (!dragging) return;
       e.preventDefault();
       const id = dragging;
+      // Counted while it's still the card being dragged, so it's left out like the move counts it.
+      const at = folded ? 0 : dropIndex(list, e.clientY);
       dragging = undefined;
       clearMarks();
       if (!items().some((t) => t.id === id)) return;
-      change({ action: 'move', id, column, index: folded ? 0 : areaFilter ? placeIndex(column, dropIndex(list, e.clientY), id) : dropIndex(list, e.clientY) });
+      change({ action: 'move', id, column, index: folded ? 0 : placeIndex(column, at, id) });
     });
     return section;
   }

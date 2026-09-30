@@ -176,6 +176,28 @@ try {
   assert.deepEqual(await cards('urgent'), ['Call the bank', 'Pay the invoice']);
   assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
 
+  // Dragged down its own column onto the lower half of the next card: it lands between that one and
+  // the one after, with or without a filter (a hidden card keeps its place).
+  const lowerHalf = async (target) => ({ x: 20, y: Math.round((await target.boundingBox()).height * 0.8) });
+  const todoQuick = column('todo').getByRole('textbox', { name: 'Add to Not urgent' });
+  for (const text of ['Sort the post', 'Plan the trip']) {
+    await todoQuick.fill(text);
+    await todoQuick.press('Enter');
+  }
+  assert.deepEqual(await cards('todo'), ['Plan the trip', 'Sort the post', 'Tidy the garage and shed']);
+  const sort = card('todo', 'Sort the post');
+  await card('todo', 'Plan the trip').dragTo(sort, { targetPosition: await lowerHalf(sort) });
+  assert.deepEqual(await cards('todo'), ['Sort the post', 'Plan the trip', 'Tidy the garage and shed']);
+  await sort.getByRole('button', { name: 'Mark as Personal' }).click();
+  await board.getByRole('button', { name: 'Show just Personal' }).click();
+  await todoQuick.fill('Book the dentist');
+  await todoQuick.press('Enter');
+  assert.deepEqual(await cards('todo'), ['Book the dentist', 'Sort the post', 'Tidy the garage and shed']);
+  await card('todo', 'Book the dentist').dragTo(sort, { targetPosition: await lowerHalf(sort) });
+  assert.deepEqual(await cards('todo'), ['Sort the post', 'Book the dentist', 'Tidy the garage and shed']);
+  await board.getByRole('button', { name: 'Show all' }).click();
+  assert.deepEqual(await cards('todo'), ['Sort the post', 'Plan the trip', 'Book the dentist', 'Tidy the garage and shed']);
+
   // 📌 Issues turns the window over to GitHub's, and back.
   await board.getByRole('button', { name: '📌 Issues', exact: true }).click();
   const issues = page.getByRole('dialog', { name: 'Issues board', exact: true });
@@ -228,7 +250,7 @@ try {
   await board.locator('.todo-card').first().waitFor();
   assert.deepEqual(await cards('active'), ['Write the report']);
   assert.deepEqual(await cards('urgent'), ['Call the bank', 'Pay the invoice']);
-  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
+  assert.deepEqual(await cards('todo'), ['Sort the post', 'Plan the trip', 'Book the dentist', 'Tidy the garage and shed']);
   assert.deepEqual(await cards('done'), ['Answer the email', 'Fix the login bug'], 'Completed stays unfolded once shown');
 
   // Narrower: two columns a row, then one.
