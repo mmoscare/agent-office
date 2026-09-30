@@ -178,7 +178,10 @@ try {
 
   // Dragged down its own column onto the lower half of the next card: it lands between that one and
   // the one after, with or without a filter (a hidden card keeps its place).
-  const lowerHalf = async (target) => ({ x: 20, y: Math.round((await target.boundingBox()).height * 0.8) });
+  // Measured in one go: a redraw can swap the card out between finding it and measuring it.
+  const lowerHalf = async (target) => ({ x: 20, y: await target.evaluate((el) => Math.round(el.getBoundingClientRect().height * 0.8)) });
+  // Every change answered, so the office's answer doesn't redraw the board mid-drag.
+  const settled = () => page.waitForFunction(() => window.__office.store.todosPending === 0);
   const todoQuick = column('todo').getByRole('textbox', { name: 'Add to Not urgent' });
   for (const text of ['Sort the post', 'Plan the trip']) {
     await todoQuick.fill(text);
@@ -186,6 +189,7 @@ try {
   }
   assert.deepEqual(await cards('todo'), ['Plan the trip', 'Sort the post', 'Tidy the garage and shed']);
   const sort = card('todo', 'Sort the post');
+  await settled();
   await card('todo', 'Plan the trip').dragTo(sort, { targetPosition: await lowerHalf(sort) });
   assert.deepEqual(await cards('todo'), ['Sort the post', 'Plan the trip', 'Tidy the garage and shed']);
   await sort.getByRole('button', { name: 'Mark as Personal' }).click();
@@ -193,6 +197,7 @@ try {
   await todoQuick.fill('Book the dentist');
   await todoQuick.press('Enter');
   assert.deepEqual(await cards('todo'), ['Book the dentist', 'Sort the post', 'Tidy the garage and shed']);
+  await settled();
   await card('todo', 'Book the dentist').dragTo(sort, { targetPosition: await lowerHalf(sort) });
   assert.deepEqual(await cards('todo'), ['Sort the post', 'Book the dentist', 'Tidy the garage and shed']);
   await board.getByRole('button', { name: 'Show all' }).click();
