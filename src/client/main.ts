@@ -3926,7 +3926,7 @@ void whoami().then(() => {
 });
 
 // Debug handle for quick checks from the console / headless screenshots.
-(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball };
+(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball, staffer };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;
