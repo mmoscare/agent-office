@@ -3203,6 +3203,7 @@ window.addEventListener('pointerup', (e) => {
 window.addEventListener('keyup', (e) => e.code === 'KeyV' && voice.stopTalking(), true);
 window.addEventListener('blur', () => voice.stopTalking());
 
+/** The office's own keys; false for any other key, which is left to walking and the browser. */
 function officeKey(e: KeyboardEvent): boolean {
   if (e.code === 'KeyO') {
     if (!e.repeat) toOffice();
