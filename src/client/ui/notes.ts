@@ -535,7 +535,8 @@ export function mountNotesPad(net: Net): NotesPad {
 
   function newNote(text = '') {
     if (!net.up) return offline();
-    const into = folder === 'trash' || query ? 'notes' : folder;
+    // Links to watch are added by pasting a link; a note started from there (for a picture, say) goes in Notes.
+    const into = folder === 'trash' || folder === 'links' || query ? 'notes' : folder;
     const id = newNoteId();
     leave();
     if (!change({ action: 'add', id, folder: into, text })) return toast('Couldn’t start a note: the pad is full', 'warn');
@@ -850,7 +851,7 @@ export function mountNotesPad(net: Net): NotesPad {
     flush: () => {
       save();
       const n = ed && find(ed.id);
-      if (n && n.deletedAt === undefined && isBlank(n) && !ed!.adding) leave();
+      if (n && n.deletedAt === undefined && isBlank(n) && !ed!.adding) closeEditor();
     },
     destroy: () => {
       leave();
