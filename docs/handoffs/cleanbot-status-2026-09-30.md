@@ -39,9 +39,12 @@ delete anything the PR agent still needs**.
 - `node --import tsx --test tests/nav.test.ts tests/reception.test.ts tests/staffer.test.ts`: 17/17 pass.
 - `tests/office-cleanbot.test.ts`: 5/5 pass (command parsing, requests, endpoint, one sweep at a time,
   pins, brief and blocked commands).
-- `tests/prune-floor.test.ts`: before the trim fix, 4 of 5 passed. The failure was the stray-with-edit
-  case, which found the bug above. The re-run after the fix hadn't finished when this was written:
-  **run it again**. It takes about 4 minutes under load:
+- `tests/prune-floor.test.ts` after the trim fix: 4 of 5 pass. In the first test, every verdict and
+  suggestion assertion passes, including the stray-with-edit case, and it fails at line 209 only. That
+  line expects the printed `office-cleanbot delete …` command to list the names unquoted. The
+  scratchpad row's name is an absolute temp path, and `deleteCommands` quotes it (probably a character
+  outside `[\w./@:+-]`). Fix the test so it accepts the quoted form, or check each name, then re-run
+  (about 4 minutes under load):
   `node --import tsx --test --test-force-exit --test-timeout=600000 tests/prune-floor.test.ts`
 
 ## Left to do
