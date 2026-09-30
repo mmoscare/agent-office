@@ -25,7 +25,7 @@ Four reminder stickies hang in a row on the north wall, just above the issues / 
 - `src/client/ui/stickies.ts`, `src/client/ui/stickies.css`: editor (text, color, width, height, nudge, hide, take down) and the add / show-hidden window.
 - `src/client/world/office.ts`: `sticky` and `stickyAdd` interact kinds.
 - `src/client/main.ts`: mount, E, hint, reach, and third-person pointing.
-- `src/client/ui/hud.ts`, `README.md`: how to use them.
+- `src/client/ui/hud.ts`, `docs/features.md`: how to use them (README.md was cut down by the author sync, #72, so the description lives in the features list).
 
 ## Decisions
 
@@ -47,6 +47,16 @@ Four reminder stickies hang in a row on the north wall, just above the issues / 
 - Branch `office/sprocket-c2fd`, commit `fe13058`.
 - No related GitHub issue was found for this request.
 - PR: https://github.com/mmoscare/agent-office/pull/79 (base `personal`).
+
+## Kiosk follow-up (2026-09-30)
+
+The owner told the PR kiosk "merge finished PRs, resolve conflicts and fix review comments".
+
+- Merged `personal` in twice (it moved to #71 mid-merge). Conflicts in protocol.ts, state.ts, office.ts, server.ts and main.ts kept both sides. README.md is personal's, and the stickies text moved to `docs/features.md`. There's no key-table row because stickies use E.
+- Codex P2, owner cap: past 256 lists, a new account got an empty wall and all its changes were refused. Now the store keeps lists in last-seen order, also on disk, and drops the one seen longest ago. Test: "with every list taken, someone new still gets theirs…".
+- Codex P2, colors: `isStickyColor` used `in`, which accepts `constructor`, `__proto__` and similar. It uses `Object.hasOwn` now. Test: "only the palette's own colors count…".
+- Found in the browser check: E on a note typed an "e" into it, and the note saved that 400 ms later. The editor now focuses after 30 ms, like `openPrompt`.
+- `tests/stickies-ui.mjs`: headless check on three floors, including the Content Kanban floor.
 
 ## Remaining
 
