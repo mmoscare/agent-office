@@ -207,22 +207,29 @@ export class VpDesk {
     return { pressure: () => this.floor.pressure(), tmpRoot: this.floor.tmpRoot, log: (l) => this.log(job, l) };
   }
 
-  /** The checks for a repository: saved in .agent-office/vp-recipes.json (the owner can edit it), else detected and saved there. */
+  /**
+   * The checks for a repository. Detected each time from its package.json (agent-office gets the
+   * office's own), and written to .agent-office/vp-recipes.json for the owner to see; once the owner
+   * edits one there and sets its "source" to "saved", that one is used instead.
+   */
   recipe(repoDir: string, repo: string): Recipe {
     const file = path.join(this.floor.dataDir, 'vp-recipes.json');
-    let saved: Record<string, Recipe> = {};
+    let saved: Record<string, Recipe & { note?: string }> = {};
     try {
       saved = JSON.parse(readFileSync(file, 'utf8'));
     } catch {
       // none yet
     }
     const mine = saved[repo.toLowerCase()];
-    if (mine && Array.isArray(mine.steps)) return { ...mine, source: 'saved' };
+    if (mine?.source === 'saved' && Array.isArray(mine.steps)) return mine;
     const found = detectRecipe(repoDir);
-    try {
-      writeFileSync(file, JSON.stringify({ ...saved, [repo.toLowerCase()]: found }, null, 2), { mode: 0o600 });
-    } catch {
-      // unsaved: detected again next time
+    if (JSON.stringify(mine?.steps) !== JSON.stringify(found.steps)) {
+      const note = 'Detected by the VP. To change it, edit the steps and set "source" to "saved": the VP then keeps yours.';
+      try {
+        writeFileSync(file, JSON.stringify({ ...saved, [repo.toLowerCase()]: { ...found, note } }, null, 2), { mode: 0o600 });
+      } catch {
+        // unsaved: detected again next time
+      }
     }
     return found;
   }
@@ -314,7 +321,8 @@ export class VpDesk {
       if (helped[key]) continue;
       if (s.action === 'report') {
         out.judge.push(`${w.seat}: ${s.detail}`);
-        helped[key] = this.now();
+        // Reported once per spell, on duty; a sweep someone asked for only lists it.
+        if (act) helped[key] = this.now();
         continue;
       }
       if (!act) continue;
