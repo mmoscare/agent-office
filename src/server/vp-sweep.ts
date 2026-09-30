@@ -278,7 +278,8 @@ export async function sweep(deps: SweepDeps, opts: SweepOptions): Promise<SweepR
     res.errors.push(`This floor holds several repositories: say which one (--repo owner/name): ${repos.map((r) => r.repo).join(', ')}`);
     repos = [];
   }
-  const viewer = await viewerLogin(deps.gh, deps.floorDir);
+  // Who the office's gh is signed in as: the owner, whose own PRs are eligible. Not asked when there's nothing to ask about.
+  const viewer = repos.length ? await viewerLogin(deps.gh, deps.floorDir) : undefined;
   for (const r of repos) {
     try {
       await sweepRepo(deps, opts, r, viewer, res, now);
