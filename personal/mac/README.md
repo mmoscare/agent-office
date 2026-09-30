@@ -21,11 +21,14 @@ This writes `<officeDir>/.agent-office/mac-mirror/`:
   it — the floor itself, or the repositories nested in a workspace floor — with its relative path,
   origin, branch, and how much uncommitted or unpushed work it has.
 - `state/<floorId>/…` (with `--state`): the per-floor office files that mean the same thing on
-  another machine — the task queue, To Do Next plans, meetings, jukebox, pictures, the dog, the
-  whiteboard, and the building's todos and chat.
+  another machine — the task queue, To Do Next plans, meetings and their notes, jukebox, pictures,
+  the dog, the whiteboard, a floor's Content Kanban and the VP's check recipes, and the building's
+  todos (with their card pictures), Autonomous Tasks, stickies, notes, chat, arcade scores, the
+  ⚙️ Settings prompts and default worker, and the holiday theme.
 
 Not in the bundle, on purpose: workers and their terminal sessions, scrollback, hooks, worker
-worktrees and workspaces, the password, spend and timecards. Those belong to the machine.
+worktrees and workspaces, the VP's standing duty to merge (`vp.json`: two machines on duty would
+both act on the same PRs), the password, spend and timecards. Those belong to the machine.
 Origins are recorded without any `user:token@` they carry (clones use the other machine's own git
 credentials), and "unpushed" counts the commits no remote-tracking branch has, so a branch with
 no upstream or a detached HEAD is counted too. Every `--state` export rebuilds the `state/` folder,
@@ -68,7 +71,8 @@ node personal/mac/floors-mirror.mjs import ~/mac-mirror --dev-root ~/Documents/D
 
 What import does: makes the workspace folders, clones every checkout that has an origin and is not
 there yet (on the recorded branch), keeps anything already in place (and complains if it is a
-checkout of a different repository), copies the `--state` files where none exist yet, backs up any
+checkout of a different repository), copies the `--state` files where none exist yet (picture and
+notes folders file by file, keeping what the Mac already has), backs up any
 existing `floors.json`, and writes a new one with the same floors at their Mac paths. Floors that
 only exist on the Mac are kept, after the mirrored ones. The report at the end lists what it could
 not carry:
@@ -80,6 +84,16 @@ not carry:
 
 ## 4. Start the office on the Mac
 
+Install the Mac launcher once, from the app checkout (the Mac's `Install-Launcher.ps1`):
+
+```sh
+node personal/mac/install-launcher.mjs --office ~/Documents/Development/Personal-Portfolio
+```
+
+Then open **Agent Office** from Launchpad or Spotlight, or drag `~/Applications/Agent Office.app`
+into the Dock. See [The Mac launcher](#the-mac-launcher) below. Without it, start the office from a
+terminal:
+
 ```sh
 node bin/agent-office.js ~/Documents/Development/Personal-Portfolio --port 4600 --password 'YOUR-PASSWORD'
 ```
@@ -87,17 +101,70 @@ node bin/agent-office.js ~/Documents/Development/Personal-Portfolio --port 4600 
 Give it the same office folder the floors were exported from (mapped to its Mac path). The password
 is per machine; nothing about it is carried over. The first start writes hooks and helper scripts
 into every floor's `.agent-office/`, and the elevator shows the floors in the same order and colours.
-Carried-over queue tasks that were running show as stopped by a restart: requeue them there.
+Carried-over queue tasks that were running show as stopped by a restart: requeue them there, but
+only once the other machine has stopped working on them. Tasks still waiting in a queue start on
+the Mac by themselves, so the two offices would each run them; both work on the same GitHub repos.
 
-The Windows launcher in `personal/windows` does not apply on the Mac; start the office from a
-terminal, or wrap the command above in a launch agent if you want it always on.
+## The Mac launcher
+
+`Agent Office.app` does what the Windows tray launcher does, with a Terminal window where Windows
+has the tray icon and its server terminal:
+
+- **Opening the app.** If the office is running, or is being started, the app opens it in Chrome
+  (or the default browser). Otherwise it opens the **Agent Office server** window in Terminal.
+- **What the server window checks first.** The checkout must be built and on `personal`, and the
+  office folder must exist.
+- **The password.** On the first start it asks for the office password, twice, through macOS's
+  `security`, and keeps it in your login keychain. `node personal/mac/launcher.mjs
+  --forget-password` removes it.
+- **Starting.** It runs the office through `personal/windows/host.mjs`, the same wrapper the
+  Windows launcher uses (it is plain node), and opens Chrome once the office is ready.
+- **The server log.** The server's output shows in the window and also goes to `server.log`.
+- **Stopping.** Press **Ctrl+C** in the window, or close it. This stops the office and its workers,
+  as Stop does on Windows. A second **Ctrl+C**, or an office that hasn't stopped after 15 seconds,
+  is ended by force.
+- **Restarting and reopening.** Type **r** and press Enter to restart. On a Mac the workers keep
+  running through a restart, in their terminal host, and the new office picks them up. Type **o**
+  and press Enter to open the office in Chrome again.
+- **Updates.** The office's **Update the office** walkthrough can restart the office itself. When
+  `host.mjs` exits 75 (restart for the staged build) or 76 (the new build failed and the previous
+  one was put back), the launcher starts the office again without opening another tab.
+
+The launcher runs in Terminal, not as a background service, so the office and the workers it
+starts get your login shell's `PATH` (Homebrew, `claude`, `gh`).
+
+The installer writes these, and changes nothing else:
+
+- `~/Library/Application Support/Agent Office/`: `settings.json` (checkout, office folder, port,
+  branch), `Agent Office.command` (the server window), and later `server.log` and `launcher.pid`
+  (a running launcher's pid; it counts only while that pid still runs `launcher.mjs`);
+- `~/Applications/Agent Office.app`, whose icon is made from `personal/windows/Agent Office.png`
+  with `sips` and `iconutil`.
+
+It only ever replaces an `Agent Office.app` that it made itself. Run it again after moving the
+checkout, or with `--office`, `--port` or `--apps` to change those. The launcher's code is read
+from this checkout on every start, so an office update brings launcher changes along without a
+reinstall.
 
 ## Tests
 
 ```sh
 node --test tests/floors-mirror.test.ts
+node --test tests/mac-launcher.test.ts
 ```
 
-The tests build a small building in a temporary folder (a workspace floor with nested repositories,
-a repository with no remote and a linked worktree, plus a single-checkout floor), export it, and
-import it elsewhere with local bare repositories standing in for GitHub.
+The launcher tests use stand-in offices, one of them run by the real `host.mjs`, to check four
+things:
+
+- a restart for an update comes back up;
+- a failed build is retried;
+- Chrome opens only once;
+- stop and restart reach the office as Ctrl+C and SIGTERM;
+- an office that doesn't stop, or hangs while starting, is ended by force;
+- a saved launcher pid counts only while it runs `launcher.mjs`.
+
+They also check the installer's files and the shell quoting.
+
+The mirror tests build a small building in a temporary folder (a workspace floor with nested
+repositories, a repository with no remote and a linked worktree, plus a single-checkout floor),
+export it, and import it elsewhere with local bare repositories standing in for GitHub.

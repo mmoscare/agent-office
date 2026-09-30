@@ -327,7 +327,7 @@ export class VpDesk {
       }
       if (!act) continue;
       if (s.action === 'escalate') {
-        const text = `VP needs you: ${w.seat} ${s.detail}. It's asking: ${w.task ?? 'see its terminal'}. Open its terminal (walk up to it and press O) and approve or deny it; the VP never approves prompts.`;
+        const text = `VP needs you: ${w.seat} ${s.detail}. It's asking: ${w.task ?? 'see its terminal'}. Open its terminal (walk up to its desk and press E) and approve or deny it; the VP never approves prompts.`;
         const err = this.floor.plan(text);
         if (err) {
           // The owner hasn't heard: not recorded, so the next duty round tries again.

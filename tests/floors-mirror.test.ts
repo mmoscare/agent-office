@@ -90,8 +90,15 @@ function building() {
   writeFileSync(path.join(data, 'todos.json'), '{"items":[{"text":"carry me"}]}');
   writeFileSync(path.join(data, 'workers.json'), '[{"id":"stays-here"}]');
   writeFileSync(path.join(data, 'whiteboard', 'elements.json'), '[]');
-  mkdirSync(path.join(solo, '.agent-office'));
+  writeFileSync(path.join(data, 'autonomous.json'), '{"items":[{"text":"a board of its own"}]}');
+  writeFileSync(path.join(data, 'theme.json'), '{"theme":"auto"}');
+  mkdirSync(path.join(data, 'todo-images'));
+  writeFileSync(path.join(data, 'todo-images', 'a1.png'), 'png');
+  writeFileSync(path.join(data, 'todo-images', 'b2.png'), 'png');
+  mkdirSync(path.join(solo, '.agent-office', 'meetings', 'm1'), { recursive: true });
   writeFileSync(path.join(solo, '.agent-office', 'queue.json'), '{"tasks":[]}');
+  writeFileSync(path.join(solo, '.agent-office', 'meetings', 'm1', 'plan.md'), '# plan\n');
+  writeFileSync(path.join(solo, '.agent-office', 'vp.json'), '{"duty":{"on":true}}');
   return { root, home, dev, projects, office, backend, backendOrigin, solo, soloOrigin, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -141,9 +148,12 @@ test('export records every floor, the checkouts in it and what will not travel',
     // The bundle: the manifest and only the portable office files.
     const written = JSON.parse(readFileSync(path.join(out, 'manifest.json'), 'utf8'));
     assert.equal(written.floors.length, 2);
-    assert.deepEqual(readdirSync(path.join(out, 'state', 'personal-portfolio')).sort(), ['todos.json', 'whiteboard']);
-    assert.deepEqual(readdirSync(path.join(out, 'state', 'solo')), ['queue.json']);
+    assert.deepEqual(readdirSync(path.join(out, 'state', 'personal-portfolio')).sort(), ['autonomous.json', 'theme.json', 'todo-images', 'todos.json', 'whiteboard']);
+    assert.deepEqual(readdirSync(path.join(out, 'state', 'personal-portfolio', 'todo-images')).sort(), ['a1.png', 'b2.png']);
+    assert.deepEqual(readdirSync(path.join(out, 'state', 'solo')).sort(), ['meetings', 'queue.json']);
+    assert.ok(existsSync(path.join(out, 'state', 'solo', 'meetings', 'm1', 'plan.md')), "a meeting's notes travel with it");
     assert.ok(!existsSync(path.join(out, 'state', 'personal-portfolio', 'workers.json')));
+    assert.ok(!existsSync(path.join(out, 'state', 'solo', 'vp.json')), "the VP's standing duty to merge stays on this machine");
     // --quick leaves the slow counts out.
     const quick = findCheckouts(b.office, true);
     assert.ok(quick.checkouts.every((c: any) => c.dirty === undefined && c.unpushed === undefined));
@@ -181,9 +191,16 @@ test('import recreates the building elsewhere: clones what is missing, keeps wha
     assert.equal(report.skipped.length, 1);
     assert.match(report.skipped[0], /wt\/pr-backend.*linked worktree/);
     assert.deepEqual(report.problems, []);
-    assert.deepEqual(report.state.sort(), ['Personal-Portfolio/todos.json', 'Personal-Portfolio/whiteboard/elements.json', 'solo/queue.json']);
+    assert.deepEqual(report.state.sort(), [
+      'Personal-Portfolio/autonomous.json', 'Personal-Portfolio/theme.json', 'Personal-Portfolio/todo-images/ (2 files)', 'Personal-Portfolio/todos.json',
+      'Personal-Portfolio/whiteboard/elements.json', 'solo/meetings/ (1 file)', 'solo/queue.json',
+    ]);
     assert.equal(readFileSync(path.join(office, '.agent-office', 'todos.json'), 'utf8'), '{"items":[{"text":"carry me"}]}');
+    assert.equal(readFileSync(path.join(office, '.agent-office', 'autonomous.json'), 'utf8'), '{"items":[{"text":"a board of its own"}]}');
+    assert.equal(readFileSync(path.join(office, '.agent-office', 'todo-images', 'b2.png'), 'utf8'), 'png');
+    assert.equal(readFileSync(path.join(solo, '.agent-office', 'meetings', 'm1', 'plan.md'), 'utf8'), '# plan\n');
     assert.ok(!existsSync(path.join(office, '.agent-office', 'workers.json')));
+    assert.ok(!existsSync(path.join(solo, '.agent-office', 'vp.json')));
 
     const floors = JSON.parse(readFileSync(path.join(office, '.agent-office', 'floors.json'), 'utf8'));
     assert.deepEqual(floors, [
@@ -192,12 +209,18 @@ test('import recreates the building elsewhere: clones what is missing, keeps wha
     ]);
     assert.equal(report.backup, null);
 
-    // Again: nothing is cloned twice, nothing overwritten, and the last list is backed up.
+    // Again: nothing is cloned twice, nothing overwritten, and the last list is backed up. A picture
+    // this machine added meanwhile is kept, and one it lost comes back.
+    writeFileSync(path.join(office, '.agent-office', 'todo-images', 'mac-only.png'), 'mac');
+    unlinkSync(path.join(office, '.agent-office', 'todo-images', 'a1.png'));
     const again = importBundle({ bundle: out, devRoot, projects, home: mac, state: true });
     assert.deepEqual(again.cloned, []);
     assert.deepEqual(again.kept.sort(), ['Personal-Portfolio', 'Personal-Portfolio/apps/backend', 'solo']);
     assert.deepEqual(again.problems, []);
-    assert.deepEqual(again.state, []);
+    assert.deepEqual(again.state, ['Personal-Portfolio/todo-images/ (1 file)']);
+    assert.deepEqual(readdirSync(path.join(office, '.agent-office', 'todo-images')).sort(), ['a1.png', 'b2.png', 'mac-only.png']);
+    assert.ok(again.skipped.includes('Personal-Portfolio: 1 of the 2 files in todo-images/ is already there — not overwritten'));
+    assert.ok(again.skipped.includes('solo: meetings/ is already there — not overwritten'));
     assert.ok(again.backup && existsSync(again.backup));
     assert.ok(readdirSync(path.join(office, '.agent-office')).some((n) => n.startsWith('floors.json.before-mirror-')));
   } finally { b.close(); }

@@ -1,4 +1,5 @@
 // A launcher-owned stdin channel gives Windows a graceful stop without changing upstream's CLI.
+// (The Mac launcher, personal/mac/launcher.mjs, runs the office through this file too.)
 // The office can also ask the launcher to start it again (exit code 75, see Launcher.cs): before
 // anything of the app loads, a build the office staged for that restart is switched in
 // (src/server/app-swap.ts), and if that build doesn't start, the previous one is put back (exit 76).
