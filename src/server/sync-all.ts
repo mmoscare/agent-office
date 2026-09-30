@@ -266,7 +266,7 @@ async function reviewFiles(dir: string, dirty: Dirty[]): Promise<{ files: SyncFi
     files.push(f);
   }
   const blocked: SyncFile[] = [...blockedDirs].map(([p, b]) => ({ path: b.n > 1 ? `${p} (${b.n} files)` : p, status: '?', blocked: b.reason }));
-  const all = [...files.sort((a, b) => Number(!!a.risky) - Number(!!b.risky) || a.path.localeCompare(b.path)), ...blocked];
+  const all = [...files.sort((a, b) => Number(!!a.risky) - Number(!!b.risky) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)), ...blocked];
   return { files: all.slice(0, MAX_FILES), more: Math.max(0, all.length - MAX_FILES) };
 }
 
@@ -292,13 +292,20 @@ async function look(place: Place, fetch: boolean): Promise<Reviewed> {
     Object.assign(repo, { branch: t.branch, problem: t.problem, noPush: t.noPush });
     if (t.upstreamRef) repo.upstream = t.upstreamRef.replace(/^refs\/remotes\//, '');
     if (!t.problem && fetch && t.remote) await git(['fetch', '--quiet', t.remote], place.dir, 30_000).catch(() => undefined);
-    const [dirty, lr] = await Promise.all([dirtyFiles(place.dir), !t.problem && t.upstreamRef ? gitOut(['rev-list', '--left-right', '--count', `HEAD...${t.upstreamRef}`], place.dir) : undefined]);
+    const up = !t.problem && t.upstreamRef;
+    // Coming in, counted along GitHub's own line of history: a merged pull request is one change.
+    const [dirty, lr, incoming] = await Promise.all([
+      dirtyFiles(place.dir),
+      up ? gitOut(['rev-list', '--left-right', '--count', `HEAD...${t.upstreamRef}`], place.dir) : undefined,
+      up ? gitOut(['rev-list', '--count', '--first-parent', `HEAD..${t.upstreamRef}`], place.dir) : undefined,
+    ]);
     const { files, more } = await reviewFiles(place.dir, dirty);
     repo.files = files;
     repo.more = more;
     repo.suggested = suggestMessage(files.filter((f) => !f.blocked && !f.risky));
     for (const f of files) if (!f.blocked) paths.set(f.path, f.from);
-    Object.assign(repo, counts(lr));
+    repo.ahead = counts(lr).ahead;
+    repo.behind = Number(incoming) || 0;
     if (repo.ahead) repo.outgoing = ((await gitOut(['log', '-5', '--format=%s', `${t.upstreamRef}..HEAD`], place.dir)) ?? '').split('\n').filter(Boolean);
     return { repo, head: t.head, paths };
   } catch (err) {
@@ -408,6 +415,8 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
     }
     const incoming = counts(lr).behind;
     const news = incoming ? await mergedPrs(dir, before, target) : { prs: [], other: 0 };
+    // Said along GitHub's own line of history: a merged pull request is one change, not two commits.
+    const pulled = incoming ? Math.max(1, news.prs.length + news.other) : 0;
     if (incoming) {
       const m = await git(['merge', '--ff', '--no-edit', '--no-autostash', t.upstreamRef!], dir, 180_000, { GIT_MERGE_AUTOEDIT: 'no' });
       const mergeLog = log(`merge --ff --no-edit ${repo.upstream}`, m);
@@ -452,21 +461,21 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
           state: 'failed',
           saved,
           commit,
-          pulled: incoming,
+          pulled,
           before,
           after,
           prs: news.prs,
           otherCommits: news.other,
-          message: `${savedText}${incoming ? `, pulled ${plural(incoming, 'new change')}` : ''}, but the upload failed: ${rejected ? 'GitHub got newer changes meanwhile. Sync again.' : 'check the internet connection and your GitHub login, then sync again.'} Nothing was forced.`,
+          message: `${savedText}${pulled ? `, pulled ${plural(pulled, 'new change')}` : ''}, but the upload failed: ${rejected ? 'GitHub got newer changes meanwhile. Sync again.' : 'check the internet connection and your GitHub login, then sync again.'} Nothing was forced.`,
           details: lines.join('\n'),
         });
       }
       pushed = ahead;
       pushText = `uploaded ${plural(ahead, 'commit')}`;
     }
-    const parts = [savedText, pushText || (saved ? '' : 'nothing to upload'), incoming ? `pulled ${plural(incoming, 'new change')}` : 'already had the latest'].filter(Boolean);
+    const parts = [savedText, pushText || (saved ? '' : 'nothing to upload'), pulled ? `pulled ${plural(pulled, 'new change')}` : 'already had the latest'].filter(Boolean);
     const note = skipped ? ` ${plural(skipped, 'ticked file')} had no changes left to save.` : '';
-    return outcome(repo, { state: 'done', saved, commit, pulled: incoming, pushed, before, after, prs: news.prs, otherCommits: news.other, message: `${parts.join(', ')}.${note}`, details: lines.join('\n') });
+    return outcome(repo, { state: 'done', saved, commit, pulled, pushed, before, after, prs: news.prs, otherCommits: news.other, message: `${parts.join(', ')}.${note}`, details: lines.join('\n') });
   });
   return typeof done === 'string' ? outcome(repo, { state: 'failed', message: /Hold on/.test(done) ? `${done} in ${repo.name}: sync again in a moment.` : `Couldn’t sync ${repo.name}: ${done}` }) : done;
 }
@@ -493,7 +502,7 @@ export async function nextSteps(app: SyncRepoResult | undefined, appDir: string 
   return { areas, steps: planNextSteps(areas, appDir, { busy: busy.length, canRestart: restartable }), news: newsLines(app.prs, app.otherCommits), busy, changed: true, appDir };
 }
 
-/** Go: every repository on the review in turn (the app folder last), then what to do next. */
+/** Go: every repository on the review, then what to do next (from the app folder's new commits). */
 export async function syncRun(floorDir: string, token: string, choices: SyncChoice[], floors: OfficeFloor[], opts: { restartable?: boolean } = {}): Promise<SyncResult | string> {
   const review = reviews.get(token);
   if (!review || !sameDir(review.floorDir, floorDir) || Date.now() - review.at > REVIEW_MS) return 'That review is out of date. Press Sync again to look afresh.';
@@ -503,8 +512,8 @@ export async function syncRun(floorDir: string, token: string, choices: SyncChoi
   try {
     const byId = new Map(choices.map((c) => [c.id, c]));
     const order = [...review.repos.values()].sort((a, b) => Number(a.repo.kind === 'office') - Number(b.repo.kind === 'office'));
-    const results: SyncRepoResult[] = [];
-    for (const r of order) results.push(await syncOne(r, byId.get(r.repo.id)));
+    // Separate checkouts, each under its own lock: side by side (git is slow to start on a busy machine).
+    const results = await pool(order, POOL, (r) => syncOne(r, byId.get(r.repo.id)));
     const app = results.find((r) => r.kind === 'office');
     const appDir = order.find((r) => r.repo.kind === 'office')?.repo.dir;
     return { repos: results, next: await nextSteps(app, appDir, floors, opts.restartable ?? canRestart()) };

@@ -1,7 +1,7 @@
-import test from 'node:test';
+import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkerInfo, WorkerStatus } from '../src/shared/protocol.js';
@@ -12,20 +12,32 @@ import type { OfficeFloor } from '../src/server/git-board.js';
 // 🔄 Sync everything against throwaway repositories: two bare "GitHub" repositories (the office's
 // code and a floor's project), the app folder (a clone of the first) and the floor (a clone of the
 // second). Every push lands in a local bare repository: nothing here reaches GitHub, and the real
-// app folder is never touched.
+// app folder is never touched. The repositories are made once and copied for each test (their
+// remotes are relative paths, so each copy pushes to its own "GitHub"): git is slow to start on a
+// busy Windows machine.
 
 const PREFIX = 'sync all test ';
 
+// The same git settings for every git this file starts, the office's own included, whatever this
+// machine's global config says: a known identity, no hooks, no global ignores, no line-ending changes.
+const SETTINGS: [string, string][] = [
+  ['user.name', 'Sync All Test'],
+  ['user.email', 'sync-all-test@example.invalid'],
+  ['core.autocrlf', 'false'],
+  ['commit.gpgsign', 'false'],
+  ['core.hooksPath', path.join(tmpdir(), 'sync-all-test-no-hooks')],
+  ['core.excludesFile', path.join(tmpdir(), 'sync-all-test-no-excludes')],
+  ['init.defaultBranch', 'personal'],
+  ['pull.rebase', 'false'],
+];
+process.env.GIT_CONFIG_COUNT = String(SETTINGS.length);
+SETTINGS.forEach(([k, v], i) => {
+  process.env[`GIT_CONFIG_KEY_${i}`] = k;
+  process.env[`GIT_CONFIG_VALUE_${i}`] = v;
+});
+
 function git(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }).trim();
-}
-
-function configure(dir: string, hooks: string) {
-  git(dir, 'config', 'user.name', 'Sync All Test');
-  git(dir, 'config', 'user.email', 'sync-all-test@example.invalid');
-  git(dir, 'config', 'core.autocrlf', 'false');
-  git(dir, 'config', 'commit.gpgsign', 'false');
-  git(dir, 'config', 'core.hooksPath', hooks);
 }
 
 interface Fixture {
@@ -40,33 +52,43 @@ interface Fixture {
   floor: string;
 }
 
-function repo(root: string, hooks: string, name: string, files: Record<string, string>): { origin: string; seed: string } {
-  const origin = path.join(root, `${name}.git`);
-  execFileSync('git', ['init', '-q', '--bare', '-b', 'personal', origin], { stdio: 'ignore' });
+function tempRoot(): string {
+  return realpathSync(mkdtempSync(path.join(tmpdir(), PREFIX)));
+}
+
+function remove(root: string) {
+  assert.ok(path.basename(root).startsWith(PREFIX));
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+}
+
+/** A bare "GitHub" repository with one commit, and a checkout of it (`<name>-seed`) that pushes there. */
+function repo(root: string, name: string, files: Record<string, string>) {
   const seed = path.join(root, `${name}-seed`);
-  execFileSync('git', ['-c', 'core.autocrlf=false', 'clone', '-q', origin, seed], { stdio: 'ignore' });
-  configure(seed, hooks);
-  git(seed, 'checkout', '-q', '-b', 'personal');
+  mkdirSync(seed);
   for (const [f, text] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(seed, f)), { recursive: true });
     writeFileSync(path.join(seed, f), text);
   }
+  git(seed, 'init', '-q');
   git(seed, 'add', '.');
   git(seed, 'commit', '-qm', 'Initial');
-  git(seed, 'push', '-q', '-u', 'origin', 'personal');
-  return { origin, seed };
+  git(root, 'clone', '-q', '--bare', `${name}-seed`, `${name}.git`);
+  // Relative: a copy of the whole folder pushes to its own copy of "GitHub".
+  git(seed, 'remote', 'add', 'origin', `../${name}.git`);
+  git(seed, 'fetch', '-q', 'origin');
+  git(seed, 'branch', '-q', '-u', 'origin/personal');
 }
 
-function fixture(t: { after(fn: () => void): void }): Fixture {
-  const root = mkdtempSync(path.join(tmpdir(), PREFIX));
-  t.after(() => {
-    const resolved = realpathSync(root);
-    assert.ok(path.basename(resolved).startsWith(PREFIX));
-    rmSync(resolved, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  });
-  const hooks = path.join(root, 'no-hooks');
-  mkdirSync(hooks);
-  const office = repo(root, hooks, 'office', {
+function clone(root: string, from: string, name: string) {
+  git(root, 'clone', '-q', '-b', 'personal', from, name);
+  git(path.join(root, name), 'remote', 'set-url', 'origin', `../${from}`);
+}
+
+let template: string;
+
+before(() => {
+  template = tempRoot();
+  repo(template, 'office', {
     'package.json': `${JSON.stringify({ name: 'agent-office', version: '0.1.0' }, null, 2)}\n`,
     'package-lock.json': '{}\n',
     '.gitignore': 'node_modules\ndist\n.agent-office\n',
@@ -75,15 +97,23 @@ function fixture(t: { after(fn: () => void): void }): Fixture {
     'README.md': '# Office\n',
   });
   // The floor's project doesn't ignore the office's folders: the sync must keep them out itself.
-  const project = repo(root, hooks, 'project', { 'app.txt': 'one\ntwo\n', 'notes.md': '# Notes\n' });
-  const clone = (origin: string, name: string) => {
-    const dir = path.join(root, name);
-    execFileSync('git', ['-c', 'core.autocrlf=false', 'clone', '-q', '-b', 'personal', origin, dir], { stdio: 'ignore' });
-    configure(dir, hooks);
-    return realpathSync(dir);
-  };
-  return { root, officeOrigin: office.origin, officeSeed: office.seed, floorOrigin: project.origin, floorSeed: project.seed, app: clone(office.origin, 'app'), floor: clone(project.origin, 'floor') };
+  repo(template, 'project', { 'app.txt': 'one\ntwo\n', 'notes.md': '# Notes\n' });
+  clone(template, 'office.git', 'app');
+  clone(template, 'project.git', 'floor');
+});
+
+after(() => {
+  if (template) remove(template);
+});
+
+function fixture(t: { after(fn: () => void): void }): Fixture {
+  const root = tempRoot();
+  t.after(() => remove(root));
+  cpSync(template, root, { recursive: true });
+  const at = (p: string) => path.join(root, p);
+  return { root, officeOrigin: at('office.git'), officeSeed: at('office-seed'), floorOrigin: at('project.git'), floorSeed: at('project-seed'), app: at('app'), floor: at('floor') };
 }
+
 
 /** Someone else's change on "GitHub". */
 function pushFrom(seed: string, files: Record<string, string>, subject: string, pr?: number) {
@@ -284,7 +314,7 @@ test('the checklist follows what the app folder’s new commits change', async (
   const { result } = await run(fx, defaults, floors);
   const app = byKind(result, 'office');
   assert.equal(app.state, 'done', app.message);
-  assert.equal(app.pulled, 2);
+  assert.equal(app.pulled, 1, 'a merged pull request is one change');
   const next = result.next;
   assert.equal(next.changed, true);
   assert.deepEqual(next.areas, ['packages', 'server']);

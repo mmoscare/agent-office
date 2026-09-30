@@ -30,7 +30,7 @@ export interface SyncRepo {
   upstream?: string;
   /** Commits here that GitHub doesn't have yet (they're uploaded too). */
   ahead: number;
-  /** New commits on GitHub, as of the review (they're pulled). */
+  /** New changes on GitHub, as of the review (a merged pull request counts once). */
   behind: number;
   /** Their subjects, newest first (a few). */
   outgoing: string[];
@@ -73,7 +73,7 @@ export interface SyncRepoResult {
   /** Files saved in the new commit (0: nothing to save). */
   saved: number;
   commit?: string;
-  /** New commits brought in from GitHub. */
+  /** New changes brought in from GitHub (a merged pull request counts once). */
   pulled: number;
   /** Commits uploaded (0: nothing to upload, or it wasn't uploaded). */
   pushed: number;
