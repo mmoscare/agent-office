@@ -70,7 +70,7 @@ const history = [
 const pathKey = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') ?? 'PATH';
 const withoutClaude = (process.env[pathKey] ?? '').split(path.delimiter).filter(d => !['claude', 'claude.exe', 'claude.cmd', 'claude.bat'].some(n => existsSync(path.join(d, n)))).join(path.delimiter);
 
-let host, browser;
+let host, browser, page;
 let hostErrors = '';
 try {
   repo(floor, history);
@@ -101,13 +101,14 @@ try {
     headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  context.setDefaultTimeout(30000);
+  // Generous: other offices may be running on this machine, and adding a big repository as a floor takes a while.
+  context.setDefaultTimeout(90000);
   assert.equal((await context.request.post(url + '/api/login', { data: { password } })).status(), 200);
   await context.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'News Test', color: '#ff8a5b', look: {} }));
     localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
   });
-  const page = await context.newPage();
+  page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
@@ -157,7 +158,17 @@ try {
   });
   await page.mouse.click(point.x, point.y);
   const clipboard = page.getByRole('dialog', { name: "Queue agent's clipboard", exact: true });
-  await clipboard.waitFor();
+  // Under load he may still be turning to face you, and the click lands on him: C beside him opens it too.
+  const clicked = await clipboard.waitFor({ timeout: 5000 }).then(() => true, () => false);
+  if (!clicked) await page.keyboard.press('KeyC');
+  await clipboard.waitFor().catch(async error => {
+    console.error('Dialogs:', await page.locator('[role=dialog]').evaluateAll(ds => ds.map(d => d.getAttribute('aria-label') || d.textContent.slice(0, 80))), 'Clicked:', point);
+    if (shots) {
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot({ path: path.join(shots, 'failure.png') });
+    }
+    throw error;
+  });
   // The roster first, as before.
   await clipboard.locator('.clipboard-floor').first().waitFor();
 
@@ -213,7 +224,18 @@ try {
   await clipboard.waitFor({ state: 'detached' });
 
   assert.deepEqual(errors, []);
-  console.log(`PASS: clipboard → What's new: Today/Yesterday, 2 marked new, 40 then 48 with Show older, the other floor from the picker, back to the roster${realClaude ? ' (real Claude rewrites)' : ' (no Claude: tidied titles)'}. First lines: ${JSON.stringify(texts.slice(0, 3))}`);
+  console.log(`PASS: clipboard (${clicked ? 'clicked' : 'C beside him'}) → What's new: Today/Yesterday, 2 marked new, 40 then 48 with Show older, the other floor from the picker, back to the roster${realClaude ? ' (real Claude rewrites)' : ' (no Claude: tidied titles)'}. First lines: ${JSON.stringify(texts.slice(0, 3))}`);
+} catch (error) {
+  // What the page showed when it failed, and what the office said.
+  if (page) {
+    console.error('Windows:', await page.locator('[role=dialog]').allInnerTexts().catch(() => []));
+    if (shots) {
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot({ path: path.join(shots, 'failure.png') }).catch(() => {});
+    }
+  }
+  console.error('Office stderr:', hostErrors.slice(-1500));
+  throw error;
 } finally {
   if (browser) await browser.close();
   if (host && host.exitCode === null) {

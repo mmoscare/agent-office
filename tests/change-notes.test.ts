@@ -210,8 +210,9 @@ test('each change is put in plain words once, only when shown, and kept: a secon
   const three = await whenWritten(notes, 3);
   assert.equal(first.calls.length, 1);
   assert.deepEqual(first.calls[0].map((i) => i.title), ["Merge branch 'feature/bells'", 'Clock workers out with a wave', 'Tidy the README']);
-  // A merge with few notes says what it brought in.
+  // A merge with few notes says what it brought in; notes that only repeat the title are left out.
   assert.match(first.calls[0][0].about, /What it brought in:\n- Ring a bell when a task is done/);
+  assert.equal(first.calls[0][1].about, 'What it brought in:\n- Wave goodbye');
   assert.deepEqual(three.notes.map((n) => [n.text, n.plain]), [
     ["Plain: Merge branch 'feature/bells'.", true],
     ['Plain: Clock workers out with a wave.', true],
@@ -270,6 +271,10 @@ test('the stubbed CLI answer becomes a line per change; bad answers are failures
   assert.equal(parseLines(JSON.stringify({ is_error: true, result: 'Not logged in' }), 1), null);
   assert.equal(parseLines('not json', 1), null);
   assert.equal(parseLines(JSON.stringify({ structured_output: { lines: [] } }), 1), null);
+  // A line about the job, not the change, is never kept: it's asked for again another time.
+  const refusing = JSON.stringify({ structured_output: { lines: [{ id: 'c1', line: 'Unable to write - needs clarification on feature context.' }, { id: 'c2', line: 'Fixed a bug where you were unable to open the terminal.' }] } });
+  assert.deepEqual(parseLines(refusing, 2), [undefined, 'Fixed a bug where you were unable to open the terminal.']);
+  assert.equal(parseLines(JSON.stringify({ structured_output: { lines: [{ id: 'c1', line: 'Needs more context to describe this.' }] } }), 1), null);
   const told = describeChanges([{ title: 'Add a notepad', about: 'A notepad on the desk.' }, { title: 'Bring in the latest', about: '', author: true }]);
   assert.equal(told, "Change c1\nTitle: Add a notepad\nNotes:\nA notepad on the desk.\n\nChange c2\nTitle: Bring in the latest\n(This brings in the original author's latest updates.)");
 });
