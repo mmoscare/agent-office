@@ -127,3 +127,34 @@ test('a broken or tampered file starts empty or keeps just its good items', (t) 
   todos.apply('shared', { action: 'edit', id: id(1), text: 'better' });
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).shared[0].text, 'better');
 });
+
+test('a card can be marked personal, trading or autonomous, and the mark survives a move, an edit and a restart', (t) => {
+  let items = run({ action: 'add', id: id(1), text: 'rebalance', column: 'urgent' });
+  assert.equal(items[0].area, undefined);
+  items = applyTodo(items, { action: 'area', id: id(1), area: 'trading' });
+  assert.equal(items[0].area, 'trading');
+  assert.equal(applyTodo(items, { action: 'area', id: id(1), area: 'trading' }), items, 'the same mark changes nothing');
+  items = applyTodo(items, { action: 'move', id: id(1), column: 'active' });
+  items = applyTodo(items, { action: 'edit', id: id(1), text: 'rebalance the book' });
+  assert.equal(items[0].area, 'trading');
+  items = applyTodo(items, { action: 'area', id: id(1) });
+  assert.equal(items[0].area, undefined);
+  assert.equal(applyTodo(items, { action: 'area', id: id(1) }), items, 'clearing an unmarked card changes nothing');
+  items = applyTodo(items, { action: 'area', id: id(1), area: 'personal' });
+  const undone = applyTodo([], { action: 'add', id: id(1), text: items[0].text, column: items[0].column, area: items[0].area });
+  assert.equal(undone[0].area, 'personal', 'Undo puts the mark back');
+
+  assert.deepEqual(checkTodoAction({ action: 'area', id: id(1), area: 'autonomous' }), { action: 'area', id: id(1), area: 'autonomous' });
+  assert.deepEqual(checkTodoAction({ action: 'area', id: id(1) }), { action: 'area', id: id(1) });
+  assert.equal(checkTodoAction({ action: 'area', id: id(1), area: 'work' }), null);
+  assert.equal(checkTodoAction({ action: 'add', id: id(2), text: 'x', column: 'todo', area: 'nope' }), null);
+  assert.equal(checkTodoItem({ id: id(3), text: 'kept', column: 'todo', at: 1, area: 'not-a-mark' })?.area, undefined);
+  assert.equal(checkTodoItem({ id: id(3), text: 'kept', column: 'todo', at: 1, area: 'personal' })?.area, 'personal');
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'agent-office-todos-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const before = new Todos(dir);
+  assert.ok(before.apply('shared', { action: 'add', id: id(4), text: 'portfolio', column: 'todo', area: 'personal' }));
+  assert.ok(before.apply('shared', { action: 'area', id: id(4), area: 'trading' }));
+  assert.equal(new Todos(dir).list('shared')[0].area, 'trading');
+});

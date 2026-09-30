@@ -13,7 +13,8 @@ Back to the [README](../README.md).
 | B | Open a shared shell at an empty desk |
 | R | Resume a sleeping worker (or restart a shell) |
 | X | Clock a worker out (frees the desk; hire them back any time. A worker with its own worktree asks what to do with it) |
-| O | Go to the boss's office, by the glass looking over the floor |
+| O | Open a pull request for a worker on its own branch, or see the one it has. At a board agent: its terminal. At a note on the issues board: read the issue |
+| J | Go to the boss's office, by the glass looking over the floor |
 | T | Stand behind the nearest worker on this floor who is done or needs you; again for the next around the floor, then back to the office |
 | N | Go to the worker that has waited longest on someone; again for the next one |
 | U | Summon the staffer (the queue agent) to where you are. Click his clipboard to read who's on what. U again beside him sends him back |

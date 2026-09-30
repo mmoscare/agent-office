@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { hasDetails, TODO_COLUMNS, todosIn, type TodoColumn, type TodoItem } from '../../shared/todos';
+import { hasDetails, TODO_AREAS, TODO_COLUMNS, todosIn, type TodoArea, type TodoColumn, type TodoItem } from '../../shared/todos';
 import { ACTIVE_FOCUS, COLUMN_ICON, COLUMN_ORDER, type IssuesWallMode } from '../ui/todos';
 import { wrap } from './boards';
 
@@ -18,6 +18,12 @@ const LOOK: Record<TodoColumn, { head: string; headInk: string; tint: string; ed
 };
 /** How wide each column is, relative to the others. */
 const WEIGHT: Record<TodoColumn, number> = { active: 1.25, urgent: 1.1, todo: 1, done: 0.8 };
+/** A mark's pip on the cork, same colours as the board's buttons. */
+const AREA_PIP: Record<TodoArea, { fill: string; ink: string }> = {
+  personal: { fill: '#118ab2', ink: '#fff' },
+  trading: { fill: '#c26a00', ink: '#fff' },
+  autonomous: { fill: '#6d28d9', ink: '#fff' },
+};
 
 export class TodoWallTexture {
   readonly texture: THREE.CanvasTexture;
@@ -123,7 +129,7 @@ export class TodoWallTexture {
     let drawn = 0;
     for (const item of shown) {
       g.font = `800 ${fs}px ${FONT}`;
-      const lines = wrap(g, item.text, inner - 26, column === 'done' ? 1 : 3);
+      const lines = wrap(g, item.text, inner - 26 - (item.area ? 22 : 0), column === 'done' ? 1 : 3);
       const badges = this.details && hasDetails(item) ? badgeText(item) : '';
       const ch = 16 + lines.length * (fs + 6) + (badges ? 24 : 0);
       // Keep room for "+N more" if anything's left after this one.
@@ -137,6 +143,21 @@ export class TodoWallTexture {
       g.fill();
       g.fillStyle = look.edge;
       g.fillRect(x + 12, cy + 4, 7, ch - 8);
+      if (item.area) {
+        const pip = AREA_PIP[item.area];
+        const px = x + 12 + inner - 22;
+        const py = cy + 6;
+        g.fillStyle = pip.fill;
+        this.round(px, py, 18, 18, 9);
+        g.fill();
+        g.fillStyle = pip.ink;
+        g.font = `900 11px ${FONT}`;
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(TODO_AREAS[item.area][0], px + 9, py + 10);
+        g.textAlign = 'left';
+        g.font = `800 ${fs}px ${FONT}`;
+      }
       g.fillStyle = column === 'done' ? '#7a6f65' : INK;
       g.textBaseline = 'top';
       lines.forEach((line, i) => {

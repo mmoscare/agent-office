@@ -34,8 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/i
 
 - **A floor per project.** Ride the elevator, pick one of your GitHub repos, and the office clones it and opens a floor for it. Every worker, board and queue on that floor works in that checkout.
 - **Workers at desks.** Walk up to an empty desk, press **E**, and pick Claude Code, Codex or OpenCode. The agent's live terminal shows on its laptop, and anyone can open it and type.
-- **You can see who needs you.** A worker that needs input or has finished jumps up and down and dings. Press **O** to go to the boss's office. Press **T** to stand behind the nearest one on this floor who is done or waiting, then the next around the floor, and after the last one back in that office. Press **N** for whoever has waited longest.
-- **GitHub on the walls.** Issues and pull requests hang on cork boards. Hand an issue to a worker, queue tasks, give a worker its own git worktree and open its PR from Changes.
+- **You can see who needs you.** A worker that needs input or has finished jumps up and down and dings. Press **J** to go to the boss's office. Press **T** to stand behind the nearest one on this floor who is done or waiting, then the next around the floor, and after the last one back in that office. Press **N** for whoever has waited longest.
+- **GitHub on the walls.** Issues and pull requests hang on cork boards. Hand an issue to a worker, queue tasks, give a worker its own git worktree and open its PR with one key.
 - **Together.** Voice, chat, screen sharing on the lounge TV and a shared whiteboard.
 
 There's a lot more (a rooftop bar, an office dog, an arcade): see [docs/features.md](docs/features.md).
@@ -198,7 +198,8 @@ deploy/aws.sh ssh 'node /opt/agent-office/bin/agent-office.js accounts invite ad
 | E | Interact: hire a worker, open its terminal, read a board, sit down, ride the elevator |
 | P | Give a task to a new worker, or to the one at this desk |
 | C | See a worker's changes: diff, commit, open a PR |
-| O | Go to the boss's office |
+| O | Open a worker's PR (or see it) at its desk; a board agent's terminal at its kiosk; read the issue note you point at |
+| J | Go to the boss's office |
 | T | Stand behind the nearest worker on this floor who is done or needs you; again for the next, then back to the office |
 | N | Go to the next worker that's waiting on you |
 | X | Clock a worker out |
