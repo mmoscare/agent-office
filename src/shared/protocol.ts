@@ -17,7 +17,7 @@ import type { PlansState } from './plans.js';
 import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
-import type { TodoAction, TodoItem } from './todos.js';
+import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
 import type { ContentAction, ContentItem } from './content-kanban.js';
 
 export type WorkerStatus =
@@ -1337,8 +1337,8 @@ export type ClientMsg =
   /** Your 🗂️ Indirect Time card, please: when you had the office open, per day. */
   | { t: 'timecard' }
   | { t: 'ping'; at: number }
-  /** A change to your own 🔥 To Do board (see shared/todos.ts). */
-  | { t: 'todo'; change: TodoAction }
+  /** A change to your own 🔥 To Do board (see shared/todos.ts), or to the office's 🏢 Autonomous Tasks board. */
+  | { t: 'todo'; change: TodoAction; board?: TodoBoardId }
   /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
   | { t: 'content'; change: ContentAction };
 
@@ -1481,7 +1481,8 @@ export type ServerMsg =
   /** Your role changed. */
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
-  | { t: 'todos'; items: TodoItem[] }
+  /** On the 🏢 Autonomous Tasks board, everyone's changes come to everyone; `mine` is the answer to your own change (every one gets exactly one). */
+  | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId; mine?: boolean }
   /**
    * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
    * answer to your own change (every one gets exactly one), so your window knows which are done.

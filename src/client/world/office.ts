@@ -13,6 +13,7 @@ import { buildBookshelf } from './bookshelf';
 import { buildBookshelf as buildManualShelf } from './manual-shelf';
 import { buildCabinet, type CabinetModel } from './cabinet';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
+import { buildKanbanStand, type KanbanStand } from './kanban-stand';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
@@ -35,7 +36,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'clipboard';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'clipboard' | 'autonomous';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -112,6 +113,8 @@ export interface Office {
   cabinet: CabinetModel;
   /** The rolling whiteboard everyone draws on together. */
   whiteboard: WhiteboardStand;
+  /** The 🏢 Autonomous Tasks whiteboard, south of it (world/kanban-stand.ts). */
+  autonomousBoard: KanbanStand;
   /** The golf tee on the balcony, and the hole across the street it's hit at. */
   tee: Tee;
   green: Green;
@@ -1396,6 +1399,12 @@ export function buildOffice(): Office {
   colliders.push(...hoop.colliders);
   fixture('west', HOOP.z, (HOOP.board.bottom - 0.6 + HOOP.board.top + 0.1) / 2, HOOP.board.width + 0.2, HOOP.board.top - HOOP.board.bottom + 0.7);
 
+  // The Autonomous Tasks kanban on its own wheels, south of the drawing whiteboard.
+  const autonomousBoard = buildKanbanStand();
+  group.add(autonomousBoard.group);
+  colliders.push(...autonomousBoard.colliders);
+  interactables.push(autonomousBoard.interactable);
+
   // The whiteboard, out on the floor between the desks and the lounge.
   const whiteboard = buildWhiteboard();
   group.add(whiteboard.group);
@@ -1497,7 +1506,7 @@ export function buildOffice(): Office {
     }
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, autonomousBoard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */
