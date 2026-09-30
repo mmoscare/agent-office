@@ -1000,7 +1000,7 @@ function toElevator() {
   player.lookPitch = -0.08;
 }
 
-/** O: straight to the boss's office, looking west over the glass at the floor. Also where T's circle ends. */
+/** J: straight to the boss's office, looking west over the glass at the floor. Also where T's circle ends. */
 function toOffice(why: 'key' | 'circle' = 'key') {
   if (trip) return;
   if (upTop) return toast("The office is downstairs — take the elevator", 'warn');
@@ -1686,7 +1686,7 @@ function askStation(deskId: string) {
   // Nobody there yet: asking hires the agent.
   if (!w && officeIsFull()) return;
   const subtitle = !w
-    ? `${info.does}, in a terminal of my own: open it from Workers to watch.`
+    ? `${info.does}, in a terminal of my own: press O at the kiosk to watch.`
     : isAsleep(w.status)
       ? `The ${name} is asleep: this wakes it up, and it carries on where it left off.`
       : isBusy(w.status)
@@ -1980,7 +1980,7 @@ function triageInbox() {
     deskId,
     prompt: 'Triage the in-tray: read every item, file what someone wants done on the To Do Next board (or queue what should be worked on right away), archive what needs nothing and what you have filed, and tell me what came in and where each item went.',
   });
-  toast(`📥 Asked the Receptionist to go through the tray${w ? '' : ' — open it from Workers to watch'}`);
+  toast(`📥 Asked the Receptionist to go through the tray${w ? '' : ' — press O at its kiosk to watch'}`);
 }
 
 function boardActions() {
@@ -2780,7 +2780,7 @@ function hintFor(it: Interactable): Hint {
         const now = activeTodos();
         return { k: `todo:${now.length}`, parts: [title('🔥 My To Do'), now.length ? aside(`${now.length} active`) : aside('same on every floor'), key('E', 'Open')] };
       }
-      if (aimedNote) return { k: String(aimedNote.number), parts: [title(clip(`📌 #${aimedNote.number} ${aimedNote.title}`, 60)), key('E', 'Take it')] };
+      if (aimedNote) return { k: String(aimedNote.number), parts: [title(clip(`📌 #${aimedNote.number} ${aimedNote.title}`, 60)), key('E', 'Take it'), key('O', 'Read it')] };
       return issuesTex.hasNotes ? { k: 'notes', parts: [title('📌 Issues board'), key('E', 'Open'), aside('or point at a note to take it')] } : board('📌 Issues board');
     case 'pulls':
       return board(pullsWallMode() === 'git' ? '🌿 Git board' : '🔀 Pull request board');
@@ -3001,7 +3001,7 @@ function deskHint(deskId: string): Hint {
       key('E', 'Open terminal'),
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
-      w.workspace ? aside('Repositories & PRs in Changes') : w.pr ? aside(pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? aside('Open PR in Changes') : '',
+      w.workspace ? key('O', 'Repositories & PRs') : w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
       key('X', 'Clock out'),
     ],
   };
@@ -3043,7 +3043,7 @@ function stationHint(deskId: string): Hint {
       doing ? aside(doing) : trayNote ? aside(trayNote) : '',
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
-      aside('Terminal from Workers'),
+      key('O', 'Terminal'),
       kind === 'queue' ? key('C', 'Clipboard') : '',
       kind === 'queue' ? aside('or click it') : '',
       key('X', 'Clock out'),
@@ -3220,12 +3220,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // On the ladder, E gets you off it (and nothing else is in reach); W, S and Space climb.
-  if (climber.active && e.code !== 'KeyO' && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
+  if (climber.active && e.code !== 'KeyJ' && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
     if (e.code === 'KeyE') climber.letGo();
     return;
   }
   // At the golf tee, E puts the club back (Space swings, see Golfer); nothing else is in reach, and no emotes mid-swing.
-  if (golf.active && e.code !== 'KeyO' && (e.code === 'KeyF' || e.code === 'KeyG' || e.code in DESK_KEYS || /^(?:Digit|Numpad)[1-6]$/.test(e.code))) {
+  if (golf.active && e.code !== 'KeyJ' && (e.code === 'KeyF' || e.code === 'KeyG' || e.code in DESK_KEYS || /^(?:Digit|Numpad)[1-6]$/.test(e.code))) {
     if (e.code === 'KeyE') golf.stop();
     return;
   }
@@ -3255,12 +3255,12 @@ window.addEventListener('blur', () => voice.stopTalking());
 
 /** The office's own keys; false for any other key, which is left to walking and the browser. */
 function officeKey(e: KeyboardEvent): boolean {
-  if (e.code === 'KeyO') {
+  if (e.code === 'KeyJ') {
     if (!e.repeat) toOffice();
     return true;
   }
   const deskKey = DESK_KEYS[e.code as keyof typeof DESK_KEYS];
-  if (deskKey && deskKey !== 'O') {
+  if (deskKey) {
     // P opens a text box, which the key mustn't land in.
     if (deskKey === 'P') e.preventDefault();
     use(target, deskKey);
