@@ -90,6 +90,12 @@ test('he climbs a step and does not fall through the loft onto the floor below',
   assert.equal(stepOnto([floor, step], 0.5, 0, 0), 0.2);
   assert.equal(stepOnto([floor, loft], 8, 8, 3), 3);
   assert.equal(stepOnto([floor, { ...floor, fence: true, top: 1.5 }], 0, 0, 0), 0);
+  // The garage roof and the street under the office are further down, not a step: he stays on the floor.
+  const garage = { minX: -1, maxX: 1, minZ: -1, maxZ: 1, bottom: -3.6, top: -2.78 };
+  const street = { minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: -4.6, top: -3.6 };
+  assert.equal(stepOnto([floor, garage, street], 0, 0, 0), 0);
+  assert.equal(stepOnto([floor, garage, street], 0, 0, -0.007), 0);
+  assert.equal(stepOnto([floor, loft, street], 8, 8, 3), 3);
 });
 
 // ---- Where he comes to stand: on your own floor --------------------------------------------------
@@ -104,7 +110,8 @@ const BAG: Footing = { minX: GOLF_TEE.bag.x - 0.2, maxX: GOLF_TEE.bag.x + 0.2, m
 /**
  * The parts of the building the summon cares about, as world/office.ts builds them: the office floor,
  * the loft with glass on its north and west sides (open at the top of the stairs) and the stairs up to
- * it, and the balcony with the railing round its three open sides and the golf bag.
+ * it, the balcony with the railing round its three open sides and the golf bag, and the garage and
+ * the street down below, after the floor as the office adds them.
  */
 function building(): Footing[] {
   const c: Footing[] = [{ minX: FLOOR.minX, maxX: FLOOR.maxX, minZ: FLOOR.minZ, maxZ: FLOOR.maxZ, top: 0 }];
@@ -119,6 +126,8 @@ function building(): Footing[] {
   c.push({ minX: minX + 0.01, maxX: minX + 0.11, minZ, maxZ, bottom: -0.3, top: 99 });
   c.push({ minX: maxX - 0.11, maxX: maxX - 0.01, minZ, maxZ, bottom: -0.3, top: 99 });
   c.push(BAG);
+  c.push({ minX: -8.92, maxX: -7.08, minZ: -12.52, maxZ: -8.08, bottom: -3.6, top: -2.78 });
+  c.push({ minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: -4.6, top: -3.6 });
   return c;
 }
 

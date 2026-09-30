@@ -157,7 +157,8 @@ export function stepOnto(colliders: readonly Footing[], x: number, z: number, y:
   let step = -Infinity;
   for (const c of colliders) {
     if (c.fence || c.top > 50 || !footOn(c, x, z)) continue;
-    if (c.top <= y + 0.08 && c.top > stand) stand = c.top;
+    // Underfoot, or a step up. What's further down (the garage roof, the street) is neither.
+    if (c.top <= y + 0.08) stand = Math.max(stand, c.top);
     else if (c.top <= y + STEP && c.top > step) step = c.top;
   }
   if (step > -Infinity) return step;
