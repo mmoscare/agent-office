@@ -644,6 +644,13 @@ export interface NotifyState {
   lastSentAt?: number;
 }
 
+/** One app on the wall's top-CPU list: its share of the machine over the last few seconds. */
+export interface CpuApp {
+  name: string;
+  /** Percent of the whole machine, 0-100, not of a single core. */
+  pct: number;
+}
+
 /**
  * The office's machine (see server/machine.ts): how busy it is, for the wall monitor and a warning
  * before hiring, and the most workers the office runs at once, across every floor.
@@ -667,6 +674,8 @@ export interface MachineState {
   ceiling?: number;
   /** The limit someone set in ⚙️ Settings, when there is one. */
   set?: { limit: number; by: string; at: number };
+  /** The apps using the most CPU, busiest first, at most five. Missing until the first reading. */
+  apps?: CpuApp[];
 }
 
 export interface GhState<T> {
