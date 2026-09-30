@@ -1222,7 +1222,7 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
     if (!matches(row, only)) continue;
     const refuse = (why: string) => runOut.refused.push({ repo: row.repo, name: row.name, why });
     if (row.kept === 'always') {
-      refuse('on the always-keep list (--forget-keep takes it off)');
+      refuse('on the always-keep list (office-cleanbot forget, or --forget-keep, takes it off)');
       continue;
     }
     if (row.kept) {
@@ -1409,7 +1409,8 @@ export function deleteCommands(report: FloorPruneReport, rows: SuggestedRow[], s
   const byRepo = new Map<string, string[]>();
   for (const r of rows) byRepo.set(r.repo, [...(byRepo.get(r.repo) ?? []), r.name]);
   const several = report.repos.length > 1;
-  const quote = (s: string) => (/^[\w./@:+-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, '\\$1')}"`);
+  // Commas are safe unquoted in sh and PowerShell, and both commands split names on them.
+  const quote = (s: string) => (/^[\w./@:+,-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, '\\$1')}"`);
   return [...byRepo].map(([repo, names]) => {
     const repoArg = several ? ` --repo ${quote(repo)}` : '';
     const list = quote(names.join(','));
@@ -1438,8 +1439,9 @@ export function renderReport(report: FloorPruneReport, dryRun: boolean, style: C
         const extra = r.worktree?.stray ? ' (stray folder)' : r.worktree?.kind === 'scratchpad' ? ' (scratchpad)' : r.worktree?.desk ? ` (desk ${r.worktree.desk})` : !r.local && !r.worktree ? ' (GitHub only)' : '';
         const pr = r.pr ? `#${r.pr.number} ${prState(r.pr)}` : '—';
         const kept = r.kept === 'always' ? ' [always keep]' : r.kept ? ' [keep]' : '';
-        const mark = r.suggest === 'delete' ? '🗑' : r.suggest === 'look' ? '👀' : '  ';
-        lines.push(`  ${mark}${String(r.n).padStart(3)}  ${(r.name + extra).padEnd(44)} ${pr.padEnd(12)} ${day(r.lastCommit).padEnd(11)} ${since(r.changed).padEnd(10)} ${VERDICT_LABEL[r.verdict]}${kept} — ${r.why}`);
+        // The mark goes with the verdict: an emoji's width varies between terminals, so not in a padded column.
+        const mark = r.suggest === 'delete' ? '🗑 ' : r.suggest === 'look' ? '👀 ' : '';
+        lines.push(`    ${String(r.n).padStart(3)}  ${(r.name + extra).padEnd(44)} ${pr.padEnd(12)} ${day(r.lastCommit).padEnd(11)} ${since(r.changed).padEnd(10)} ${mark}${VERDICT_LABEL[r.verdict]}${kept} — ${r.why}`);
       }
     } else if (!repo.error) lines.push("    nothing of the office's here: all clean");
     const others = rows.filter((r) => r.verdict === 'not-office');
