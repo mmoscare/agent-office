@@ -783,6 +783,28 @@ export interface ProjectInfo {
   agentProviders: AgentProvider[];
 }
 
+/**
+ * One ring of the office phone: an agent worker finished. Kept so you can see who called, and
+ * stand behind them at the desk they were at.
+ */
+/** How many phone calls the office keeps. */
+export const PHONE_KEEP = 80;
+
+export interface PhoneCall {
+  /** When they finished, on the office's clock. */
+  at: number;
+  /** The floor they were on. */
+  floor: string;
+  /** That floor's name. */
+  name: string;
+  workerId: string;
+  /** The worker's name. */
+  worker: string;
+  deskId: string;
+  color: string;
+  task?: string;
+}
+
 /** A worker notification shared with people on every floor. */
 export interface WorkerAttention {
   id: string;
@@ -1384,6 +1406,8 @@ export type ServerMsg =
       /** The office's prompts and the worker everyone starts on. */
       prompts: PromptsState;
       leaveOnMerge: LeaveOnMergeState;
+      /** Recent phone calls: workers who finished and rang the office phone. Omitted by older servers. */
+      calls?: PhoneCall[];
     } & FloorView)
   /** You arrived on another floor: everything on it, replacing the last one's, and where everyone is now. */
   | ({ t: 'floor.enter'; peers: PeerInfo[] } & FloorView)
@@ -1433,10 +1457,10 @@ export type ServerMsg =
   /** Someone on the roof blew the DJ's air horn (sent to everyone up there, them too). */
   | { t: 'horn'; by: string }
   /**
-   * The office phone rings: an agent worker on another floor (`floor`, called `name`) just finished.
-   * Sent to everyone who isn't on that floor, since they can't hear its ding from where they are.
+   * The office phone rings: an agent worker just finished. Sent to everyone, so the call log stays
+   * current; the bell only rings for people who aren't on that floor (they can't hear its ding).
    */
-  | { t: 'phone'; floor: string; name: string; worker: string; task?: string }
+  | ({ t: 'phone' } & PhoneCall)
   /** Sent to whoever asked to close it. */
   | { t: 'gh.closed'; kind: 'issue' | 'pull'; number: number; repo?: string; error?: string }
   /** Sent to whoever changed them: the labels it has now, or why they didn't change. */

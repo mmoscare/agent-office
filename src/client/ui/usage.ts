@@ -48,7 +48,7 @@ export function overBudget(): boolean {
 /** New hires are refused: the daily budget is spent and the office runs with --budget-pause. */
 export const hiringPaused = () => store.usage.pauseHiring && overBudget();
 
-/** The sidebar's spend lines: what the workers at their desks cost, today's total and the budget. */
+/** Spend, folded under Claude limits: today's total, the budget, and the workers at their desks. */
 export function renderUsage() {
   const s = store.usage;
   let now = 0;

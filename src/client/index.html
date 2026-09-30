@@ -36,12 +36,18 @@
             <p id="attention-summary">All caught up.</p>
             <div id="attention-floors"></div>
           </section>
-          <section id="spend" class="panel spend">
-            <h3>Spend<button class="panel-x" data-hud="spend" aria-label="Hide" title="Hide (☰ brings it back)">✕</button></h3>
-            <div id="usage" class="usage hidden"></div>
-            <button id="btn-model-usage" class="btn" title="Saved usage and cost across every floor">Usage &amp; cost</button>
+          <section id="phone" class="panel phone" aria-label="Phone">
+            <h3>Phone <span id="phone-count" class="count"></span><button class="panel-x" data-hud="phone" aria-label="Hide" title="Hide (☰ brings it back)">✕</button></h3>
+            <ul id="phone-log"></ul>
           </section>
-          <section id="limits" class="panel limits hidden" title="Read again now"></section>
+          <section id="limits" class="panel limits hidden" title="Read again now">
+            <div id="limits-body"></div>
+            <details id="limits-spend" class="limits-spend">
+              <summary>💸 Spend</summary>
+              <div id="usage" class="usage hidden"></div>
+              <button id="btn-model-usage" class="btn" title="Saved usage and cost across every floor">Usage &amp; cost</button>
+            </details>
+          </section>
           <!-- Filled by ui/balances.ts: pay-as-you-go API balances read from each provider's billing API. -->
           <section id="balances" class="panel balances" aria-label="API balances"></section>
         </aside>

@@ -1,4 +1,4 @@
-import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, LeaveOnMergeState, MachineState, MeetingState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, ProjectsDirState, PromptsState, QueueState, QueueTask, RepoChoice, UnshippedState, ServerMsg, ServicesState, SkyState, TeamState, ThemeState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
+import { PHONE_KEEP, type AccountsState, type ChatLine, type FloorInfo, type FloorView, type GhIssue, type GhPull, type GhState, type LeaveOnMergeState, type MachineState, type MeetingState, type NotifyState, type PeerInfo, type PhoneCall, type PlanLimits, type Me, type ProjectInfo, type ProjectsDirState, type PromptsState, type QueueState, type QueueTask, type RepoChoice, type UnshippedState, type ServerMsg, type ServicesState, type SkyState, type TeamState, type ThemeState, type UpgradeState, type Usage, type UsageState, type WorkerInfo } from '../shared/protocol';
 import type { ScreenState } from './world/laptop';
 import { randomLook, sanitizeLook, type Look } from '../shared/avatar';
 import type { Decoration } from '../shared/decor';
@@ -17,7 +17,7 @@ import { MAIL_OFF, type MailState } from '../shared/mail';
 import type { BallState } from '../shared/hoop';
 import { emptyVpView, type VpView } from '../shared/vp';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball' | 'vp';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'calls' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball' | 'vp';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -54,9 +54,9 @@ export function saveProfile(p: Profile) {
 export type ViewMode = 'first' | 'third';
 
 /** The panels you can show or hide on screen, from the ☰ menu. */
-export type HudPanel = 'workers' | 'people' | 'spend' | 'limits' | 'balances' | 'chat' | 'floor';
+export type HudPanel = 'workers' | 'people' | 'phone' | 'limits' | 'balances' | 'chat' | 'floor';
 /** Out of the way by default: only the chat shows until you turn the rest on. */
-export const HUD_DEFAULTS: Record<HudPanel, boolean> = { workers: false, people: false, spend: false, limits: false, balances: true, chat: true, floor: false };
+export const HUD_DEFAULTS: Record<HudPanel, boolean> = { workers: false, people: false, phone: false, limits: false, balances: true, chat: true, floor: false };
 
 export interface Settings {
   view: ViewMode;
@@ -108,6 +108,11 @@ export function loadSettings(): Settings {
     if (typeof saved?.pushToTalk === 'boolean') s.pushToTalk = saved.pushToTalk;
     if (typeof saved?.notify === 'boolean') s.notify = saved.notify;
     for (const k of Object.keys(s.hud) as HudPanel[]) if (typeof saved?.hud?.[k] === 'boolean') s.hud[k] = saved.hud[k];
+    // The Spend panel became the phone. Anyone who had it on keeps that spot, and the figures move onto Claude limits.
+    if (typeof saved?.hud?.phone !== 'boolean' && saved?.hud?.spend === true) {
+      s.hud.phone = true;
+      s.hud.limits = true;
+    }
     if (Array.isArray(saved?.pins)) s.pins = saved.pins.filter((p: unknown): p is string => typeof p === 'string').slice(0, 30);
   } catch {
     // storage blocked
@@ -197,6 +202,8 @@ class Store {
   usage: UsageState = { total: zeroUsage(), today: zeroUsage(), day: '', pauseHiring: false };
   /** The Claude plan's 5-hour and weekly limits. */
   limits: PlanLimits = { windows: [], at: 0 };
+  /** Who rang the office phone, oldest first. */
+  calls: PhoneCall[] = [];
   queue: QueueState = { tasks: [], maxWorkers: 0 };
   /** Office branches with work no PR carries (the PR board's Unshipped work column). */
   unshipped: UnshippedState = { items: [], scannedAt: 0, scanning: false };
@@ -379,6 +386,7 @@ class Store {
         this.upgrade = msg.upgrade;
         this.usage = msg.usage;
         this.limits = msg.limits;
+        this.calls = msg.calls ?? [];
         this.me = msg.me;
         this.notify = msg.notify;
         this.machine = msg.machine;
@@ -389,7 +397,7 @@ class Store {
         this.prompts = msg.prompts ?? { custom: {} };
         this.leaveOnMerge = msg.leaveOnMerge ?? { on: false };
         this.enter(msg);
-        for (const t of ['peers', 'chat', 'upgrade', 'usage', 'limits', 'me', 'notify', 'machine', 'floors', 'projectsDir', 'sky', 'theme', 'mail', 'prompts', 'leaveOnMerge'] as Topic[]) this.emit(t);
+        for (const t of ['peers', 'chat', 'upgrade', 'usage', 'limits', 'calls', 'me', 'notify', 'machine', 'floors', 'projectsDir', 'sky', 'theme', 'mail', 'prompts', 'leaveOnMerge'] as Topic[]) this.emit(t);
         break;
       case 'floor.enter':
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
@@ -554,6 +562,12 @@ class Store {
       case 'limits':
         this.limits = msg.state;
         this.emit('limits');
+        break;
+      case 'phone':
+        if (!this.calls.some((c) => c.at === msg.at && c.workerId === msg.workerId)) {
+          this.calls = [...this.calls, msg].slice(-PHONE_KEEP);
+          this.emit('calls');
+        }
         break;
       case 'queue':
         this.queue = msg.state;
