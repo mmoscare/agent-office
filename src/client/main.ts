@@ -3220,12 +3220,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   // On the ladder, E gets you off it (and nothing else is in reach); W, S and Space climb.
-  if (climber.active && e.code !== 'KeyJ' && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
+  if (climber.active && (e.code === 'KeyE' || e.code === 'KeyF' || e.code in DESK_KEYS)) {
     if (e.code === 'KeyE') climber.letGo();
     return;
   }
   // At the golf tee, E puts the club back (Space swings, see Golfer); nothing else is in reach, and no emotes mid-swing.
-  if (golf.active && e.code !== 'KeyJ' && (e.code === 'KeyF' || e.code === 'KeyG' || e.code in DESK_KEYS || /^(?:Digit|Numpad)[1-6]$/.test(e.code))) {
+  if (golf.active && (e.code === 'KeyF' || e.code === 'KeyG' || e.code in DESK_KEYS || /^(?:Digit|Numpad)[1-6]$/.test(e.code))) {
     if (e.code === 'KeyE') golf.stop();
     return;
   }
