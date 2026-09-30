@@ -122,13 +122,15 @@ function saveWarned(keys: string[]) {
  * it: keep going at that rate and it runs out before it starts over. Whether or not the meter is shown.
  */
 export function watchLimitBudget(desktop: (title: string, body: string) => void) {
-  const warned = loadWarned();
+  // Read again every time, so another tab of the office that already warned counts; kept here too, for when storage is blocked.
+  let seen: string[] = [];
   store.on('limits', () => {
+    const warned = [...new Set([...seen, ...loadWarned()])];
     const due = budgetWarnings(store.limits.windows, new Set(warned));
     if (!due.length) return;
     warned.push(...due.map((d) => d.key));
-    warned.splice(0, Math.max(0, warned.length - WARNED_KEEP));
-    saveWarned(warned);
+    seen = warned.slice(-WARNED_KEEP);
+    saveWarned(seen);
     const title = "⏳ Today's Claude budget is used up";
     const body = due.map((d) => warningLine(d.window, d.budget)).join(' ');
     toast(`${title}. ${body}`, 'warn', 15_000);
