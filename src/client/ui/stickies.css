@@ -1,0 +1,17 @@
+/* Reminder stickies (ui/stickies.ts): edit one, or add one from the + on the wall. */
+.modal.sticky-editor { width: min(480px, calc(100vw - 24px)); }
+.sticky-editor .body { display: flex; flex-direction: column; gap: 12px; }
+.sticky-editor textarea { min-height: 96px; font-weight: 800; }
+.sticky-colors { display: flex; gap: 8px; flex-wrap: wrap; }
+.sticky-swatch { width: 36px; height: 36px; border: 3px solid var(--ink); border-radius: 10px; padding: 0; box-shadow: 0 2px 0 var(--ink); cursor: pointer; }
+.sticky-swatch[aria-pressed=true] { outline: 3px solid var(--accent); outline-offset: 2px; }
+.sticky-sizes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sticky-sizes label { margin: 0; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.sticky-sizes input[type=range] { width: 100%; accent-color: var(--ink); }
+.sticky-nudge { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.sticky-nudge .btn { padding: 4px 10px; font-size: 13px; }
+.sticky-hidden { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.sticky-hidden li { display: flex; gap: 8px; align-items: center; background: var(--paper-2); border: 2px solid var(--ink); border-radius: 10px; padding: 6px 8px; }
+.sticky-hidden span { flex: 1; min-width: 0; font-size: 13px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sticky-hidden .btn { padding: 3px 10px; font-size: 12px; }
+.sticky-editor .hint { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
