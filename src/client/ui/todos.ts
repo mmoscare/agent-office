@@ -462,12 +462,13 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     const n = (c: TodoColumn) => pool(c).length;
     const today = startOfToday();
     const doneToday = pool('done').filter((t) => (t.doneAt ?? 0) >= today).length;
-    summary.replaceChildren(
+    const stats: HTMLElement[] = [
       ...(['active', 'urgent', 'todo'] as const).map((c) => h('span.todo-stat', { class: `stat-${c}` }, `${COLUMN_ICON[c]} ${n(c)} ${TODO_COLUMNS[c].toLowerCase()}`)),
       h('span.todo-stat.stat-done', {}, `✅ ${doneToday} done today`),
-      areaFilter ? h('span.todo-stat.stat-area', { class: `stat-${areaFilter}` }, `Showing ${TODO_AREAS[areaFilter]}`) : null,
-      h('span.todo-reveal-hint', {}, todoDetailsShown(board) ? 'Double-click the board to tuck notes away' : 'Double-click the board for notes, subtasks & pictures'),
-    );
+    ];
+    if (areaFilter) stats.push(h('span.todo-stat.stat-area', { class: `stat-${areaFilter}` }, `Showing ${TODO_AREAS[areaFilter]}`));
+    stats.push(h('span.todo-reveal-hint', {}, todoDetailsShown(board) ? 'Double-click the board to tuck notes away' : 'Double-click the board for notes, subtasks & pictures'));
+    summary.replaceChildren(...stats);
   }
 
   function render() {

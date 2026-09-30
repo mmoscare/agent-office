@@ -151,7 +151,7 @@ try {
   assert.deepEqual(await cards('done'), ['Answer the email', 'Fix the login bug']);
 
   // Edit in place, then ✕ with Undo.
-  await card('todo', 'Tidy the garage').dblclick();
+  await card('todo', 'Tidy the garage').locator('.todo-text').dblclick();
   const edit = board.getByRole('textbox', { name: 'Edit to-do' });
   await edit.fill('Tidy the garage and shed');
   await edit.press('Enter');
