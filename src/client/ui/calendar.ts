@@ -14,9 +14,11 @@ import {
   shouldNotify,
   shiftMonth,
   WEEKDAYS,
+  type CalendarChore,
 } from '../../shared/calendar';
 import { notifyPermission } from '../notify';
 import { store } from '../state';
+import { openCleanup } from './cleanup';
 import { h, openModal, toast } from './dom';
 
 const DISMISSED_KEY = 'agent-office.calendar.dismissed';
@@ -121,12 +123,18 @@ export function openCalendar() {
       h('div.cal-chores', {},
         h('h3', {}, selected === 1 ? 'First of the month' : current && selected === today.day ? 'Today' : `${monthTitle(view)} ${selected}`),
         chores.length
-          ? h('ul', {}, ...chores.map(c => h('li', {}, h('span.cal-icon', {}, c.icon), h('div', {}, h('b', {}, c.title), h('p', {}, c.detail)))))
+          ? h('ul', {}, ...chores.map(c => h('li', {}, h('span.cal-icon', {}, c.icon), h('div', {}, h('b', {}, c.title), h('p', {}, c.detail), choreButton(c)))))
           : h('p.cal-empty', {}, 'Nothing on this day. The monthly chores sit on the 1st.'),
       ),
     );
   };
   render();
+}
+
+/** The button that opens a chore's own screen, when it has one: the cleanup screen for the branch cleanup. */
+function choreButton(c: CalendarChore): HTMLElement | null {
+  if (c.opens !== 'cleanup') return null;
+  return h('button.btn.cal-open', { type: 'button', title: 'Pick a floor and a repository, then which branches and worktrees to keep', onclick: () => openCleanup() }, '🧹 Open the cleanup');
 }
 
 /**
@@ -145,7 +153,7 @@ export function mountCalendarNag(opts: { desktop: () => boolean }) {
     hide();
     card = h('div.calendar-nag', { role: 'status' },
       h('div.mail-nag-who', {}, h('span.mail-nag-face', { 'aria-hidden': 'true' }, '📅'), h('b', {}, 'First of the month'), h('button.mail-nag-x', { type: 'button', 'aria-label': 'Not now', title: 'Not now', onclick: hide }, '✕')),
-      h('ul', {}, ...MONTHLY_CHORES.map(c => h('li', {}, `${c.icon} ${c.title}`))),
+      h('ul', {}, ...MONTHLY_CHORES.map(c => h('li', {}, `${c.icon} ${c.title} `, choreButton(c)))),
       h('div.mail-nag-actions', {},
         h('button.btn.primary', { type: 'button', onclick: () => { hide(); openCalendar(); } }, '📅 Open calendar'),
         h('button.btn', { type: 'button', onclick: () => { markChoresDone(); hide(); toast('📅 Marked done for this month'); } }, 'Done for this month'),

@@ -27,9 +27,28 @@ import { h, openModal, timeAgo, toast, type Modal } from './dom';
 // a Short, an article, an X thread…), and each card keeps those as a checklist to tick off while it
 // moves from 💡 Ideas through Scripting, Creating, Editing and Scheduled to 🚀 Published.
 
-/** Makes a change to the floor's Content Kanban: on screen straight away, and on to the office, whose copy wins once it answers (see state.ts). */
-export function changeContent(net: Net, change: ContentAction) {
-  if (store.changeContent(change)) net.send({ t: 'content', change });
+/**
+ * Makes a change to the floor's Content Kanban: on screen straight away, and on to the office, whose
+ * copy wins once it answers (see state.ts). Not while the office is out of reach: the change would
+ * never get there, and the board it sends on reconnecting would take it back off the screen. False
+ * when nothing changed.
+ */
+export function changeContent(net: Net, change: ContentAction): boolean {
+  if (unreachable(net)) {
+    // Puts back what the click already changed on screen, like a ticked box.
+    store.emit('content');
+    return false;
+  }
+  if (!store.changeContent(change)) return false;
+  net.send({ t: 'content', change });
+  return true;
+}
+
+/** Says so, and true, while the office is out of reach. */
+function unreachable(net: Net): boolean {
+  if (net.up) return false;
+  toast('Not connected to the office right now — try again once it’s back', 'warn');
+  return true;
 }
 
 /** What each stage is for, under its name. */
@@ -172,7 +191,8 @@ export function openContentKanban(net: Net) {
     const ideas = dumpedIdeas(dump.value);
     if (!ideas.length) return dump.focus();
     const taking = ideas.slice(0, CONTENT_DUMP_MAX);
-    change({ action: 'add', cards: taking.map((title) => ({ id: newContentId(), title })), formats: FORMAT_ORDER.filter((f) => picked.has(f)), stage: 'idea', index: 0 });
+    // Not added (the office is out of reach): the ideas and toggles stay put, to try again.
+    if (!change({ action: 'add', cards: taking.map((title) => ({ id: newContentId(), title })), formats: FORMAT_ORDER.filter((f) => picked.has(f)), stage: 'idea', index: 0 })) return;
     // More than one dump takes: the rest stay in the box for the next.
     dump.value = ideas.slice(CONTENT_DUMP_MAX).join('\n');
     if (ideas.length > CONTENT_DUMP_MAX) toast(`Added ${CONTENT_DUMP_MAX}; the other ${ideas.length - CONTENT_DUMP_MAX} are still in the box`, 'warn');
@@ -219,17 +239,18 @@ export function openContentKanban(net: Net) {
       h('button.btn.ck-mini', { type: 'button', onclick: () => {
         if (!removed) return;
         const { item, index, timer } = removed;
+        if (!change({ action: 'restore', item, index })) return;
         clearTimeout(timer);
         removed = undefined;
-        change({ action: 'restore', item, index });
         showUndo();
       } }, 'Undo'),
     );
   };
   const remove = (item: ContentItem) => {
+    const index = indexOf(item);
+    if (!change({ action: 'remove', id: item.id })) return;
     if (removed) clearTimeout(removed.timer);
-    removed = { item, index: indexOf(item), timer: setTimeout(() => ((removed = undefined), showUndo()), 8000) };
-    change({ action: 'remove', id: item.id });
+    removed = { item, index, timer: setTimeout(() => ((removed = undefined), showUndo()), 8000) };
     showUndo();
   };
   const move = (item: ContentItem, stage: ContentStage, index = 0) => change({ action: 'move', id: item.id, stage, index });
@@ -240,7 +261,8 @@ export function openContentKanban(net: Net) {
     cols.querySelector<HTMLInputElement>('.ck-edit-title')?.focus();
   };
   const saveEdit = (item: ContentItem) => {
-    if (!editing) return;
+    // Out of reach: the card stays open with what's typed in it, to save once the office is back.
+    if (!editing || unreachable(net)) return;
     const e = editing;
     editing = undefined;
     const title = clean(e.title).slice(0, CONTENT_TITLE_MAX);
