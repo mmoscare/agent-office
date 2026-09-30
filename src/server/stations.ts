@@ -5,9 +5,13 @@
 // this floor holds, and how the Receptionist's mailbox stands, because those change as the office does.
 
 import { STATION_AGENT, type StationKind } from '../shared/layout.js';
+import { isBotKind, type BotKind } from '../shared/bots.js';
 import type { MailBrief } from '../shared/mail.js';
 import { PROMPTS, isPromptId } from '../shared/prompts.js';
 import type { PromptSource } from './prompts.js';
+
+/** The agents standing by a board; the deployable bots (shared/bots.ts) bring their own brief. */
+type BoardKind = Exclude<StationKind, BotKind>;
 
 /** What a board agent is told about the office as it stands when it's hired. */
 export interface StationContext {
@@ -15,14 +19,14 @@ export interface StationContext {
   mail?: MailBrief;
 }
 
-const BOARD: Record<StationKind, string> = {
+const BOARD: Record<BoardKind, string> = {
   issues: 'the 📌 Issues board',
   pulls: 'the 🔀 Pull Requests board',
   queue: 'the 📋 task queue',
   inbox: 'the 📥 in-tray',
 };
 
-const JOB: Record<StationKind, string> = {
+const JOB: Record<BoardKind, string> = {
   issues: `You look after this repository's GitHub issues with the gh CLI: file new ones (a clear title, what's wrong or wanted, and how to reproduce it when that applies), find and sum them up, triage, label, comment on, close and reopen them. To get an issue worked on, put it on the task queue with its number.`,
   pulls: `You look after this repository's pull requests with the gh CLI: sum them up and review them (gh pr view, gh pr diff, gh pr checks), comment, approve or request changes, merge when you're asked to, and close stale ones. Read a PR's code with gh pr diff rather than checking its branch out here. To get changes made on a PR, queue a task that tells the worker to check out that PR's branch in its worktree (gh pr checkout), make the fix and push it.`,
   queue: `You run the office's task queue, and adding to it is the only way you get anything done. Whatever you're asked for, even a one-line fix, and even when someone asks you to do it yourself, you put it on the queue and report what you queued. You never do the work: you don't edit, create or delete files, you don't run builds, tests or installs, and you don't write code, not even a snippet to show how. Read the code and gh issue list only as far as it takes to write a good task. Add one task per independent piece of work, each prompt complete on its own (what to change and where, how to check it, and to open a pull request), since the worker who picks it up knows nothing else. Task prompts needn't repeat when to commit and push: the office appends that rule itself. Link a task to its GitHub issue when it's for one. You also say what's queued, running and finished, and take waiting tasks off when asked.`,
@@ -74,6 +78,12 @@ const INBOX_API = `The 📥 in-tray holds what came in from outside: notes, forw
 - Read one: office-inbox read <name> (a note's text; for a file, its path, to open with your own tools)
 - Put one away: office-inbox archive <name>, once it's filed or needs nothing (it goes to the folder's archive/).`;
 
+/** For the PR agent: clocking out the worker whose pull request it merged, with the office-workers command. */
+const WORKERS_API = `When you've merged a pull request, see to the worker who made it with the office-workers command, on your PATH like office-queue:
+- See the floor's workers: office-workers list (each one's id, status, branch, pull request, what its worktree holds, and whether the office would let it go)
+- Clock one out: office-workers home <id> --remove-worktree, by id, never by name (names are reused). The office refuses, and says why, while it's busy or holds work no remote has, and keeps its worktree until its branch has merged.
+Clock the PR's worker out once it's done or idle with a clean worktree and nothing unpushed, and say so in the merge record. Also clock out workers with no changes that only answered a question and have been done for a while. Never clock out a worker with unshipped work: name it for the owner instead.`;
+
 /** A GitHub checkout in a floor that's a folder of them: owner/name, and its folder relative to the floor. */
 export interface Checkout {
   repo: string;
@@ -112,6 +122,8 @@ function withRuntime(base: string, notes: string[]): string {
 }
 
 function builtBrief(kind: StationKind, checkouts: Checkout[], context: StationContext): string {
+  // A bot's brief is all its own (its default in shared/prompts.ts); the office adds the floor's checkouts.
+  if (isBotKind(kind)) return withRuntime(PROMPTS[`station.${kind}`].text, runtimeNotes(kind, checkouts, context));
   const queue = kind === 'queue';
   const inbox = kind === 'inbox';
   const wrapUp = queue
@@ -127,6 +139,7 @@ function builtBrief(kind: StationKind, checkouts: Checkout[], context: StationCo
     QUEUE_API,
     PLANS_API,
     INBOX_API,
+    ...(kind === 'pulls' ? [WORKERS_API] : []),
     ...(inbox ? [MAIL_API, mailNote(context.mail)] : []),
     `Follow the worker handoff rule: save the detailed outcome on the relevant issue or PR. ${wrapUp} Then wait: the next request may come from someone else.`,
     `The request:`,
@@ -143,7 +156,7 @@ export function stationBrief(kind: StationKind, checkoutsOrPrompts?: Checkout[] 
 /** Claude Code tools the queue agent and the receptionist are launched without, so they can't edit the checkout even by mistake. */
 export const QUEUE_AGENT_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
-/** The board agents that only ever file and queue work: launched without the file-editing tools. */
+/** The board agents that only ever file and queue work, and the bots (who act only through commands): launched without the file-editing tools. */
 export function stationDisallowedTools(kind: StationKind): string[] {
-  return kind === 'queue' || kind === 'inbox' ? QUEUE_AGENT_DISALLOWED_TOOLS : [];
+  return kind === 'queue' || kind === 'inbox' || isBotKind(kind) ? QUEUE_AGENT_DISALLOWED_TOOLS : [];
 }

@@ -8,13 +8,16 @@ import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
-import type { TodoItem } from '../shared/todos';
+import type { StickyNote } from '../shared/stickies';
+import { applyTodo, type TodoAction, type TodoItem } from '../shared/todos';
+import { applyNote, EMPTY_NOTES, type NoteAction, type NotesState } from '../shared/notes';
 import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 import type { BallState } from '../shared/hoop';
+import { emptyVpView, type VpView } from '../shared/vp';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'content' | 'prompts' | 'ball';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball' | 'vp';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -159,6 +162,28 @@ class Store {
   todos: readonly TodoItem[] = [];
   /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
   todosPending = 0;
+  /** Your own 📝 Notes pad as you see it, the To Do board's other side (see ui/notes.ts). */
+  notes: NotesState = EMPTY_NOTES;
+  /** It as the office last sent it. */
+  private notesBase: NotesState = EMPTY_NOTES;
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
+  private notesPending: NoteAction[] = [];
+  /** How many times the office has sent the whole pad (on arriving, after a reconnect): unsaved drafts go again after each (see ui/note-drafts.ts). */
+  notesLoads = 0;
+  /** Your 📝 Notes pad as the office has it, without your changes still on their way: a draft is let go once it's in here. */
+  get notesOffice(): NotesState {
+    return this.notesBase;
+  }
+  /** Reminder stickies on the wall by that board, the same on every floor (see ui/stickies.ts). */
+  stickies: readonly StickyNote[] = [];
+  /** Changes to them the office hasn't answered yet. */
+  stickiesPending = 0;
+  /** The office's 🏢 Autonomous Tasks board as you see it (one list for everyone; see ui/todos.ts). */
+  autonomous: readonly TodoItem[] = [];
+  /** It as the office last sent it. */
+  private autonomousBase: readonly TodoItem[] = [];
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends (anyone's change, as well as yours) until it has. */
+  private autonomousPending: TodoAction[] = [];
   /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
   content: readonly ContentItem[] | null = null;
   /** It as the office last sent it. */
@@ -206,6 +231,8 @@ class Store {
   prompts: PromptsState = { custom: {} };
   /** Whether workers whose pull request merged go home by themselves (⚙️ Settings). */
   leaveOnMerge: LeaveOnMergeState = { on: false };
+  /** The VP on this floor: his standing duty, what he's on, and the merges waiting for a restart. */
+  vp: VpView = emptyVpView();
   private subs = new Map<Topic, Set<() => void>>();
 
   on(topic: Topic, fn: () => void) {
@@ -279,10 +306,38 @@ class Store {
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
     this.ball = v.ball ?? {};
+    this.vp = v.vp ?? emptyVpView();
     // A new floor (or a reconnect): changes still on their way were for the board left behind.
     this.contentPending = [];
     this.contentBase = this.content = v.content ?? null;
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball'] as Topic[]) this.emit(t);
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball', 'vp'] as Topic[]) this.emit(t);
+  }
+
+  /** Makes a change to your 📝 Notes pad on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeNote(a: NoteAction): boolean {
+    const next = applyNote(this.notes, a);
+    if (next === this.notes) return false;
+    this.notesPending.push(a);
+    this.notes = next;
+    this.emit('notes');
+    return true;
+  }
+
+  /** The pad the office sent, with your changes it hasn't answered yet on top. */
+  private replayNotes() {
+    const now = Date.now();
+    this.notes = this.notesPending.reduce((state, a) => applyNote(state, a, now), this.notesBase);
+    this.emit('notes');
+  }
+
+  /** Makes a change to the 🏢 Autonomous Tasks board on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeAutonomous(a: TodoAction): boolean {
+    const next = applyTodo(this.autonomous, a);
+    if (next === this.autonomous) return false;
+    this.autonomousPending.push(a);
+    this.autonomous = next;
+    this.emit('autonomous');
+    return true;
   }
 
   /** Makes a change to the floor's 🎬 Content Kanban on screen straight away; false when it changes nothing (then there's nothing to send). */
@@ -309,8 +364,11 @@ class Store {
   apply(msg: ServerMsg) {
     switch (msg.t) {
       case 'welcome':
-        // A reconnect: what was on its way is lost, and the To Do board the office sends next is the one.
+        // A reconnect: what was on its way is lost, and the To Do board and stickies the office sends next are the ones.
         this.todosPending = 0;
+        this.notesPending = [];
+        this.stickiesPending = 0;
+        this.autonomousPending = [];
         this.you = msg.you;
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
         this.floors = msg.floors;
@@ -428,10 +486,35 @@ class Store {
         this.emit('cabinet');
         break;
       case 'todos':
+        if (msg.board === 'autonomous') {
+          // Everyone's changes come back to everyone; `mine` is the answer to one of yours (each gets exactly
+          // one). Yours not answered yet go back on top of the office's copy, so none of them blinks out.
+          if (msg.mine) this.autonomousPending.shift();
+          this.autonomousBase = msg.items;
+          this.autonomous = this.autonomousPending.reduce<readonly TodoItem[]>((items, a) => applyTodo(items, a), this.autonomousBase);
+          this.emit('autonomous');
+          break;
+        }
         // Each change of yours gets one answer; the last one has them all in it.
         if (this.todosPending > 0 && --this.todosPending > 0) break;
         this.todos = msg.items;
         this.emit('todos');
+        break;
+      case 'notes':
+        if (msg.mine) this.notesPending.shift();
+        this.notesLoads++;
+        this.notesBase = msg.state;
+        this.replayNotes();
+        break;
+      case 'notes.change':
+        if (msg.mine) this.notesPending.shift();
+        this.notesBase = applyNote(this.notesBase, msg.change, msg.at);
+        this.replayNotes();
+        break;
+      case 'stickies':
+        if (this.stickiesPending > 0 && --this.stickiesPending > 0) break;
+        this.stickies = msg.items;
+        this.emit('stickies');
         break;
       case 'content': {
         // Rode the elevator meanwhile: that was the other floor's board.
@@ -531,6 +614,10 @@ class Store {
       case 'leaveOnMerge':
         this.leaveOnMerge = msg.state;
         this.emit('leaveOnMerge');
+        break;
+      case 'vp':
+        this.vp = msg.state;
+        this.emit('vp');
         break;
       case 'chat':
         this.chat.push(msg);

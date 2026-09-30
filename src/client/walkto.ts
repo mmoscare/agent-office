@@ -11,7 +11,7 @@ export interface Spot {
   z: number;
 }
 
-type Zone = 'floor' | 'stairs' | 'loft' | 'balcony' | 'outside';
+export type Zone = 'floor' | 'stairs' | 'loft' | 'balcony' | 'outside';
 
 const STAIRS_Z = (STAIRS.minZ + STAIRS.maxZ) / 2;
 /** Just inside the boss's office door at the top of the stairs, and just off the bottom step. */
@@ -32,13 +32,18 @@ const WAY_DOWN: Record<Zone, { x: number; z: number }[]> = {
   outside: [],
 };
 
-function zoneOf(p: Spot): Zone {
+export function zoneOf(p: Spot): Zone {
   if (p.y < -1 || p.x < FLOOR.minX || p.x > FLOOR.maxX || p.z < FLOOR.minZ) return 'outside';
   if (p.z > FLOOR.maxZ) return p.x >= BALCONY.minX && p.x <= BALCONY.maxX ? 'balcony' : 'outside';
   if (p.x > LOFT.minX && p.z > LOFT.minZ && p.y > LOFT.y - 0.5) return 'loft';
   // Off the office floor's map, which has the stairs down as a wall.
   if (p.x > STAIRS.fromX - 0.1 && p.x < STAIRS.toX + 0.1 && p.z > STAIRS.minZ - 0.1 && p.y > 0.05) return 'stairs';
   return 'floor';
+}
+
+/** Where a walk up from the office floor comes into the boss's office or out onto the balcony: just through its door. */
+export function doorInto(zone: Zone): { x: number; z: number } | undefined {
+  return zone === 'loft' || zone === 'balcony' ? WAY_DOWN[zone][0] : undefined;
 }
 
 /** The corners of a walk from `from` to `to`, `to` included when it's somewhere you can stand. */

@@ -173,7 +173,7 @@ async function liveOwners(floors: { name: string; dir: string }[]): Promise<Live
     for (const w of savedWorkers(f.dir)) {
       if (!w || typeof w !== 'object') continue;
       const name = typeof w.name === 'string' ? w.name : 'a worker';
-      const h: Hold = { kind: 'worker', text: `${name}'s${w.deskId ? ` (${w.deskId}${on})` : on}: send ${name} home from the office instead` };
+      const h: Hold = { kind: 'worker', text: `${name}'s${w.deskId ? ` (${w.deskId}${on})` : on}: clock ${name} out from the office instead` };
       if (w.worktree && typeof w.worktree.branch === 'string') await hold(f.dir, f.dir, w.worktree, h);
       for (const r of Array.isArray(w.workspace?.repositories) ? w.workspace.repositories : []) {
         if (typeof r?.repository === 'string') await hold(f.dir, path.resolve(f.dir, r.repository), r, h);

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { normalizeRepo } from '../shared/floors.js';
 import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitFileStatus, GitRepoDetail, GitRepoList, GitRepoSummary, OfficeStatus } from '../shared/git-board.js';
-import type { PullRequestRef } from '../shared/protocol.js';
+import type { PullRequestRef, WorkerInfo } from '../shared/protocol.js';
 import { findBranchPr, gh } from './github.js';
 import { createPull } from './github-rest.js';
 import { floorRepository, workspaceRepositories } from './workspaces.js';
@@ -131,7 +131,7 @@ async function pool<T, R>(items: T[], n: number, fn: (item: T) => Promise<R>): P
 // ---- The board's front: every repository -------------------------------------------------------
 
 export async function gitRepositories(floorDir: string): Promise<GitRepoList> {
-  const found = await workspaceRepositories(floorDir);
+  const found = await workspaceRepositories(floorDir, { untracked: true });
   const repos = await pool(found.repositories, POOL, async (r): Promise<GitRepoSummary> => {
     const base: GitRepoSummary = { path: r.path, name: r.path === '.' ? path.basename(path.resolve(floorDir)) : r.name, branch: r.branch, ahead: 0, behind: 0, dirty: r.dirty };
     if (r.error) return { ...base, error: r.error };
@@ -583,6 +583,8 @@ async function fetchNowAndThen(dir: string, fresh: boolean) {
 export interface OfficeFloor {
   name: string;
   dir: string;
+  /** Its workers, for the guided update's restart step (office-update.ts). */
+  workers?: () => WorkerInfo[];
 }
 
 /**

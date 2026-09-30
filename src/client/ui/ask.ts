@@ -77,26 +77,32 @@ export function openAsk(opts: AskOptions) {
 
   const modal = openModal(form);
   cancel.addEventListener('click', () => modal.close());
-  const send = () => {
-    const text = ta.value.trim();
-    if (!text) {
+  let sending = false;
+  const send = async () => {
+    if (sending) return;
+    if (!ta.value.trim()) {
       ta.focus();
       return;
     }
     if (!to && provider && !provider.valid()) return;
-    if (!to && workspace && !workspace.valid()) return;
+    sending = true;
+    const ready = !!to || !workspace || await workspace.ready(submit);
+    sending = false;
+    // The dialog may have closed, or the prompt been cleared, while the repository list was on its way.
+    const text = ta.value.trim();
+    if (!ready || !form.isConnected || !text) return;
     modal.close();
     const choice = !to && workspace ? workspace.value() : { worktree: false };
     opts.onSubmit(opts.context ? `${opts.context}\n\n${text}` : text, to, choice.worktree, !to ? provider?.value() : undefined, !to ? provider?.model() : undefined, !to ? provider?.effort() : undefined, choice.workspace);
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    send();
+    void send();
   });
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      send();
+      void send();
     }
   });
   setTimeout(() => {

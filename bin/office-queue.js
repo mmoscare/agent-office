@@ -147,11 +147,11 @@ export function refusal(status, body) {
 }
 
 /** Sends the request, retrying for a few seconds while nothing's listening (the office restarting). Shared with office-plans and office-inbox. */
-export async function send(req, fetchImpl) {
+export async function send(req, fetchImpl, timeoutMs = TIMEOUT_MS) {
   const until = Date.now() + RETRY_MS;
   for (;;) {
     try {
-      const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const res = await fetchImpl(req.url, { method: req.method, headers: req.headers, body: req.body, signal: AbortSignal.timeout(timeoutMs) });
       const text = await res.text();
       let body;
       try {
@@ -166,6 +166,7 @@ export async function send(req, fetchImpl) {
         await new Promise((r) => setTimeout(r, 1000));
         continue;
       }
+      if (err?.name === 'TimeoutError') throw new Error(`The office at ${new URL(req.url).origin} didn't answer within ${Math.round(timeoutMs / 1000)}s. Is it very busy?`);
       throw new Error(`Couldn't reach the office at ${new URL(req.url).origin} (${code ?? err?.message ?? err}). Is it running?`);
     }
   }

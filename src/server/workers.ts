@@ -157,6 +157,8 @@ interface Worker {
   unsaved?: boolean;
   /** Where this run's own output starts, below the scrollback carried over from before. */
   fresh?: { readonly line: number };
+  /** When its terminal last printed anything (for the VP's look at who's stuck). */
+  outputAt?: number;
 }
 
 export interface WorkerEvents {
@@ -598,6 +600,15 @@ export class WorkerManager {
 
   resizeSide(id: string, cols: number, rows: number) {
     this.sides.resize(id, cols, rows);
+  }
+
+  /** A worker's terminal as plain text (its last `lines` lines on screen), whether it's running, and when it last printed anything: the VP's look at who's stuck. */
+  peek(id: string, lines = 20): { tail: string; outputAt?: number; running: boolean } | undefined {
+    const w = this.workers.get(id);
+    if (!w) return undefined;
+    const text = w.term ? screenText(w.term) : '';
+    const tail = text.split('\n').map((l) => l.trimEnd()).filter((l, i, all) => l || all.slice(i).some(Boolean)).slice(-lines).join('\n');
+    return { tail, outputAt: w.outputAt, running: !!w.pty };
   }
 
   /** Lines of every worker's terminal holding `needle` (a searchKey), newest first, at most `perWorker` each. */
@@ -1339,6 +1350,7 @@ export class WorkerManager {
       term.write(data);
       w.screenDirty = true;
       w.unsaved = true;
+      w.outputAt = Date.now();
       if (w.viewers.size) this.events.data(info.id, data, [...w.viewers.keys()]);
     });
     proc.onExit(({ exitCode, error, lost }) => {
@@ -1702,7 +1714,7 @@ process.stdin.on('end', () => {
   private writeQueueCommand(): string | undefined {
     const dir = path.join(this.dataDir, 'bin');
     let any = false;
-    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray'], ['office-mail', "Receptionist's mailbox"], ['office-ask', 'board agents']] as const) {
+    for (const [name, what] of [['office-queue', 'task queue'], ['office-plans', 'To Do Next board'], ['office-inbox', 'in-tray'], ['office-mail', "Receptionist's mailbox"], ['office-ask', 'board agents'], ['office-vp', 'VP'], ['office-workers', "floor's workers"]] as const) {
       const script = binScript(`${name}.js`);
       if (!script) continue;
       if (!any) mkdirSync(dir, { recursive: true, mode: 0o700 });

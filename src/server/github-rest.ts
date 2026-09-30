@@ -114,6 +114,54 @@ export async function branchPulls(branch: string, cwd: string, query: Query, rep
   }));
 }
 
+/** A pull request merged into a branch, for the clipboard's ✨ What's new (change-notes.ts). */
+export interface MergedPull {
+  number: number;
+  title: string;
+  body: string;
+  url: string;
+  /** When it merged (ms). */
+  mergedAt: number;
+  /** When GitHub last saw it change (ms): the lists are paged by this. */
+  updatedAt: number;
+  /** The commit that merged it into the base. */
+  sha?: string;
+  /** The branch it came from. */
+  head: string;
+}
+
+/**
+ * The pull requests merged into `base` of the checkout's origin repository, most recently updated
+ * first, over REST. Pages through closed ones until a page reaches back past `since` (ms; 0 for all
+ * of them), at most `maxPages` of 100; `complete` says whether it got that far. `web` is the
+ * repository's page, for links to its commits.
+ */
+export async function mergedPulls(base: string, cwd: string, query: Query, since = 0, maxPages = 20): Promise<{ web: string; pulls: MergedPull[]; complete: boolean }> {
+  const repo = await repoOf(cwd);
+  const web = `https://${repo.host ?? 'github.com'}/${repo.owner}/${repo.name}`;
+  const pulls: MergedPull[] = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const list = `repos/${repo.owner}/${repo.name}/pulls?state=closed&base=${encodeURIComponent(base)}&sort=updated&direction=desc&per_page=100&page=${page}`;
+    const items = JSON.parse(splitResponse(await query(['api', '-i', ...hostArgs(repo), list], cwd)).body || '[]') as any[];
+    for (const p of items) {
+      if (!p?.merged_at) continue;
+      pulls.push({
+        number: Number(p.number),
+        title: String(p.title ?? ''),
+        body: String(p.body ?? ''),
+        url: String(p.html_url ?? ''),
+        mergedAt: Date.parse(p.merged_at),
+        updatedAt: Date.parse(p.updated_at ?? p.merged_at),
+        sha: typeof p.merge_commit_sha === 'string' ? p.merge_commit_sha : undefined,
+        head: String(p.head?.ref ?? ''),
+      });
+    }
+    const last = items[items.length - 1];
+    if (items.length < 100 || (since && Date.parse(last?.updated_at) < since)) return { web, pulls, complete: true };
+  }
+  return { web, pulls, complete: false };
+}
+
 /**
  * `gh pr create`, and when GitHub's GraphQL quota ran out, the same pull request over REST instead.
  * Resolves to the output, the PR's URL on its last line. Without `base`, the repository's default branch.

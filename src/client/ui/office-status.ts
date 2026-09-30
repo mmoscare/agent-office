@@ -1,19 +1,15 @@
 import type { OfficeStatus } from '../../shared/git-board';
-import { codeBox } from './copy-code';
 import { h, timeAgo } from './dom';
 import { openManual } from './manual';
+import { openOfficeUpdate } from './office-update';
 
 // The Git board's "🏢 Running office" bar: whether the office is running the latest of its own code
-// (pulled from GitHub, built, restarted onto the build), and for whatever isn't done yet, the next
-// steps with the folder to run them in and commands to copy. The steps are numbered as in the
-// manual's "Merging an agent-office PR, step by step" (3 is pulling the floor on the Git board).
+// (pulled from GitHub, built, restarted onto the build), and when it isn't, the button that walks
+// through updating it one step at a time (ui/office-update.ts). The same steps as PowerShell
+// commands are in the manual's "Merging an agent-office PR, step by step".
 
 function pill(done: boolean, yes: string, no: string, tip: string): HTMLElement {
   return h('span.office-pill', { class: done ? 'done' : 'todo', title: tip }, done ? `✓ ${yes}` : no);
-}
-
-function step(n: string, title: string, ...body: (Node | null)[]): HTMLElement {
-  return h('li.office-step', {}, h('div.office-step-title', {}, h('b', {}, `Step ${n}`), ' ', title), ...body);
 }
 
 export function renderOfficeStatus(el: HTMLElement, s: OfficeStatus | null, open: boolean): void {
@@ -33,26 +29,19 @@ export function renderOfficeStatus(el: HTMLElement, s: OfficeStatus | null, open
   const details = h('details.office-status', { class: upToDate ? 'ok' : 'todo' }, summary);
   if (open) details.setAttribute('open', '');
 
-  const steps = h('ol.office-steps');
-  const quoted = `cd "${s.dir}"`;
-  if (needs.pull) {
-    steps.append(
-      step(
-        '4–5',
-        'Pull the new code into the office’s folder',
-        s.dirty ? h('p.office-warn', {}, `⚠️ ${s.dirty} file${s.dirty === 1 ? ' has' : 's have'} uncommitted changes there (someone’s work in progress). git status lists them: commit or finish them before pulling.`) : null,
-        codeBox(`${quoted}\ngit status\ngit pull`).el,
-        h('p.office-note', {}, 'If git pull says CONFLICT: run ', h('code', {}, 'git merge --abort'), ' and ask Claude to “update the app folder”, or see the manual’s steps.'),
-      ),
-      step('6', 'Check it worked: the first line must not say “behind”', codeBox('git status -sb', s.dir).el),
-    );
-  }
-  if (needs.pull || needs.build) steps.append(step('7', 'Build it', codeBox(needs.pull ? 'npm run build' : `${quoted}\nnpm run build`, needs.pull ? s.dir : undefined).el));
-  const manual = h('button.btn', { type: 'button' }, '📘 The start command');
+  const walk = h('button.btn.primary', { type: 'button' }, '👉 Update the office step by step');
+  walk.addEventListener('click', openOfficeUpdate);
+  const manual = h('button.btn', { type: 'button', title: 'The same steps as PowerShell commands' }, '📘 By hand');
   manual.addEventListener('click', () => openManual('merge-steps'));
-  steps.append(step('8', 'Restart the office when your workers are idle: Ctrl+C in its window, then start it again. Then tell busy workers “continue”.', h('div', {}, manual)));
-  if (!upToDate) details.append(h('div.office-body', {}, h('p.office-note', {}, 'Run these in PowerShell. ', h('code', {}, s.dir), ' is the folder the office runs from.'), steps));
-  else details.append(h('div.office-body', {}, h('p.office-note', {}, `It runs from `, h('code', {}, s.dir), `${s.branch ? ` on ${s.branch}` : ''}. When you merge a pull request for Agent Office, the steps to update it appear here.`)));
+  if (!upToDate) {
+    details.append(
+      h('div.office-body', {},
+        h('p.office-note', {}, 'It runs from ', h('code', {}, s.dir), '. The walkthrough pulls, builds and restarts it one step at a time, and checks each step worked.'),
+        s.dirty ? h('p.office-warn', {}, `⚠️ ${s.dirty} file${s.dirty === 1 ? ' has' : 's have'} uncommitted changes there (someone’s work in progress). The pull stops rather than touch them.`) : null,
+        h('div.office-actions', {}, walk, manual),
+      ),
+    );
+  } else details.append(h('div.office-body', {}, h('p.office-note', {}, `It runs from `, h('code', {}, s.dir), `${s.branch ? ` on ${s.branch}` : ''}. When you merge a pull request for Agent Office, the walkthrough to update it appears here and across the top.`)));
   if (s.error) details.append(h('p.office-warn', {}, `Couldn't check everything: ${s.error}`));
   el.append(details);
 }
