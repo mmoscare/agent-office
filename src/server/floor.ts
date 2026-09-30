@@ -34,6 +34,7 @@ import { landedWorkers } from './leave-on-merge.js';
 import type { Ledger } from './usage.js';
 import type { Capacity } from './machine.js';
 import { officePrompt, type PromptSource } from './prompts.js';
+import { VpDesk } from './vp.js';
 
 type ToastLevel = 'info' | 'warn' | 'error';
 
@@ -71,6 +72,8 @@ export interface FloorContext {
   };
   /** ⚙️ Settings: a worker whose pull request merged goes home by itself. */
   leaveOnMerge(): boolean;
+  /** Why the office's machine is under pressure right now, if it is (machine.ts): the VP's verify waits it out. */
+  pressure?(): string | undefined;
 }
 
 /** How long after a PR list or a worker's change the office looks for workers whose PR merged. */
@@ -133,6 +136,8 @@ export class Floor {
   readonly unshipped: UnshippedWatch;
   /** The basketball by the hoop: who has it, or how it was last thrown. */
   readonly court = new Court();
+  /** The VP: his sweeps, his standing duty and his help for stuck workers (see vp.ts). */
+  readonly vp: VpDesk;
   private timer: NodeJS.Timeout;
   /** Pull requests merging, to ring the gong for. */
   private merges = new MergeWatch();
@@ -174,6 +179,7 @@ export class Floor {
           this.plans?.onWorker(worker);
           this.meetings?.onWorker(worker);
           this.dog.onWorker(worker);
+          this.vp?.onWorker(worker);
           ctx.workerChanged(this, worker);
           // Its turn ended, or whoever had its terminal open closed it: it may be free to go now.
           this.sendLandedHome();
@@ -186,6 +192,7 @@ export class Floor {
           this.plans?.onWorkerGone(workerId);
           this.meetings?.onWorkerGone(workerId);
           this.dog.onWorkerGone(workerId);
+          this.vp?.onWorkerGone(workerId);
           ctx.workerChanged(this, workerId);
         },
         data: (workerId, data, viewers) => ctx.termData(workerId, data, viewers),
@@ -314,9 +321,35 @@ export class Floor {
       update: (state) => ctx.emit(this, { t: 'inbox', state }),
       door: () => ctx.inboxDoor(),
     });
+    // The VP works through the floor's own queue, To Do Next board and workers.
+    this.vp = new VpDesk({
+      id: def.id,
+      dir: def.dir,
+      dataDir,
+      workers: this.workers,
+      tasks: () => this.queue.state().tasks,
+      queue: (title, prompt, by) => {
+        const err = this.queue.add(prompt, by, title);
+        if (err) return err;
+        return { id: this.queue.state().tasks.at(-1)!.id };
+      },
+      plan: (text) => {
+        try {
+          this.plans.apply({ action: 'add', text });
+          return undefined;
+        } catch (err) {
+          return (err as Error).message;
+        }
+      },
+      pressure: () => ctx.pressure?.(),
+      toast: (text, level) => ctx.toast(this, text, level),
+      emit: (state) => ctx.emit(this, { t: 'vp', state }),
+    });
     this.ready = this.workers.start();
     // Once the workers are back: tasks the last office left running show whether their work was left behind.
     void this.ready.then(() => this.unshipped.scan(true));
+    // And the VP starts his rounds (standing duty sweeps only when someone turned it on).
+    void this.ready.then(() => this.vp.start());
 
     void this.github.refresh();
     // A floor with people on it, or work under way, keeps its boards fresh; the others check in now and then.
@@ -386,6 +419,7 @@ export class Floor {
     clearInterval(this.timer);
     clearTimeout(this.landedTimer);
     this.dog.stop();
+    this.vp.stop();
     this.github.stop();
     this.queue.shutdown();
     this.unshipped.stop();

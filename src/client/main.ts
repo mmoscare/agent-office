@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, GOLF_HOLE, LADDER, LOFT, OFFICE_SPOT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, stationLabel, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BOTS, BOT_KINDS, type BotKind } from '../shared/bots';
 import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
@@ -86,7 +87,7 @@ import { openSettings } from './ui/settings';
 import { hiringPaused, renderUsage, usageLabel, usageTitle } from './ui/usage';
 import { openModelUsage } from './ui/model-usage';
 import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elevator';
-import { toggleFloorMenu } from './ui/floormenu';
+import { closeFloorMenu, toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, officeChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { openPlans } from './ui/plans';
 import { openTimeCard, todayText } from './ui/timecard';
@@ -180,6 +181,7 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   pulls: { icon: '🔀', offer: 'Ask me about PRs', does: 'I sum up, review, comment on and merge them', example: 'Review the newest PR and tell me if it’s ready to merge' },
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
   inbox: { icon: '💁‍♀️', offer: 'Email me work, or ask me', does: 'I hand out what comes in, and write back', example: 'Go through the in-tray and hand everything out' },
+  ...(Object.fromEntries(BOT_KINDS.map((k) => [k, { icon: BOTS[k].icon, offer: BOTS[k].offer, does: BOTS[k].does, example: BOTS[k].example }])) as Record<BotKind, { icon: string; offer: string; does: string; example: string }>),
 };
 /** What the Receptionist says over her head while she waits: until her email works, a reminder to set it up. */
 function receptionistCard(): { name: string; summary: string } {
@@ -3568,7 +3570,19 @@ $('hud').addEventListener('click', (e) => {
 // The project in the corner is the floor you're on; click it for the list of floors to go to.
 $('project').addEventListener('click', () => {
   if (!store.floor) return showElevator();
-  toggleFloorMenu($('project'), { go: switchFloor, elevator: showElevator, roof: () => ride(ROOF) });
+  toggleFloorMenu($('project'), {
+    go: switchFloor,
+    elevator: showElevator,
+    roof: () => ride(ROOF),
+    vp: {
+      deploy: () => net.send({ t: 'vp.deploy' }),
+      duty: (on) => net.send({ t: 'vp.duty', on }),
+      open: (workerId) => {
+        closeFloorMenu();
+        openWorkerTerminal(workerId);
+      },
+    },
+  });
 });
 
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------
