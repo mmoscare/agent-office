@@ -185,7 +185,7 @@ export function planNextSteps(areas: ChangeArea[], appDir: string, opts: { busy?
   if (has('packages') || has('server')) {
     const byHand = !opts.canRestart;
     const steps: NextStep[] = [];
-    if (has('packages')) steps.push({ kind: 'packages', title: 'Install the new packages', why: 'package.json changed. The office installs them in a separate copy, so the running office isn’t touched.', walkthrough: true });
+    if (has('packages')) steps.push({ kind: 'packages', title: 'Install the new packages', why: 'package.json changed. The step-by-step update installs them in a separate copy, so the running office isn’t touched (and skips this if nothing new is needed).', walkthrough: true });
     steps.push({ kind: 'build', title: 'Build the new version', why: has('packages') ? undefined : 'The server’s code changed.', walkthrough: true });
     if (byHand) {
       steps.push({ ...stop, why: `${stop.why} This office can’t restart itself (it isn’t running under the launcher).` });

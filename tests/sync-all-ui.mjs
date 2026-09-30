@@ -85,6 +85,8 @@ try {
   write(floor, 'index.html', '<h1>Portfolio</h1>\n<p>New project card</p>\n');
   write(floor, 'projects/sync-button.md', '# The sync button\n');
   write(floor, '.env', 'OPENAI_API_KEY=not-a-real-key\n');
+  // Packages installed in a project that doesn't ignore them: listed, never uploaded.
+  write(floor, 'node_modules/left-pad/index.js', 'module.exports = 1;\n');
   write(app, 'docs/ideas.md', '# Ideas\n\n- A sync button by the gong\n');
 
   const socket = net.createServer();
@@ -150,16 +152,37 @@ try {
     window.__office.player.pos.set(it.x, 0, it.z);
   });
   await page.waitForFunction(() => document.querySelector('#hint')?.textContent.includes('Merge gong'));
+  // For the picture, in first person a couple of metres back, aimed at the button, so the gong, the
+  // button and its hint all show (in third person your own back hides it).
+  const aim = async (pitch) => page.evaluate((p) => {
+    const { player, office } = window.__office;
+    const it = office.interactables.find((i) => i.kind === 'sync');
+    const bz = it.z - 0.85;
+    player.setView('first');
+    player.pos.set(it.x - 1.0, 0, bz + 2.0);
+    player.vy = 0;
+    player.camYaw = Math.atan2(-1.0, 2.0);
+    player.facing = player.camYaw + Math.PI;
+    player.lookPitch = p;
+  }, pitch);
+  let aimed = false;
+  for (const pitch of [-0.13, -0.2, -0.08, -0.26, -0.32]) {
+    await aim(pitch);
+    aimed = await page.waitForFunction(() => document.querySelector('#hint')?.textContent.includes('Sync everything'), null, { timeout: 8000 }).then(() => true, () => false);
+    if (aimed) break;
+  }
+  assert.ok(aimed, 'aiming at the button shows its hint');
+  await pause(1500);
+  await page.screenshot({ path: path.join(shots, '1-button-by-the-gong.png') });
   await page.evaluate(() => {
     const { player, office } = window.__office;
     const it = office.interactables.find((i) => i.kind === 'sync');
+    player.setView('third');
     player.pos.set(it.x - 0.35, 0, it.z + 0.35);
     player.camYaw = 0.35;
     player.facing = player.camYaw + Math.PI;
   });
   await page.waitForFunction(() => document.querySelector('#hint')?.textContent.includes('Sync everything'));
-  await pause(800);
-  await page.screenshot({ path: path.join(shots, '1-button-by-the-gong.png') });
 
   // E: the review.
   await page.keyboard.press('e');
@@ -172,8 +195,8 @@ try {
   assert.equal(await floorCard.getByRole('checkbox', { name: 'Save projects/sync-button.md' }).isChecked(), true);
   assert.equal(await floorCard.getByRole('checkbox', { name: 'Save .env' }).isChecked(), false);
   await floorCard.getByText(/left unticked: an environment file/).waitFor();
-  await floorCard.getByText(/never uploaded: the office’s own data/).waitFor();
-  assert.equal(await floorCard.getByRole('checkbox', { name: /Save \.agent-office/ }).isDisabled(), true);
+  await floorCard.getByText(/never uploaded: installed packages \(node_modules\)/).waitFor();
+  assert.equal(await floorCard.getByRole('checkbox', { name: /Save node_modules/ }).isDisabled(), true);
   assert.equal(await floorCard.getByRole('textbox', { name: 'Commit message for Personal-Portfolio' }).inputValue(), 'Update index.html and sync-button.md');
   await floorCard.getByText('⬇️ GitHub has 1 new change to pull in.').waitFor();
   assert.equal(await appCard.getByRole('checkbox', { name: 'Save docs/ideas.md' }).isChecked(), true);
@@ -203,7 +226,7 @@ try {
   // What reached "GitHub": the ticked files, never the secret-looking one or the office's own folder.
   const uploaded = git(project.origin, 'ls-tree', '-r', '--name-only', 'personal').split('\n');
   assert.deepEqual(uploaded.sort(), ['index.html', 'notes.md', 'projects/sync-button.md']);
-  assert.equal(git(project.origin, 'log', '-1', '--format=%s', 'personal^2'), 'Add the sync button project card');
+  assert.equal(git(project.origin, 'log', '-1', '--format=%s', 'personal^1'), 'Add the sync button project card');
   assert.equal(git(floor, 'rev-parse', 'HEAD'), git(project.origin, 'rev-parse', 'personal'));
   assert.ok(existsSync(path.join(floor, '.env')));
   assert.match(git(office.origin, 'ls-tree', '-r', '--name-only', 'personal'), /docs\/ideas\.md/);
@@ -215,17 +238,18 @@ try {
   await page.getByRole('dialog', { name: 'Update the office' }).screenshot({ path: path.join(shots, '4-walkthrough.png') });
   await page.keyboard.press('Escape');
 
-  // Also in the ☰ menu.
-  await page.evaluate(() => document.querySelectorAll('.modal').forEach((m) => m.closest('.modal-backdrop, .backdrop')?.remove()));
-  const menuHas = await page.evaluate(() => [...document.querySelectorAll('button, [role=menuitem]')].some((b) => /Sync everything/.test(b.textContent ?? '') || /Sync everything/.test(b.getAttribute('title') ?? '')));
-  if (!menuHas) {
-    await page.locator('#menu-btn, button[aria-label*="menu" i]').first().click().catch(() => {});
-    await page.getByText('Sync everything').first().waitFor({ timeout: 10_000 });
-  }
+  // Also in the ☰ menu: it opens a fresh review (only the unticked .env is left to save).
+  await page.getByRole('dialog', { name: 'Update the office' }).waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: /Sync everything/ }).click();
+  const again = page.getByRole('dialog', { name: 'Sync everything' });
+  await again.getByRole('checkbox', { name: 'Save .env' }).waitFor();
+  assert.equal(await again.getByRole('checkbox', { name: 'Save .env' }).isChecked(), false);
+  await again.getByRole('button', { name: 'Cancel' }).click();
 
   // Narrow screens: no sideways scrolling in the window.
   assert.deepEqual(pageErrors, []);
-  console.log(`PASS: button beside the gong with its own hint; E opens the review (secret-looking .env unticked, .agent-office never uploaded, suggestion follows the ticks); Go saved, pulled and uploaded both repositories to local bare "GitHubs"; checklist: packages → build → restart with the step-by-step update; What's new from the PR titles; ☰ menu entry; guards. Screenshots in ${shots}`);
+  console.log(`PASS: button beside the gong with its own hint; E opens the review (secret-looking .env unticked, node_modules never uploaded, suggestion follows the ticks); Go saved, pulled and uploaded both repositories to local bare "GitHubs"; checklist: packages → build → restart with the step-by-step update; What's new from the PR titles; ☰ menu entry; guards. Screenshots in ${shots}`);
 } catch (err) {
   await report().catch(() => {});
   throw err;

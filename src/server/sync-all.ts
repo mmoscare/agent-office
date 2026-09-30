@@ -135,6 +135,8 @@ interface Tracking {
   noPush?: string;
   /** Where Go writes the list of files to save: inside the repository's own .git folder. */
   pathsFile?: string;
+  /** The repository's shared .git folder: worktrees of one repository are synced one after another. */
+  common?: string;
 }
 
 /** Operations that leave a checkout half done: a sync keeps out of it until they're finished. */
@@ -145,20 +147,20 @@ async function tracking(dir: string, name: string): Promise<Tracking> {
   const [branch, head, gitPaths, heads, fetchUrl, pushUrls] = await Promise.all([
     gitOut(['symbolic-ref', '--short', '-q', 'HEAD'], dir),
     gitOut(['rev-parse', '--verify', '--quiet', 'HEAD'], dir),
-    gitOut(['rev-parse', ...UNFINISHED.flatMap(([m]) => ['--git-path', m]), '--git-path', `agent-office-sync-${process.pid}.paths`], dir),
+    gitOut(['rev-parse', '--git-common-dir', ...UNFINISHED.flatMap(([m]) => ['--git-path', m]), '--git-path', `agent-office-sync-${process.pid}.paths`], dir),
     gitOut(['for-each-ref', '--format=%(refname)%00%(upstream)%00%(upstream:remotename)%00%(upstream:remoteref)', 'refs/heads/'], dir),
     gitOut(['remote', 'get-url', 'origin'], dir),
     gitOut(['remote', 'get-url', '--push', '--all', 'origin'], dir),
   ]);
   if (!head) return { problem: `${name} has no commits yet, so there’s nothing to pull into.` };
   if (!branch) return { head, problem: `${name} isn’t on a branch (its HEAD is detached), so there’s nowhere to save to. Ask Claude to “put ${name} back on its branch”.` };
-  const where = (gitPaths ?? '').split('\n').map((p) => path.resolve(dir, p.trim()));
+  const [common, ...where] = (gitPaths ?? '').split('\n').map((p) => path.resolve(dir, p.trim()));
   const unfinished = UNFINISHED.find((_, i) => where[i] && existsSync(where[i]));
   if (unfinished) return { branch, head, problem: `${name} is in the middle of ${unfinished[1]}, so it’s left alone. Ask Claude to “finish the ${unfinished[1].replace(/^an? /, '')} in ${name}”.` };
   const row = (heads ?? '').split('\n').map((l) => l.split('\0')).find((f) => f[0] === `refs/heads/${branch}`) ?? [];
   const [, upstreamRef, remote, remoteRef] = row;
   if (!upstreamRef) return { branch, head, problem: `The branch ${branch} in ${name} doesn’t follow a branch on GitHub, so there’s nothing to pull from or upload to. Publish it once with ⬆️ Push on the Git board, then sync.` };
-  const t: Tracking = { branch, head, upstreamRef, remote: remote || undefined, remoteRef: remoteRef || undefined, pathsFile: where[UNFINISHED.length] };
+  const t: Tracking = { branch, head, upstreamRef, remote: remote || undefined, remoteRef: remoteRef || undefined, pathsFile: where[UNFINISHED.length], common };
   if (!t.remote || !t.remoteRef) return { ...t, problem: `The branch ${branch} in ${name} follows ${upstreamRef.replace(/^refs\/remotes\//, '')}, which isn’t a branch on GitHub. Ask Claude to “set ${branch} to follow its GitHub branch”.` };
   if (t.remote !== 'origin') t.noPush = `It follows ${t.remote}, not your own copy on GitHub (origin), so it’s pulled but never uploaded from here.`;
   else if (!fetchUrl) t.problem = `${name} has no origin to pull from.`;
@@ -281,6 +283,8 @@ interface Reviewed {
   head?: string;
   /** Tickable paths (and a rename's old name), as reviewed. */
   paths: Map<string, string | undefined>;
+  /** The shared .git folder (see Tracking.common). */
+  common?: string;
 }
 
 async function look(place: Place, fetch: boolean): Promise<Reviewed> {
@@ -307,7 +311,7 @@ async function look(place: Place, fetch: boolean): Promise<Reviewed> {
     repo.ahead = counts(lr).ahead;
     repo.behind = Number(incoming) || 0;
     if (repo.ahead) repo.outgoing = ((await gitOut(['log', '-5', '--format=%s', `${t.upstreamRef}..HEAD`], place.dir)) ?? '').split('\n').filter(Boolean);
-    return { repo, head: t.head, paths };
+    return { repo, head: t.head, paths, common: t.common };
   } catch (err) {
     return { repo: { ...repo, problem: `${place.name} can’t be read: ${redact((err as Error).message)}` }, paths };
   }
@@ -512,8 +516,18 @@ export async function syncRun(floorDir: string, token: string, choices: SyncChoi
   try {
     const byId = new Map(choices.map((c) => [c.id, c]));
     const order = [...review.repos.values()].sort((a, b) => Number(a.repo.kind === 'office') - Number(b.repo.kind === 'office'));
-    // Separate checkouts, each under its own lock: side by side (git is slow to start on a busy machine).
-    const results = await pool(order, POOL, (r) => syncOne(r, byId.get(r.repo.id)));
+    // Separate repositories side by side (git is slow to start on a busy machine); worktrees of one
+    // repository share its refs, so those go one after another.
+    const groups = new Map<string, Reviewed[]>();
+    for (const r of order) {
+      const key = (r.common ?? r.repo.dir).toLowerCase();
+      groups.set(key, [...(groups.get(key) ?? []), r]);
+    }
+    const done = new Map<Reviewed, SyncRepoResult>();
+    await pool([...groups.values()], POOL, async (group) => {
+      for (const r of group) done.set(r, await syncOne(r, byId.get(r.repo.id)));
+    });
+    const results = order.map((r) => done.get(r)!);
     const app = results.find((r) => r.kind === 'office');
     const appDir = order.find((r) => r.repo.kind === 'office')?.repo.dir;
     return { repos: results, next: await nextSteps(app, appDir, floors, opts.restartable ?? canRestart()) };
