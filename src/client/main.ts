@@ -97,6 +97,7 @@ import { renderLimits } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
+import { CpuAppsTexture } from './world/cpu-apps';
 import { mountHud } from './ui/menu';
 import { openJukebox } from './ui/jukebox';
 import { openLedger } from './ui/ledger';
@@ -320,9 +321,11 @@ const servicesTex = new ServicesBoardTexture();
 mountBoard(office.boardMeshes.services, servicesTex.texture, () => servicesTex.render(store.services.items, store.workers), ['services', 'workers']);
 const queueTex = new QueueBoardTexture();
 mountBoard(office.boardMeshes.queue, queueTex.texture, () => queueTex.render(store.queue, store.workers), ['queue', 'workers']);
-// The machine monitor on the west wall.
+// The machine monitor on the west wall, and the top-CPU list above it.
 const machineTex = new MachineTexture();
 mountBoard(office.machineScreen, machineTex.texture, () => machineTex.render(store.machine), ['machine']);
+const cpuAppsTex = new CpuAppsTexture();
+mountBoard(office.cpuAppsScreen, cpuAppsTex.texture, () => cpuAppsTex.render(store.machine.apps), ['machine']);
 // The meeting room: its output as it's written on the back wall, and how it's going on the door.
 const meetingBoardTex = new MeetingBoardTexture();
 mountBoard(office.meetingBoard, meetingBoardTex.texture, () => meetingBoardTex.render(store.meeting), ['meeting']);

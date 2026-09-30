@@ -219,6 +219,11 @@ export const TV = { x: FLOOR.maxX - 0.1, y: 2.2, z: 0, width: 6.4, height: 3.6 }
  * workers it runs of the most it takes.
  */
 export const MACHINE_MONITOR = { x: FLOOR.minX, y: 2.2, z: -6, width: 2.3, height: 1.3 } as const;
+/**
+ * The top-CPU list, in the same column as the machine monitor and facing the desks. The west windows
+ * end at y = 3.3, so this sits above them rather than in the pier with the monitor.
+ */
+export const CPU_APPS = { x: FLOOR.minX, y: 4.25, z: -6, width: 2.3, height: 1.4 } as const;
 /** The lounge jukebox, against the east wall south of the TV, facing into the room. `y` is its speaker. */
 export const JUKEBOX = { x: FLOOR.maxX - 0.42, y: 0.75, z: 5.4, width: 1.3, depth: 0.72, height: 1.85 } as const;
 /** The arcade cabinet, against the east wall between the jukebox and the loft, facing into the room. `width` runs along the wall. */
