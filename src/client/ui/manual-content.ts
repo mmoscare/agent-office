@@ -289,6 +289,27 @@ export const MANUAL: ManualChapter[] = [
     ],
   },
   {
+    id: 'notes-pad',
+    icon: '🗒️',
+    title: 'Notes: your own notepad',
+    blocks: [
+      { p: 'Click **🗒️ Notes** on the top bar, or **🗒️ Notes** at the top of the 🔥 To Do board, and the board flips over into a notepad, like the Notes app on a phone. It is yours, and the same on every floor.' },
+      {
+        list: [
+          'The folders are down the side: **🗒️ Notes**, **🔗 Links to watch**, the ones you make with **＋ New folder** (double-click one to rename it), and **🗑️ Recently deleted**.',
+          '**✏️ New note** (or **N**) starts one. The first line is its title. It saves as you type.',
+          'Pictures: **🖼️ Picture**, or paste or drop them straight into a note.',
+          'Move a note with the folder menu on it, or drag it onto a folder. **📌 Pin** keeps it at the top.',
+          'The search box looks through every folder.',
+          'A deleted note stays in Recently deleted for 30 days. Open it and click **↩ Put it back**.',
+        ],
+      },
+      { h: '🔗 Links to watch' },
+      { p: 'Every link goes here. Paste one into the box at the top, and the links you write in any other note show up here too. Tick the circle when you have watched one. **To watch**, **Watched** and **All** switch between them, and the top bar button counts the ones still to watch. Click a link’s row to open its note and say what it is.' },
+      { note: 'Notes are kept on the office’s machine in `.agent-office/notes.json`, and pictures in `.agent-office/notes-images`.' },
+    ],
+  },
+  {
     id: 'in-tray',
     icon: '📥',
     title: 'The in-tray',

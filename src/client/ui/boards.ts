@@ -13,6 +13,7 @@ import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './p
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows, submitterChip } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
 import { mountTodoBoard, type TodoBoard } from './todos';
+import { mountNotesPad, type NotesPad } from './notes';
 import { officePrompt } from './prompts';
 
 export interface BoardActions {
@@ -325,8 +326,8 @@ function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick:
   );
 }
 
-/** Which side of the issues board shows: your own 🔥 To Do (the default), or the floor's GitHub issues. */
-export type IssuesView = 'todo' | 'issues';
+/** Which side of the issues board shows: your own 🔥 To Do (the default), its other side your 🗒️ Notes pad, or the floor's GitHub issues. */
+export type IssuesView = 'todo' | 'notes' | 'issues';
 
 export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActions, opts: { view?: IssuesView } = {}) {
   const body = h('div.body');
@@ -339,9 +340,10 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   // The issues board opens on your own To Do board, which follows you onto every floor; 📌 Issues turns it over.
   let view: IssuesView = kind === 'issues' ? (opts.view ?? 'todo') : 'issues';
   let todo: TodoBoard | undefined;
+  let notes: NotesPad | undefined;
   const title = h('h2', {}, kind === 'issues' ? '📌 Issues' : '🔀 Pull Requests');
   const tab = (to: IssuesView, label: string, hint: string) => h('button.btn', { type: 'button', 'aria-pressed': 'false', 'data-view': to, title: hint, onclick: () => show(to) }, label);
-  const tabs = kind === 'issues' ? h('div.board-tabs', { role: 'group', 'aria-label': 'Board' }, tab('todo', '🔥 To Do', 'Your own to-do list: the same on every floor'), tab('issues', '📌 Issues', "This floor's GitHub issues")) : null;
+  const tabs = kind === 'issues' ? h('div.board-tabs', { role: 'group', 'aria-label': 'Board' }, tab('todo', '🔥 To Do', 'Your own to-do list: the same on every floor'), tab('notes', '🗒️ Notes', 'Turn it over to your own notes pad: notes, pictures and links to watch'), tab('issues', '📌 Issues', "This floor's GitHub issues")) : null;
   const el = h(
     kind === 'pulls' ? 'div.modal.board.pr-board' : 'div.modal.board',
     { role: 'dialog', 'aria-label': kind === 'issues' ? 'Issues board' : 'Pull requests board' },
@@ -353,12 +355,29 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   if (kind === 'pulls') body.classList.add('prb-body');
   const pullsView: PullsView = { doneOpen: true, doneAll: false };
 
-  /** Turns the issues board over to `to`. */
+  let turning = false;
+  /** Turns the issues board over to `to`. To and from 🗒️ Notes it flips right over, like turning the pad around. */
   const show = (to: IssuesView) => {
     const was = view;
-    view = to;
-    render();
-    if (to === 'todo' && was !== 'todo') todo?.focus();
+    if (to === was || turning) return;
+    if (was === 'notes') notes?.flush();
+    const swap = () => {
+      view = to;
+      render();
+      if (to === 'todo') todo?.focus();
+      if (to === 'notes') notes?.focus();
+    };
+    if ((was === 'notes') === (to === 'notes') || typeof el.animate !== 'function' || matchMedia('(prefers-reduced-motion: reduce)').matches) return swap();
+    turning = true;
+    const turn = (fromDeg: number, toDeg: number, duration: number, easing: string) => el.animate([{ transform: `perspective(1800px) rotateY(${fromDeg}deg)` }, { transform: `perspective(1800px) rotateY(${toDeg}deg)` }], { duration, easing });
+    turn(0, 90, 170, 'ease-in')
+      .finished.catch(() => undefined)
+      .then(() => {
+        swap();
+        return turn(-90, 0, 230, 'ease-out').finished;
+      })
+      .catch(() => undefined)
+      .finally(() => (turning = false));
   };
 
   const filters = loadFilters(kind);
@@ -434,14 +453,16 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
   };
 
   const render = () => {
-    if (view === 'todo') {
-      todo ??= mountTodoBoard(net);
-      title.textContent = '🔥 To Do';
-      el.setAttribute('aria-label', 'To Do board');
+    el.classList.toggle('notes-mode', view === 'notes');
+    if (view === 'todo' || view === 'notes') {
+      const side = view === 'todo' ? (todo ??= mountTodoBoard(net)) : (notes ??= mountNotesPad(net));
+      title.textContent = view === 'todo' ? '🔥 To Do' : '🗒️ Notes';
+      el.setAttribute('aria-label', view === 'todo' ? 'To Do board' : 'Notes');
       tabs?.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
       status.hidden = refresh.hidden = warning.hidden = true;
-      body.classList.add('todo-body');
-      if (body.firstChild !== todo.el || body.childNodes.length !== 1) body.replaceChildren(todo.el);
+      body.classList.toggle('todo-body', view === 'todo');
+      body.classList.toggle('notes-body', view === 'notes');
+      if (body.firstChild !== side.el || body.childNodes.length !== 1) body.replaceChildren(side.el);
       return;
     }
     if (kind === 'issues') {
@@ -449,8 +470,8 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
       el.setAttribute('aria-label', 'Issues board');
       tabs?.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
       status.hidden = refresh.hidden = false;
-      if (body.classList.contains('todo-body')) {
-        body.classList.remove('todo-body');
+      if (body.classList.contains('todo-body') || body.classList.contains('notes-body')) {
+        body.classList.remove('todo-body', 'notes-body');
         body.replaceChildren();
       }
     }
@@ -517,10 +538,12 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     onClose: () => {
       unsubs.forEach((u) => u());
       todo?.destroy();
+      notes?.destroy();
       clearInterval(timer);
     },
   });
   close.addEventListener('click', () => modal.close());
   render();
   if (view === 'todo') todo?.focus();
+  if (view === 'notes') notes?.focus();
 }
