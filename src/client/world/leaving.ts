@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BALCONY, PARACHUTE } from '../../shared/layout';
 import { walkOff, wayHome, wayIn, wayToBalcony, type Pt } from '../../shared/nav';
+import { wayTo } from '../walkto';
 import type { Worker } from './character';
 import type { Laptop } from './laptop';
 import type { DeskView } from './office';
@@ -159,22 +160,30 @@ export class Departures {
     private upstairs: () => boolean,
   ) {}
 
-  /** Takes over a worker's model and laptop the moment it's sent home from `desk`. */
-  add(model: Worker, laptop: Laptop, desk: DeskView) {
+  /**
+   * Takes over a worker's model and laptop the moment it's sent home from `desk`. `away` when it isn't
+   * there (the staffer, called over to you): it packs up where it stands and walks back past its desk
+   * and out the same way, rather than flying back to its seat first.
+   */
+  add(model: Worker, laptop: Laptop, desk: DeskView, away = false) {
     // Off the desk first if it was up there dancing: it packs up in its seat.
     model.stopDancing();
     const seat = model.root.getWorldPosition(new THREE.Vector3());
     const scale = model.root.getWorldScale(new THREE.Vector3()).x;
+    const yaw = new THREE.Euler().setFromQuaternion(model.root.getWorldQuaternion(new THREE.Quaternion()), 'YXZ').y;
     this.parent.add(model.root);
     model.root.position.copy(seat);
     // On the seat it faces the desk: the seat anchor is turned round from the desk's own rotation.
-    model.root.rotation.set(0, desk.def.rotY + Math.PI, 0);
+    model.root.rotation.set(0, away ? yaw : desk.def.rotY + Math.PI, 0);
     model.root.scale.setScalar(scale);
     model.leave(pick(FAREWELLS));
     const chair = desk.def.beanbag ? null : desk.chair;
     const up = this.upstairs();
     const chute: Chute | null = up ? { phase: 'walk', t: 0, color: pick(CANOPIES), canopy: null, from: new THREE.Vector3(), vel: new THREE.Vector3(), land: new THREE.Vector3(), angle: 0, radius: 0, height: 1 } : null;
-    const way = up ? wayToBalcony(desk.def) : wayHome(desk.def);
+    const out = up ? wayToBalcony(desk.def) : wayHome(desk.def);
+    // Its way out starts beside its seat, then steps out into the room (out[1]); from where it is, it
+    // walks over to that and on from there.
+    const way: Pt[] = away ? [[seat.x, seat.z], ...wayTo(seat, { x: out[1][0], y: 0, z: out[1][1] }).map((p): Pt => [p.x, p.z]), ...out.slice(2)] : out;
     this.leavers.push({ model, deskId: desk.def.id, way, next: 0, t: 0, seat, heading: model.root.rotation.y, stepIn: 0, chair, spin: 0, scale, gone: 0, chute });
     this.laptops.push({ laptop, deskId: desk.def.id, gone: 0 });
   }

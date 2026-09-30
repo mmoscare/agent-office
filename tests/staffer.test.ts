@@ -5,6 +5,10 @@ import { BALCONY, BALCONY_DOOR, FLOOR, GOLF_TEE, KIOSK, LOFT, STAIRS, STATIONS, 
 import { deskPoint, walkable } from '../src/shared/nav.js';
 import { STAFFER_BESIDE, StafferSummon, stepOnto, summonSpot, type Footing, type StafferModel } from '../src/client/world/staffer.js';
 import { wayTo, zoneOf } from '../src/client/walkto.js';
+import { Departures } from '../src/client/world/leaving.js';
+import type { Worker } from '../src/client/world/character.js';
+import type { Laptop } from '../src/client/world/laptop.js';
+import type { DeskView } from '../src/client/world/office.js';
 
 test('the queue agent keeps his name and wears staffer/queue agent on the label', () => {
   assert.equal(STATION_AGENT.queue.name, 'Queue agent');
@@ -216,4 +220,43 @@ test('with no room round you, he still comes to the floor you are on', () => {
 
 test('outside the building he does not come', () => {
   assert.equal(summonSpot(building(), { x: FLOOR.minX - 1, y: 0, z: 6.5 }, 0), null);
+});
+
+// ---- Sent home while he's away from his kiosk --------------------------------------------------
+
+test('sent home while he is over by you, he packs up there and walks back past his kiosk and out, without flying', () => {
+  const colliders = building();
+  // What's underfoot, and the street out past the building.
+  const ground = (x: number, z: number, y: number) => {
+    let g = -3;
+    for (const c of colliders) if (c.top < 50 && y >= c.top - 0.1 && c.top > g && x > c.minX - 0.28 && x < c.maxX + 0.28 && z > c.minZ - 0.28 && z < c.maxZ + 0.28) g = c.top;
+    return g;
+  };
+  const scene = new THREE.Group();
+  const office = new THREE.Group();
+  const model = { root: new THREE.Group(), walking: false, stopDancing() {}, leave() {}, say() {}, update() {}, dispose() {} };
+  office.add(model.root);
+  model.root.position.set(4, -0.07, 4);
+  const laptop = { root: new THREE.Group(), shut: () => true, dispose() {} };
+  const desk = { def: QUEUE, chair: null } as unknown as DeskView;
+  let up = 0;
+  const departures = new Departures(scene, ground, () => {}, () => up++, () => false);
+  departures.add(model as unknown as Worker, laptop as unknown as Laptop, desk, true);
+  assert.equal(model.root.parent, scene);
+  const dt = 1 / 30;
+  const start = model.root.position.clone();
+  let stride = 0;
+  let byKiosk = Infinity;
+  for (let t = 0; t < 90 && model.root.parent; t += dt) {
+    const was = model.root.position.clone();
+    departures.update(dt, t);
+    const p = model.root.position;
+    stride = Math.max(stride, Math.hypot(p.x - was.x, p.z - was.z));
+    byKiosk = Math.min(byKiosk, Math.hypot(p.x - QUEUE.x, p.z - QUEUE.z));
+    if (t < 1.4) assert.ok(Math.hypot(p.x - start.x, p.z - start.z) < 0.01, 'he packs up where he stands');
+  }
+  assert.ok(stride <= 2.3 * dt + 1e-6, `a walking stride a frame at most, not ${stride.toFixed(2)} m`);
+  assert.ok(byKiosk < 2, 'back past his kiosk on the way out');
+  assert.equal(model.root.parent, null, 'out of the building and gone');
+  assert.equal(up, 1);
 });

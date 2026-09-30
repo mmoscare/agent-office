@@ -1381,10 +1381,10 @@ function syncWorkers() {
     arrivals.forget(v.model);
     const desk = office.desks.get(v.deskId);
     // Sent home: it packs up and walks out, and the seat shows as free once it's up (see departures).
-    if (desk && sentHome.has(id)) {
-      staffer.forget(v.model);
-      departures.add(v.model, v.laptop, desk);
-    }
+    // The staffer, called over to you (U), packs up where he stands and walks out from there.
+    const away = staffer.has(v.model);
+    staffer.forget(v.model);
+    if (desk && sentHome.has(id)) departures.add(v.model, v.laptop, desk, away);
     else {
       v.model.root.removeFromParent();
       v.laptop.root.removeFromParent();
