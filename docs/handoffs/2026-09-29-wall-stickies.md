@@ -44,9 +44,9 @@ Four reminder stickies hang in a row on the north wall, just above the issues / 
 
 ## Commits, branch, PR
 
-- Branch `office/sprocket-c2fd`.
+- Branch `office/sprocket-c2fd`, commit `fe13058`.
 - No related GitHub issue was found for this request.
-- PR targets `personal` (see the PR for this commit).
+- PR: https://github.com/mmoscare/agent-office/pull/79 (base `personal`).
 
 ## Remaining
 
