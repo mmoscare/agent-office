@@ -109,7 +109,7 @@ fetch(process.env.AGENT_OFFICE_HOOK_URL + '/hooks/codex?worker=' + process.env.A
   await hire.getByRole('button', { name: 'Hire & start' }).click();
   await hire.getByRole('button', { name: 'Finding repositories…' }).waitFor();
   release();
-  await hire.getByText('Select at least one repository (12 per worker maximum).').waitFor();
+  await hire.getByText('Select at least one repository (12 per worker maximum).').waitFor({ timeout: 90000 }); // a real scan of three repos
   assert.equal(await hire.getByText(/Wait for the repository list/).count(), 0);
   assert.equal(await page.evaluate(() => window.__office.store.workers.size), 0);
   await page.unroute('**/api/workspace/repositories**');
