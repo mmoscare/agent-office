@@ -267,10 +267,10 @@ function doneView(result: SyncResult): HTMLElement[] {
     card.append(h('ol.sa-steps', {}, ...next.steps.map((s) => stepItem(s, first, next.busy))));
   } else if (app && app.state !== 'done') card.append(h('p', {}, 'The app folder didn’t update, so there’s nothing to install, build or restart yet. Sort out the problem above, then press Sync again.'));
   else card.append(h('p.ou-done-line', {}, app ? '✅ Nothing to do: the app folder had no new code.' : '✅ Nothing to do.'));
-  // Steps #84's walkthrough still has from before (a pull that was never built or restarted).
+  // Nothing new this time, but the step-by-step update still has steps from before (a pull that was never built or restarted).
   const s = officeUpdateState();
   const pending = s ? currentStep(s) : null;
-  if (pending && pending !== 'floor' && pending !== 'app' && !next.steps.some((x) => x.walkthrough)) {
+  if (!next.changed && pending && pending !== 'floor' && pending !== 'app') {
     const b = h('button.btn.primary', { type: 'button' }, '👉 Open the step-by-step update');
     b.addEventListener('click', () => {
       modal?.close();
