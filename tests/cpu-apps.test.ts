@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appName, parseProcStat, parsePsCpu, parseWinCpu, rankCpuApps, rankFromPercents, splitBatches, type ProcSample } from '../src/server/cpu-apps.js';
+import { appName, BatchReader, parseProcStat, parsePsCpu, parseWinCpu, rankCpuApps, rankFromPercents, type ProcSample } from '../src/server/cpu-apps.js';
 
 const at = 1_000_000;
 
@@ -43,9 +43,36 @@ test('a proc stat line is seconds of user plus system time', () => {
 });
 
 test('a batch closes on --- and a partial line stays behind', () => {
-  const split = splitBatches('1\tnode\t1\n2\tchrome\t2\n---\n3\tcode\t');
-  assert.deepEqual(split.batches, [['1\tnode\t1', '2\tchrome\t2']]);
-  assert.equal(split.rest, '3\tcode\t');
+  const reader = new BatchReader();
+  assert.deepEqual(reader.push(Buffer.from('1\tnode\t1\n2\tchrome\t2\n---\n3\tcode\t')), [['1\tnode\t1', '2\tchrome\t2']]);
+  assert.deepEqual(reader.push(Buffer.from('4\n---\n')), [['3\tcode\t4']]);
+});
+
+test('a chunk that ends right after a line keeps that line apart from the next one', () => {
+  const reader = new BatchReader();
+  assert.deepEqual(reader.push(Buffer.from('1\tnode\t1\n---\n3\tcode\t1\n')), [['1\tnode\t1']]);
+  assert.deepEqual(reader.push(Buffer.from('4\tnode\t2\n---\n')), [['3\tcode\t1', '4\tnode\t2']]);
+  assert.deepEqual(reader.push(Buffer.from('5\tcode\t2\n')), []);
+  assert.deepEqual(reader.push(Buffer.from('---\n')), [['5\tcode\t2']]);
+});
+
+test('batches come out whole wherever stdout splits', () => {
+  // CRLF like PowerShell, a name with multi-byte characters, and an unfinished line at the end.
+  const stream = '12\tchrome\t1.5\r\n7\tcafé 字\t0.25\r\n---\r\n12\tchrome\t2\r\n7\tcafé 字\t0.5\r\n---\r\n13\tcode\t';
+  const want = [
+    ['12\tchrome\t1.5', '7\tcafé 字\t0.25'],
+    ['12\tchrome\t2', '7\tcafé 字\t0.5'],
+  ];
+  for (const bytes of [Buffer.from(stream, 'utf8'), Buffer.from(`﻿${stream}`, 'utf16le')]) {
+    // Two chunks, cut at every byte: mid-line, right after a newline, inside \r\n, inside ---, inside a character.
+    for (let cut = 0; cut <= bytes.length; cut++) {
+      const reader = new BatchReader();
+      const got = [...reader.push(bytes.subarray(0, cut)), ...reader.push(bytes.subarray(cut))];
+      assert.deepEqual(got, want, `cut at byte ${cut} of ${bytes.length}`);
+    }
+    const reader = new BatchReader();
+    assert.deepEqual([...bytes].flatMap((byte) => reader.push(Buffer.from([byte]))), want, 'one byte at a time');
+  }
 });
 
 test('two readings rank apps by share of the machine, busiest five', () => {

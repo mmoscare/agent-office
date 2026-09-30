@@ -111,22 +111,50 @@ export function parseProcStat(text: string): ProcSample | undefined {
 }
 
 /**
- * Finished `---` batches from a sampler's stdout, and whatever is still coming (a partial line, or a
- * batch that hasn't closed).
+ * Turns a sampler's stdout into finished `---` batches of lines. Chunks end anywhere (mid-line, inside
+ * the marker, inside a character), so only complete lines are decoded and judged; the unterminated tail
+ * waits as bytes for the next chunk. Output is UTF-8 unless it starts like UTF-16 (a BOM, or a zero
+ * second byte).
  */
-export function splitBatches(buffer: string): { batches: string[][]; rest: string } {
-  const ended = buffer.endsWith('\n');
-  const parts = buffer.split(/\r?\n/);
-  if (ended && parts.length) parts.pop();
-  const batches: string[][] = [];
-  let cur: string[] = [];
-  for (const line of parts) {
-    if (line.trim() === '---') {
-      batches.push(cur);
-      cur = [];
-    } else cur.push(line);
+export class BatchReader {
+  private tail: Buffer = Buffer.alloc(0);
+  private lines: string[] = [];
+  private utf16?: boolean;
+
+  push(chunk: Buffer): string[][] {
+    const raw = this.tail.length ? Buffer.concat([this.tail, chunk]) : chunk;
+    if (this.utf16 === undefined) {
+      if (raw.length < 2) {
+        this.tail = raw;
+        return [];
+      }
+      this.utf16 = raw[1] === 0 || (raw[0] === 0xff && raw[1] === 0xfe);
+    }
+    const end = this.linesEnd(raw);
+    this.tail = raw.subarray(end);
+    // A megabyte with no newline is not a process list; drop it, keeping UTF-16 pairs aligned.
+    if (this.tail.length > 1_000_000) this.tail = this.tail.subarray(this.tail.length - (this.utf16 ? this.tail.length % 2 : 0));
+    if (!end) return [];
+    const text = raw.subarray(0, end).toString(this.utf16 ? 'utf16le' : 'utf8');
+    const batches: string[][] = [];
+    for (const part of text.slice(0, -1).split('\n')) {
+      const line = part.replace(/^﻿/, '').replace(/\r$/, '');
+      if (line.trim() === '---') {
+        batches.push(this.lines);
+        this.lines = [];
+      } else if (this.lines.length < 100_000) this.lines.push(line);
+    }
+    return batches;
   }
-  return { batches, rest: cur.join('\n') };
+
+  /** Bytes up to and including the last `\n`: the complete lines. 0 when there are none. */
+  private linesEnd(raw: Buffer): number {
+    if (!this.utf16) return raw.lastIndexOf(0x0a) + 1;
+    for (let i = raw.length - (raw.length % 2) - 2; i >= 0; i -= 2) {
+      if (raw[i] === 0x0a && raw[i + 1] === 0) return i + 2;
+    }
+    return 0;
+  }
 }
 
 function finish(byName: Map<string, number>, limit: number): CpuApp[] {
@@ -221,10 +249,6 @@ function readLinuxProcs(): ProcSample[] | undefined {
   }
 }
 
-function decodeChunk(raw: Buffer, utf16: boolean): string {
-  return utf16 ? raw.toString('utf16le') : raw.toString('utf8');
-}
-
 /**
  * The apps using the most CPU, for the list above the wall monitor. Windows keeps a PowerShell
  * reading process CPU time (two readings a few seconds apart); Linux reads /proc the same way; macOS
@@ -235,8 +259,7 @@ export class CpuAppSampler {
   private timer?: NodeJS.Timeout;
   private restart?: NodeJS.Timeout;
   private child?: ChildProcess;
-  private raw = Buffer.alloc(0);
-  private utf16 = false;
+  private reader = new BatchReader();
   private prev?: { at: number; procs: Map<number, ProcSample> };
 
   constructor(
@@ -273,8 +296,7 @@ export class CpuAppSampler {
     const again = () => {
       if (this.child !== child || !this.running) return;
       this.child = undefined;
-      this.raw = Buffer.alloc(0);
-      this.utf16 = false;
+      this.reader = new BatchReader();
       this.restart = setTimeout(() => this.spawnWindows(), 5_000);
       this.restart.unref();
     };
@@ -283,14 +305,7 @@ export class CpuAppSampler {
   }
 
   private onWinChunk(chunk: Buffer) {
-    this.raw = Buffer.concat([this.raw, chunk]);
-    if (!this.utf16 && this.raw.length >= 4 && (this.raw[1] === 0 || (this.raw[0] === 0xff && this.raw[1] === 0xfe))) this.utf16 = true;
-    if (this.raw.length > 2_000_000) this.raw = this.raw.subarray(this.raw.length - 1_000_000);
-    const text = decodeChunk(this.raw, this.utf16);
-    const { batches, rest } = splitBatches(text);
-    if (!batches.length) return;
-    this.raw = Buffer.from(rest, this.utf16 ? 'utf16le' : 'utf8');
-    for (const lines of batches) this.take(parseWinCpu(lines.join('\n')));
+    for (const lines of this.reader.push(chunk)) this.take(parseWinCpu(lines.join('\n')));
   }
 
   /** A percent of the machine from two cumulative readings. The first reading only starts the clock. */
