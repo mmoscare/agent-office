@@ -65,6 +65,7 @@ try {
   await page.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Test', color: '#ff8a5b', look: { skin: 0, hair: 0, style: 0 } }));
     localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true }));
+    localStorage.removeItem('agent-office.todo.area');
   });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -158,6 +159,21 @@ try {
   await card('todo', 'Tidy the garage and shed').getByRole('button', { name: 'Remove' }).click();
   assert.deepEqual(await cards('todo'), []);
   await board.getByRole('button', { name: 'Undo', exact: true }).click();
+  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
+
+  // Mark a card personal or trading; the strip above the columns shows just one mark. Autonomous has its own board.
+  await card('todo', 'Tidy the garage and shed').getByRole('button', { name: 'Mark as Personal' }).click();
+  await card('urgent', 'Pay the invoice').getByRole('button', { name: 'Mark as Trading' }).click();
+  assert.equal(await card('todo', 'Tidy the garage and shed').getByRole('button', { name: 'Marked Personal' }).getAttribute('aria-pressed'), 'true');
+  await board.getByRole('button', { name: 'Show just Personal' }).click();
+  assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
+  assert.deepEqual(await cards('urgent'), []);
+  assert.deepEqual(await cards('active'), []);
+  assert.match(await board.locator('.todo-summary').innerText(), /Showing Personal/);
+  await board.getByRole('button', { name: 'Show just Autonomous' }).click();
+  assert.deepEqual(await cards('todo'), []);
+  await board.getByRole('button', { name: 'Show all' }).click();
+  assert.deepEqual(await cards('urgent'), ['Call the bank', 'Pay the invoice']);
   assert.deepEqual(await cards('todo'), ['Tidy the garage and shed']);
 
   // 📌 Issues turns the window over to GitHub's, and back.

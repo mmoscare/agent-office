@@ -1,5 +1,5 @@
 import './todos.css';
-import { applyTodo, newTodoId, TODO_COLUMNS, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoBoardId, type TodoColumn, type TodoItem } from '../../shared/todos';
+import { applyTodo, isTodoArea, newTodoId, TODO_AREAS, TODO_COLUMNS, TODO_TEXT_MAX, todosIn, type TodoAction, type TodoArea, type TodoBoardId, type TodoColumn, type TodoItem } from '../../shared/todos';
 import type { Net } from '../net';
 import { store } from '../state';
 import { h, openModal, timeAgo } from './dom';
@@ -114,9 +114,13 @@ const startOfToday = () => new Date(new Date().toDateString()).getTime();
 export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard {
   const FOLD_KEY = `${PREFIX[board]}.doneOpen`;
   const TARGET_KEY = `${PREFIX[board]}.addTo`;
+  const AREA_KEY = `${PREFIX.mine}.area`;
   const items = () => todoList(board);
   let doneOpen = read(FOLD_KEY) === '1';
   let target: Exclude<TodoColumn, 'done'> = (['active', 'urgent', 'todo'] as const).find((c) => c === read(TARGET_KEY)) ?? 'urgent';
+  /** Your own board only: which mark is on screen. The Autonomous Tasks board has no such filter. */
+  const savedArea = board === 'mine' ? read(AREA_KEY) : null;
+  let areaFilter: TodoArea | null = isTodoArea(savedArea) ? savedArea : null;
   /** The card being edited, and what's typed in it so far. */
   let editing: { id: string; text: string } | undefined;
   /** The card being dragged. */
@@ -126,11 +130,27 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
 
   const change = (a: TodoAction) => changeTodo(net, a, board);
   const indexOf = (item: TodoItem) => todosIn(items(), item.column).indexOf(item);
-  /** New cards go on top: the top of a column is what matters most. */
+  const matches = (item: TodoItem) => !areaFilter || item.area === areaFilter;
+  const shownIn = (column: TodoColumn) => todosIn(items(), column).filter(matches);
+  /**
+   * Where a drop among the cards on screen goes in the whole column. A filter hides some, and the
+   * office counts the spot without those hidden ones still in the list, and without the card moving.
+   */
+  const placeIndex = (column: TodoColumn, visibleAt: number, movingId: string): number => {
+    const all = todosIn(items(), column).filter((t) => t.id !== movingId);
+    if (!areaFilter) return visibleAt;
+    const visible = all.filter(matches);
+    if (visibleAt >= visible.length) {
+      const last = visible.at(-1);
+      return last ? all.indexOf(last) + 1 : all.length;
+    }
+    return all.indexOf(visible[visibleAt]);
+  };
+  /** New cards go on top: the top of a column is what matters most. A filter marks them so they stay in view. */
   const addTo = (column: TodoColumn, raw: string): boolean => {
     const text = clean(raw);
     if (!text) return false;
-    change({ action: 'add', id: newTodoId(), text: text.slice(0, TODO_TEXT_MAX), column, index: 0 });
+    change({ action: 'add', id: newTodoId(), text: text.slice(0, TODO_TEXT_MAX), column, index: 0, ...(areaFilter ? { area: areaFilter } : {}) });
     return true;
   };
 
@@ -160,9 +180,10 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     if (addTo(e.shiftKey ? 'active' : target, input.value)) input.value = '';
   });
   const summary = h('div.todo-summary', { 'aria-live': 'polite' });
+  const filters = h('div.todo-filters', { role: 'group', 'aria-label': 'Show' });
   const undo = h('div.todo-undo', { role: 'status', 'aria-live': 'polite' });
   const cols = h('div.todo-cols');
-  const el = h('div.todo-board', { class: `board-${board}` }, h('div.todo-add', {}, input, picks), h('div.todo-bar', {}, summary, undo), cols);
+  const el = h('div.todo-board', { class: `board-${board}` }, h('div.todo-add', {}, input, picks), h('div.todo-bar', {}, board === 'mine' ? filters : null, summary, undo), cols);
   // Double-click the board around the cards (the cork) to show every card's notes, subtasks and
   // pictures, and again to put them away. A card, a box or a button keeps its own double-click.
   el.addEventListener('dblclick', (e) => {
@@ -183,7 +204,7 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
         clearTimeout(timer);
         removed = undefined;
         // Back with its notes, subtasks and pictures.
-        change({ action: 'add', id: item.id, text: item.text, column: item.column, index, notes: item.notes, subtasks: item.subtasks, images: item.images });
+        change({ action: 'add', id: item.id, text: item.text, column: item.column, index, notes: item.notes, subtasks: item.subtasks, images: item.images, ...(item.area ? { area: item.area } : {}) });
         showUndo();
       } }, 'Undo'),
     );
@@ -258,11 +279,30 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
             : [btn('↩ Reopen', `Put it back on ${TODO_COLUMNS[item.from ?? 'urgent']}`, () => reopen(item))];
     actions.push(btn('✏️', 'Edit', () => startEdit(item)), btn('✕', 'Remove', () => remove(item), '.todo-x'));
     const when = column === 'done' && item.doneAt ? `✅ ${timeAgo(item.doneAt)}` : `added ${timeAgo(item.at)}`;
+    const areas =
+      board === 'mine'
+        ? h(
+            'div.todo-areas',
+            { role: 'group', 'aria-label': 'Mark' },
+            ...(['personal', 'trading', 'autonomous'] as const).map((area) => {
+              const on = item.area === area;
+              return h('button.btn.todo-mini.todo-area', {
+                type: 'button',
+                class: `area-${area}`,
+                'aria-pressed': String(on),
+                title: on ? `Marked ${TODO_AREAS[area]} — click to clear` : `Mark as ${TODO_AREAS[area]}`,
+                'aria-label': on ? `Marked ${TODO_AREAS[area]}` : `Mark as ${TODO_AREAS[area]}`,
+                onclick: (e: Event) => (e.stopPropagation(), change({ action: 'area', id: item.id, ...(on ? {} : { area }) })),
+              }, TODO_AREAS[area]);
+            }),
+          )
+        : null;
     const card = h(
       'li.todo-card',
-      { 'data-id': item.id, tabindex: 0, draggable: 'true', title: 'Drag to move · double-click to edit · 1–4 or ←/→ move it · Alt+↑/↓ reorder · Space completes' },
+      { 'data-id': item.id, class: item.area ? `area-${item.area}` : undefined, tabindex: 0, draggable: 'true', title: 'Drag to move · double-click to edit · 1–4 or ←/→ move it · Alt+↑/↓ reorder · Space completes' },
       h('div.todo-text', {}, item.text),
       h('div.todo-when', {}, when),
+      areas,
       h('div.todo-actions', {}, ...actions),
     );
     // Notes, subtasks and pictures, while the board shows them. Working in them doesn't pick the card up.
@@ -279,7 +319,7 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
       card.append(details);
     }
     card.addEventListener('dblclick', (e) => {
-      if (!(e.target as Element).closest('.todo-details')) startEdit(item);
+      if (!(e.target as Element).closest('.todo-details, .todo-areas')) startEdit(item);
     });
     card.addEventListener('dragstart', (e) => {
       dragging = item.id;
@@ -295,8 +335,8 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     card.addEventListener('keydown', (e) => {
       if (e.target !== card || e.ctrlKey || e.metaKey) return;
       const i = COLUMN_ORDER.indexOf(column);
-      const here = indexOf(item);
-      const list = todosIn(items(), column);
+      const list = areaFilter ? shownIn(column) : todosIn(items(), column);
+      const here = list.indexOf(item);
       const to = /^[1-4]$/.test(e.key) ? COLUMN_ORDER[Number(e.key) - 1] : e.key === 'ArrowLeft' ? COLUMN_ORDER[i - 1] : e.key === 'ArrowRight' && !e.altKey ? COLUMN_ORDER[i + 1] : undefined;
       if (to) {
         e.preventDefault();
@@ -308,7 +348,7 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
         e.preventDefault();
         const at = here + (e.key === 'ArrowUp' ? -1 : 1);
         if (at < 0 || at >= list.length) return;
-        move(item, column, at);
+        move(item, column, areaFilter ? placeIndex(column, at, item.id) : at);
         focusCard(item.id);
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
@@ -335,9 +375,10 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
   }
 
   function columnFor(column: TodoColumn): HTMLElement {
-    const cards = todosIn(items(), column);
+    const all = todosIn(items(), column);
+    const cards = areaFilter ? all.filter(matches) : all;
     const folded = column === 'done' && !doneOpen;
-    const busy = column === 'active' && cards.length > ACTIVE_FOCUS;
+    const busy = column === 'active' && all.length > ACTIVE_FOCUS;
     const toggle =
       column === 'done'
         ? h('button.btn.todo-mini.todo-toggle', { type: 'button', 'aria-expanded': String(doneOpen), title: doneOpen ? 'Fold Completed away' : 'Show what you’ve completed', onclick: () => ((doneOpen = !doneOpen), write(FOLD_KEY, doneOpen ? '1' : '0'), render()) }, doneOpen ? 'Hide' : 'Show')
@@ -345,7 +386,7 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     const list = h('ul.todo-list', { 'aria-label': TODO_COLUMNS[column] });
     if (!folded) {
       for (const item of cards) list.append(cardFor(item, column));
-      if (!cards.length) list.append(h('li.todo-empty', {}, EMPTY[column]));
+      if (!cards.length) list.append(h('li.todo-empty', {}, areaFilter ? `Nothing marked ${TODO_AREAS[areaFilter]} here.` : EMPTY[column]));
     }
     // Each column but Completed has its own add box: type straight into the one it belongs in.
     const quick =
@@ -363,9 +404,9 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     const section = h(
       'section.todo-col',
       { class: `todo-${column}${folded ? ' folded' : ''}${busy ? ' todo-busy' : ''}`, 'data-column': column },
-      h('h3', {}, h('span.todo-title', {}, `${COLUMN_ICON[column]} `, TODO_COLUMNS[column]), h('span.todo-count', {}, String(cards.length)), toggle),
+      h('h3', {}, h('span.todo-title', {}, `${COLUMN_ICON[column]} `, TODO_COLUMNS[column]), h('span.todo-count', { title: areaFilter && all.length !== cards.length ? `${cards.length} of ${all.length}, just ${TODO_AREAS[areaFilter]}` : String(cards.length) }, String(cards.length)), toggle),
       folded
-        ? h('button.todo-fold', { type: 'button', onclick: () => ((doneOpen = true), write(FOLD_KEY, '1'), render()) }, cards.length ? `${cards.length} completed — show them` : 'Nothing completed yet')
+        ? h('button.todo-fold', { type: 'button', onclick: () => ((doneOpen = true), write(FOLD_KEY, '1'), render()) }, cards.length ? `${cards.length} completed — show them` : areaFilter && all.length ? `None marked ${TODO_AREAS[areaFilter]}` : 'Nothing completed yet')
         : h('p.todo-hint', {}, busy ? `${cards.length} at once — finish one before starting another?` : COLUMN_HINT[column]),
       quick,
       list,
@@ -393,23 +434,44 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
       dragging = undefined;
       clearMarks();
       if (!items().some((t) => t.id === id)) return;
-      change({ action: 'move', id, column, index: folded ? 0 : dropIndex(list, e.clientY) });
+      change({ action: 'move', id, column, index: folded ? 0 : areaFilter ? placeIndex(column, dropIndex(list, e.clientY), id) : dropIndex(list, e.clientY) });
     });
     return section;
   }
 
+  function renderFilters() {
+    if (board !== 'mine') return;
+    const chip = (area: TodoArea | null, label: string) =>
+      h('button.btn.todo-mini.todo-filter', {
+        type: 'button',
+        class: area ? `filter-${area}` : 'filter-all',
+        'aria-pressed': String(areaFilter === area),
+        title: area ? `Show just ${TODO_AREAS[area]}` : 'Show every card',
+        'aria-label': area ? `Show just ${TODO_AREAS[area]}` : 'Show all',
+        onclick: () => {
+          areaFilter = area;
+          write(AREA_KEY, area ?? '');
+          render();
+        },
+      }, label);
+    filters.replaceChildren(h('span.todo-filter-label', {}, 'Show:'), chip(null, 'All'), chip('personal', 'Just personal'), chip('trading', 'Just trading'), chip('autonomous', 'Just autonomous'));
+  }
+
   function renderSummary() {
-    const n = (c: TodoColumn) => todosIn(items(), c).length;
+    const pool = (c: TodoColumn) => (areaFilter ? shownIn(c) : todosIn(items(), c));
+    const n = (c: TodoColumn) => pool(c).length;
     const today = startOfToday();
-    const doneToday = todosIn(items(), 'done').filter((t) => (t.doneAt ?? 0) >= today).length;
+    const doneToday = pool('done').filter((t) => (t.doneAt ?? 0) >= today).length;
     summary.replaceChildren(
       ...(['active', 'urgent', 'todo'] as const).map((c) => h('span.todo-stat', { class: `stat-${c}` }, `${COLUMN_ICON[c]} ${n(c)} ${TODO_COLUMNS[c].toLowerCase()}`)),
       h('span.todo-stat.stat-done', {}, `✅ ${doneToday} done today`),
+      areaFilter ? h('span.todo-stat.stat-area', { class: `stat-${areaFilter}` }, `Showing ${TODO_AREAS[areaFilter]}`) : null,
       h('span.todo-reveal-hint', {}, todoDetailsShown(board) ? 'Double-click the board to tuck notes away' : 'Double-click the board for notes, subtasks & pictures'),
     );
   }
 
   function render() {
+    renderFilters();
     renderSummary();
     // Mid-edit, a change from another window mustn't throw away what's typed.
     const typing = editing && document.activeElement instanceof HTMLTextAreaElement && cols.contains(document.activeElement);

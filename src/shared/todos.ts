@@ -19,6 +19,16 @@ export const TODO_SUBTASKS_MAX = 100;
 export const TODO_IMAGES_MAX = 20;
 
 /**
+ * Which work a card on your own 🔥 To Do belongs to. The 🏢 Autonomous Tasks whiteboard is a
+ * different board; this mark only sorts cards on yours. Left off, a card is unmarked.
+ */
+export const TODO_AREAS = { personal: 'Personal', trading: 'Trading', autonomous: 'Autonomous' } as const;
+export type TodoArea = keyof typeof TODO_AREAS;
+export function isTodoArea(value: unknown): value is TodoArea {
+  return value === 'personal' || value === 'trading' || value === 'autonomous';
+}
+
+/**
  * The boards drawn this way: your own 🔥 To Do (one list each, on the issues board), and 🏢
  * Autonomous Tasks (one list for the whole office, on its own whiteboard). Same columns, same cards.
  */
@@ -52,16 +62,20 @@ export interface TodoItem extends TodoDetails {
   doneAt?: number;
   /** Where it was before it went to Completed, for Reopen. */
   from?: Exclude<TodoColumn, 'done'>;
+  /** Personal, trading, or autonomous — only on your own board. Unmarked if left off. */
+  area?: TodoArea;
 }
 
 export type TodoAction =
   /** A new item, at `index` in its column (the end if left out). The browser names it, so it can show it before the office answers. */
-  | ({ action: 'add'; id: string; text: string; column: TodoColumn; index?: number } & TodoDetails)
+  | ({ action: 'add'; id: string; text: string; column: TodoColumn; index?: number; area?: TodoArea } & TodoDetails)
   /** Moved to `index` in `column` (counted without it), from wherever it was. */
   | { action: 'move'; id: string; column: TodoColumn; index?: number }
   | { action: 'edit'; id: string; text: string }
   /** Replaces whichever of the card's notes, subtasks and pictures it names; an empty one takes it off. */
   | ({ action: 'details'; id: string } & TodoDetails)
+  /** Sets which work it belongs to, or clears the mark when `area` is left off. */
+  | { action: 'area'; id: string; area?: TodoArea }
   | { action: 'remove'; id: string };
 
 const ID_RE = /^[a-z0-9]{6,32}$/;
@@ -157,8 +171,8 @@ export function checkTodoAction(raw: unknown): TodoAction | null {
       if (!text || !isTodoColumn(a.column)) return null;
       const index = cleanIndex(a.index);
       const details = cleanDetails(a);
-      if (!details) return null;
-      return { action: 'add', id, text, column: a.column, ...(index === undefined ? {} : { index }), ...details };
+      if (!details || (a.area !== undefined && !isTodoArea(a.area))) return null;
+      return { action: 'add', id, text, column: a.column, ...(index === undefined ? {} : { index }), ...(isTodoArea(a.area) ? { area: a.area } : {}), ...details };
     }
     case 'move': {
       if (!isTodoColumn(a.column)) return null;
@@ -173,6 +187,9 @@ export function checkTodoAction(raw: unknown): TodoAction | null {
       const details = cleanDetails(a);
       return details && Object.keys(details).length ? { action: 'details', id, ...details } : null;
     }
+    case 'area':
+      if (a.area !== undefined && !isTodoArea(a.area)) return null;
+      return { action: 'area', id, ...(isTodoArea(a.area) ? { area: a.area } : {}) };
     case 'remove':
       return { action: 'remove', id };
     default:
@@ -200,6 +217,7 @@ export function checkTodoItem(raw: unknown): TodoItem | null {
     ...(notes ? { notes } : {}),
     ...(subtasks?.length ? { subtasks } : {}),
     ...(images?.length ? { images } : {}),
+    ...(isTodoArea(t.area) ? { area: t.area } : {}),
   };
 }
 
@@ -230,7 +248,7 @@ export function applyTodo(items: readonly TodoItem[], a: TodoAction, now = Date.
   switch (a.action) {
     case 'add': {
       if (was) return items;
-      const item = withDetails({ id: a.id, text: a.text, column: a.column, at: now, ...(a.column === 'done' ? { doneAt: now } : {}) }, a);
+      const item = withDetails({ id: a.id, text: a.text, column: a.column, at: now, ...(a.column === 'done' ? { doneAt: now } : {}), ...(a.area ? { area: a.area } : {}) }, a);
       next = insertAt([...items], item, a.column, a.index);
       break;
     }
@@ -257,6 +275,17 @@ export function applyTodo(items: readonly TodoItem[], a: TodoAction, now = Date.
       const changed = withDetails(was, a);
       if (JSON.stringify(changed) === JSON.stringify(was)) return items;
       next = items.map((t) => (t === was ? changed : t));
+      break;
+    }
+    case 'area': {
+      if (!was || was.area === a.area) return items;
+      next = items.map((t) => {
+        if (t !== was) return t;
+        const copy = { ...t };
+        if (a.area) copy.area = a.area;
+        else delete copy.area;
+        return copy;
+      });
       break;
     }
     case 'remove':
