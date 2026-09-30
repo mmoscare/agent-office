@@ -30,6 +30,8 @@ export interface SyncRepo {
   upstream?: string;
   /** Commits here that GitHub doesn't have yet (they're uploaded too). */
   ahead: number;
+  /** New commits on GitHub, as of the review (they're pulled). */
+  behind: number;
   /** Their subjects, newest first (a few). */
   outgoing: string[];
   files: SyncFile[];

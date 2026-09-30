@@ -240,6 +240,8 @@ export const SPAWN = { x: 8, z: 7 } as const;
 
 /** The gong: on the north wall just past the elevator from the PR board, facing into the room. It rings when a PR merges. */
 export const GONG = { x: 11.8, z: FLOOR.minZ + 0.75, width: 1.9, height: 2.45 } as const;
+/** 🔄 Sync everything: a push-button on a pedestal just east of the gong's mallet, clear of the plant in the corner past it. */
+export const SYNC_BUTTON = { x: GONG.x + GONG.width / 2 + 0.7, z: FLOOR.minZ + 0.95, radius: 0.26, height: 1.02 } as const;
 
 /** Potted plants around the room: where each stands, and how big it is. */
 export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[] = [
