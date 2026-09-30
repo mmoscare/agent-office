@@ -327,7 +327,7 @@ export function openSettings(net: Net, settings: Settings, onChange: (s: Setting
     leaveRow.replaceChildren(
       ...([
         [true, '🏠 Go home by themselves'],
-        [false, '🪑 Stay until sent home'],
+        [false, '🪑 Stay until clocked out'],
       ] as const).map(([value, label]) =>
         h(
           'button.btn',
@@ -346,7 +346,7 @@ export function openSettings(net: Net, settings: Settings, onChange: (s: Setting
     );
     const now = on
       ? 'Once a worker’s pull request merges, it goes home as soon as it isn’t working or waiting on you and nobody has its terminal open, and its worktree and branch are deleted. A worktree with uncommitted changes, or commits that aren’t on GitHub, is kept.'
-      : 'A worker whose pull request merged stays at its desk, outlined in purple, until someone sends it home. Turned on, the ones already merged go too.';
+      : 'A worker whose pull request merged stays at its desk, outlined in purple, until someone clocks it out. Turned on, the ones already merged go too.';
     leaveNote.textContent = `${now} It’s the same for everyone in the building${by ? `, set by ${by}${at ? ` ${timeAgo(at)}` : ''}` : ''}.`;
   };
   paintLeave();

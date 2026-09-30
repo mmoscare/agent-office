@@ -69,8 +69,8 @@ export function openPrompt(opts: PromptOptions) {
   }, 30);
 }
 
-export function confirmDialog(title: string, body: string, confirmLabel: string, onConfirm: () => void) {
-  const yes = h('button.btn.danger', { type: 'button' }, confirmLabel);
+export function confirmDialog(title: string, body: string, confirmLabel: string, onConfirm: () => void, tone: 'danger' | 'primary' = 'danger') {
+  const yes = h(`button.btn.${tone}`, { type: 'button' }, confirmLabel);
   const no = h('button.btn', { type: 'button' }, 'Never mind');
   const el = h('div.modal', { role: 'alertdialog', 'aria-label': title }, h('header', {}, h('h2', {}, title)), h('div.body', {}, h('p', { style: 'margin:0;font-weight:700' }, body)), h('footer', {}, no, yes));
   const modal = openModal(el);
@@ -116,9 +116,9 @@ function inspectWorktree(workerId: string, ask: () => void): Promise<WorktreeSta
 }
 
 const CLEANUP_LABEL: Record<WorktreeCleanup, string> = {
-  all: 'Send home & delete both',
-  worktree: 'Send home & delete worktree',
-  keep: 'Send home',
+  all: 'Clock out & delete both',
+  worktree: 'Clock out & delete worktree',
+  keep: 'Clock out',
 };
 
 /**
@@ -134,11 +134,16 @@ export function sendHomeDialog(opts: SendHomeOptions) {
   ];
   const radios = new Map<WorktreeCleanup, HTMLInputElement>();
   let touched = false;
-  const yes = h('button.btn.danger', { type: 'submit' }, CLEANUP_LABEL.keep);
+  const yes = h('button.btn.primary', { type: 'submit' }, CLEANUP_LABEL.keep);
   const chosen = (): WorktreeCleanup => [...radios].find(([, r]) => r.checked)?.[0] ?? 'keep';
+  const paint = (c: WorktreeCleanup) => {
+    yes.textContent = CLEANUP_LABEL[c];
+    yes.classList.toggle('danger', c !== 'keep');
+    yes.classList.toggle('primary', c === 'keep');
+  };
   const pick = (c: WorktreeCleanup) => {
     radios.get(c)!.checked = true;
-    yes.textContent = CLEANUP_LABEL[c];
+    paint(c);
   };
   const list = h(
     'div.choices',
@@ -150,7 +155,7 @@ export function sendHomeDialog(opts: SendHomeOptions) {
         value,
         onchange: () => {
           touched = true;
-          yes.textContent = CLEANUP_LABEL[chosen()];
+          paint(chosen());
         },
       }) as HTMLInputElement;
       radios.set(value, r);
@@ -161,12 +166,12 @@ export function sendHomeDialog(opts: SendHomeOptions) {
   const no = h('button.btn', { type: 'button' }, 'Never mind');
   const form = h(
     'form.modal',
-    { role: 'dialog', 'aria-label': `Send ${opts.name} home?` },
-    h('header', {}, h('h2', {}, `Send ${opts.name} home?`)),
+    { role: 'dialog', 'aria-label': `Clock ${opts.name} out?` },
+    h('header', {}, h('h2', {}, `Clock ${opts.name} out?`)),
     h(
       'div.body',
       {},
-      h('p', { style: 'margin:0 0 12px;font-weight:700' }, `This stops the session at ${opts.where} for everyone and frees the desk. ${opts.name} worked on ${branch}:`),
+      h('p', { style: 'margin:0 0 12px;font-weight:700' }, `This stops the session at ${opts.where} and frees the desk. Just for now — hire them back whenever. ${opts.name} worked on ${branch}:`),
       list,
       status,
     ),
