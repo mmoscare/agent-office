@@ -251,9 +251,14 @@ function run(args: string[], cwd: string, opts: { env?: NodeJS.ProcessEnv; input
 }
 
 async function git(args: string[], cwd: string, opts?: Parameters<typeof run>[2]): Promise<string> {
+  return (await gitRaw(args, cwd, opts)).trim();
+}
+
+/** Git's output as it is: `git status --porcelain` starts with a space when a file is changed but not staged. */
+async function gitRaw(args: string[], cwd: string, opts?: Parameters<typeof run>[2]): Promise<string> {
   const r = await run(args, cwd, opts);
   if (r.code !== 0) throw new Error(gitError({ stderr: r.err }) || `git ${args[0]} failed`);
-  return r.out.trim();
+  return r.out;
 }
 
 async function gitMaybe(args: string[], cwd: string): Promise<string | undefined> {
@@ -705,7 +710,7 @@ function statusRecords(out: string): [string, string][] {
 
 /** Uncommitted changes and the ignored files that aren't build output, in a registered worktree. */
 async function worktreeFiles(abs: string): Promise<{ uncommitted: number; ignored: string[] }> {
-  const out = await git(['-c', 'core.longpaths=true', 'status', '--porcelain=v1', '-z', '-unormal', '--ignored=matching'], abs, { timeout: 120_000 });
+  const out = await gitRaw(['-c', 'core.longpaths=true', 'status', '--porcelain=v1', '-z', '-unormal', '--ignored=matching'], abs, { timeout: 120_000 });
   const recs = statusRecords(out);
   return { uncommitted: recs.filter(([xy]) => xy !== '!!').length, ignored: workIgnored(recs.filter(([xy]) => xy === '!!').map(([, p]) => p)) };
 }
@@ -723,7 +728,7 @@ export async function strayEdits(repoDir: string, folder: string, branch?: strin
   const index = `${tmp}.index`;
   const excludes = `${tmp}.exclude`;
   const inFolder = (args: string[], input?: string) =>
-    git(['--git-dir', gitDir, '--work-tree', '.', '-c', 'core.longpaths=true', '-c', `core.excludesFile=${slash(excludes)}`, ...args], folder, { env: { GIT_INDEX_FILE: index }, input, timeout: 180_000 });
+    gitRaw(['--git-dir', gitDir, '--work-tree', '.', '-c', 'core.longpaths=true', '-c', `core.excludesFile=${slash(excludes)}`, ...args], folder, { env: { GIT_INDEX_FILE: index }, input, timeout: 180_000 });
   try {
     // Its own .gitignore may be one of the files the half-delete took: use the branch's, and never count build output.
     const ignore = branch ? await run(['show', `refs/heads/${branch}:.gitignore`], repoDir) : undefined;
@@ -734,7 +739,7 @@ export async function strayEdits(repoDir: string, folder: string, branch?: strin
     const ignored = workIgnored(recs.filter(([xy]) => xy === '!!').map(([, p]) => p));
     const edits: string[] = [];
     if (counted.length) {
-      const hashes = (await inFolder(['hash-object', '--stdin-paths'], `${counted.join('\n')}\n`)).split('\n');
+      const hashes = (await inFolder(['hash-object', '--stdin-paths'], `${counted.join('\n')}\n`)).trim().split('\n');
       const found = (await git(['cat-file', '--batch-check'], repoDir, { input: `${hashes.join('\n')}\n` })).split('\n');
       counted.forEach((p, i) => {
         if (!found[i] || / missing$/.test(found[i])) edits.push(p);
