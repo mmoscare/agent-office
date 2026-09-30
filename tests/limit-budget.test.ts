@@ -8,7 +8,7 @@ const DAY = 24 * HOUR;
 // A week that started Monday 20:00 UTC and starts over the next Monday, like Claude's.
 const START = Date.parse('2026-09-28T20:00:00Z');
 const RESETS = START + 7 * DAY;
-const week = (pct: number, label = 'Week', resetsAt: number | undefined = RESETS): PlanWindow => ({ label, pct, resetsAt });
+const week = (pct: number, label = 'Week', resetsAt = RESETS): PlanWindow => ({ label, pct, resetsAt });
 
 test('each day of the week gets an equal seventh, from the hour it resets', () => {
   const first = dayBudget(week(0), START + HOUR)!;
@@ -67,7 +67,7 @@ test('no run-out estimate for a pace that lasts the week, or from too little of 
 test('only weekly windows with a reset in the future get a budget', () => {
   const now = START + DAY;
   assert.equal(dayBudget({ label: '5h session', pct: 40, resetsAt: now + HOUR }, now), null);
-  assert.equal(dayBudget(week(40, 'Week', undefined), now), null);
+  assert.equal(dayBudget({ label: 'Week', pct: 40 }, now), null);
   assert.equal(dayBudget(week(40, 'Week', now - 1), now), null);
   assert.ok(dayBudget(week(40, 'Fable week'), now));
   assert.ok(dayBudget(week(40, 'Opus week'), now));
