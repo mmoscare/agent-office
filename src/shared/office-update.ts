@@ -126,6 +126,15 @@ export interface OfficeUpdateState {
   error?: string;
 }
 
+/**
+ * New packages when the office restarts by hand (no launcher to switch the staged build in): with the
+ * office stopped, install them in the app folder and build there. The build is its own command, not
+ * left to npm ci's prepare script, which doesn't run when install scripts are turned off.
+ */
+export function packagesByHand(appDir: string): string {
+  return [`cd "${appDir}"`, 'npm ci', 'npm run build'].join('\n');
+}
+
 /** Workers a restart would interrupt: working (or starting), or waiting on an answer from you. */
 export function interruptedByRestart(status: WorkerStatus): boolean {
   return status === 'working' || status === 'starting' || status === 'needs_input';

@@ -66,15 +66,49 @@ function fakeWorkers(f: ReturnType<typeof fixture>, t: { after(fn: () => void): 
 
 test('discovers local repos, including dirty checkouts, without following directory links or dependencies', async t => {
   const f = fixture(t);
+  writeFileSync(path.join(f.frontend, 'app.txt'), 'uncommitted edit\n');
   writeFileSync(path.join(f.frontend, 'uncommitted.txt'), 'keep');
+  writeFileSync(path.join(f.backend, 'untracked-only.txt'), 'keep');
   f.repo('node_modules/ignored');
   f.repo('group/service');
   symlinkSync(f.backend, path.join(f.floor, 'backend-alias'), process.platform === 'win32' ? 'junction' : 'dir');
   const result = await workspaceRepositories(f.floor);
   assert.deepEqual(result.repositories.map(r => r.path), ['backend', 'frontend', 'group/service']);
+  // The hire picker's count skips the untracked-file walk; the Git board asks for it.
   assert.equal(result.repositories.find(r => r.path === 'frontend')?.dirty, 1);
+  assert.equal(result.repositories.find(r => r.path === 'backend')?.dirty, 0);
+  const full = await workspaceRepositories(f.floor, { untracked: true });
+  assert.equal(full.repositories.find(r => r.path === 'frontend')?.dirty, 2);
+  assert.equal(full.repositories.find(r => r.path === 'backend')?.dirty, 1);
   assert.equal(result.truncated, false);
   assert.deepEqual((await workspaceRepositories(f.frontend)).repositories.map(r => r.path), ['.']);
+});
+
+test('repository discovery reads branches without blocking the server on synchronous Git calls', async t => {
+  const f = fixture(t);
+  git(f.frontend, 'branch', 'personal');
+  git(f.backend, 'switch', '--detach');
+  mkdirSync(path.join(f.floor, 'empty'));
+  git(path.join(f.floor, 'empty'), 'init', '-b', 'main');
+  const blocking: string[][] = [];
+  const original = cp.execFileSync;
+  const mock = t.mock.method(cp, 'execFileSync', ((cmd: string, args: string[], opts: any) => {
+    if (cmd === 'git') blocking.push(args);
+    return original(cmd, args, opts);
+  }) as typeof execFileSync);
+  syncBuiltinESMExports();
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+  const result = await workspaceRepositories(f.floor);
+  mock.mock.restore(); syncBuiltinESMExports();
+  assert.deepEqual(blocking, []);
+  const byPath = new Map(result.repositories.map(r => [r.path, r]));
+  assert.deepEqual([...byPath.keys()], ['backend', 'empty', 'frontend']);
+  assert.equal(byPath.get('frontend')?.branch, 'main');
+  assert.deepEqual(byPath.get('frontend')?.branches?.filter(b => !b.remote).map(b => b.name), ['main', 'personal']);
+  assert.equal(byPath.get('frontend')?.error, undefined);
+  assert.equal(byPath.get('backend')?.branch, undefined, 'a detached checkout has no branch');
+  assert.equal(byPath.get('backend')?.error, undefined);
+  assert.ok(byPath.get('empty')?.error, 'a repository without commits cannot start a worktree');
 });
 
 test('two worktrees share a workspace and branch name while preserving originals and ignored files', async t => {

@@ -1,5 +1,5 @@
 import './office-update.css';
-import { UPDATE_STEPS, type OfficeUpdateState, type UpdateOutcome, type UpdatePr, type UpdateStepId, type UpdateWorker } from '../../shared/office-update';
+import { packagesByHand, UPDATE_STEPS, type OfficeUpdateState, type UpdateOutcome, type UpdatePr, type UpdateStepId, type UpdateWorker } from '../../shared/office-update';
 import type { Net } from '../net';
 import { store } from '../state';
 import { codeBox } from './copy-code';
@@ -282,9 +282,13 @@ function restartByHand(s: OfficeUpdateState): HTMLElement[] {
   if (r.needsPackagesByHand) {
     out.push(
       h('ol.ou-steps-list', {},
-        h('li', {}, 'Stop the office: right-click the Agent Office icon near the clock → ', h('b', {}, 'Stop Agent Office and exit'), '. Or press ', h('b', {}, 'Ctrl+C'), ' in its PowerShell window.'),
-        h('li', {}, 'In PowerShell, install the new packages (safe now the office is stopped):', codeBox(`cd "${s.appDir}"\nnpm ci`).el),
-        h('li', {}, 'Start it again: double-click ', h('b', {}, 'Agent Office'), ' on your Desktop, or run the start command:', codeBox(START_COMMAND).el),
+        r.reason === 'other'
+          ? h('li', {}, 'Stop the office the way it was started.')
+          : h('li', {}, 'Stop the office: right-click the Agent Office icon near the clock → ', h('b', {}, 'Stop Agent Office and exit'), '. Or press ', h('b', {}, 'Ctrl+C'), ' in its PowerShell window.'),
+        h('li', {}, 'Install the new packages and build the new version (safe now the office is stopped):', codeBox(packagesByHand(s.appDir)).el),
+        r.reason === 'other'
+          ? h('li', {}, 'Start it again the way it was started. This page reconnects by itself and checks it worked.')
+          : h('li', {}, 'Start it again: double-click ', h('b', {}, 'Agent Office'), ' on your Desktop, or run the start command:', codeBox(START_COMMAND).el),
       ),
     );
   } else {

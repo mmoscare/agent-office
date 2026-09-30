@@ -266,7 +266,7 @@ export const MANUAL: ManualChapter[] = [
         steps: [
           'Check **Needs you** and the desks. Restart when workers are idle or waiting on you.',
           'Launcher: right-click the tray icon near the clock → **Restart Agent Office**. PowerShell: press Ctrl+C in its window, then start it again with the start command (see “Merging an agent-office PR, step by step”, step 8).',
-          'A build the walkthrough made switches in as the office stops. New packages need the launcher, or `npm ci` in the app folder while the office is stopped.',
+          'A build the walkthrough made switches in as the office stops. New packages need the launcher, or `npm ci` and then `npm run build` in the app folder while the office is stopped.',
           'Walk past each desk that was busy and say “continue”.',
         ],
       },
@@ -310,6 +310,27 @@ export const MANUAL: ManualChapter[] = [
       { p: 'Every board agent knows the board through `office-plans` (`list`, `add`, `set <id> todo|progress|finished`, `remove <id>`) and queues an item with `office-queue add --plan <id>`. Ask the Queue agent to “queue everything on the To Do Next board” and it makes one task per item.' },
       { h: 'Your hours: the Indirect Time card' },
       { p: 'The 🗂️ **Indirect Time** index card beside the binder (or ☰ → **Indirect Time**) keeps your hours in the office, per day. You clock in when your first browser window opens the office and out when your last one closes, on whichever floor; a reload or a restart within 5 minutes carries on the same stint. It is the same card on every floor. **⬇️ CSV** downloads every day for a timesheet. The cards are kept on the office’s machine in `.agent-office/timecard.json`.' },
+    ],
+  },
+  {
+    id: 'notes-pad',
+    icon: '🗒️',
+    title: 'Notes: your own notepad',
+    blocks: [
+      { p: 'Click **🗒️ Notes** on the top bar, or **🗒️ Notes** at the top of the 🔥 To Do board, and the board flips over into a notepad, like the Notes app on a phone. It is yours, and the same on every floor.' },
+      {
+        list: [
+          'The folders are down the side: **🗒️ Notes**, **🔗 Links to watch**, the ones you make with **＋ New folder** (double-click one to rename it), and **🗑️ Recently deleted**.',
+          '**✏️ New note** (or **N**) starts one. The first line is its title. It saves as you type.',
+          'Pictures: **🖼️ Picture**, or paste or drop them straight into a note.',
+          'Move a note with the folder menu on it, or drag it onto a folder. **📌 Pin** keeps it at the top.',
+          'The search box looks through every folder.',
+          'A deleted note stays in Recently deleted for 30 days. Open it and click **↩ Put it back**.',
+        ],
+      },
+      { h: '🔗 Links to watch' },
+      { p: 'Every link goes here. Paste one into the box at the top, and the links you write in any other note show up here too. Tick the circle when you have watched one. **To watch**, **Watched** and **All** switch between them, and the top bar button counts the ones still to watch. Click a link’s row to open its note and say what it is.' },
+      { note: 'Notes are kept on the office’s machine in `.agent-office/notes.json`, and pictures in `.agent-office/notes-images`.' },
     ],
   },
   {

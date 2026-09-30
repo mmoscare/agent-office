@@ -1,0 +1,11 @@
+.vp-section { display: grid; gap: 6px; padding: 8px 10px; border: 3px solid var(--ink); border-radius: 12px; background: #f1ebf8; }
+.vp-section .vp-head { display: flex; align-items: center; gap: 8px; font-weight: 900; }
+.vp-section .vp-head .vp-badge { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--ink); display: grid; place-items: center; background: #6a4c93; }
+.vp-section .vp-line { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.vp-section .vp-line.restart { color: #7a4d00; font-weight: 800; }
+.vp-section .vp-deploy { font: inherit; font-weight: 900; padding: 6px 10px; border: 3px solid var(--ink); border-radius: 10px; background: #fff; box-shadow: 0 3px 0 var(--ink); cursor: pointer; }
+.vp-section .vp-deploy:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+.vp-section .vp-duty { display: flex; align-items: flex-start; gap: 8px; font-weight: 800; cursor: pointer; }
+.vp-section .vp-duty input { margin-top: 3px; }
+.vp-section .vp-duty.locked { cursor: not-allowed; opacity: .7; }
+.vp-section .vp-duty small { display: block; font-weight: 400; color: var(--muted); }

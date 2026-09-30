@@ -258,7 +258,8 @@ export function beforeStart(appDir: string): StartResult {
 /**
  * On the office's way out when no launcher will switch the build in (Ctrl+C in PowerShell, or a
  * launcher from before this): the build's dist goes in now, so starting again runs it. New packages
- * can't: the running office holds node_modules open, so those wait for the launcher or `npm ci`.
+ * can't: the running office holds node_modules open, so those wait for the launcher, or `npm ci` and
+ * `npm run build` by hand with the office stopped (see packagesByHand).
  */
 export function swapDistOnExit(appDir: string) {
   const p = stagePaths(appDir);

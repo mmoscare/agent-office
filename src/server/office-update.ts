@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -137,8 +137,9 @@ export function packageCheck(dir: string): { needed: boolean; runtime: boolean; 
   if (!lock) return { needed: false, runtime: false, changes: [] };
   if (!existsSync(path.join(dir, 'node_modules'))) return { needed: true, runtime: true, changes: ['node_modules is missing'] };
   const have = readJson<{ packages?: Record<string, LockEntry> }>(path.join(dir, 'node_modules', '.package-lock.json'))?.packages;
-  // npm writes that record on every install; without it there's nothing to compare with.
-  if (!have) return { needed: false, runtime: false, changes: [] };
+  // npm writes that record on every install. Missing or unreadable (an install cut short, say), nothing
+  // shows what's installed matches the lock: install afresh, as with no node_modules at all.
+  if (!have || typeof have !== 'object') return { needed: true, runtime: true, changes: ['npm’s record of what’s installed (node_modules/.package-lock.json) is missing or unreadable'] };
   const changes: string[] = [];
   let runtime = false;
   for (const [key, want] of Object.entries(lock)) {
@@ -230,7 +231,11 @@ export class OfficeUpdater {
   private lastPrs: UpdatePr[] = [];
 
   constructor(private opts: UpdaterOptions) {
-    if (readJson<StagedBuild>(this.paths.ready)) this.hookExitSwap();
+    const ready = readJson<StagedBuild>(this.paths.ready);
+    // Already running what was staged (the new packages installed and built by hand, say): nothing
+    // to switch in any more, and a later start mustn't swap that older copy over the new build.
+    if (ready && opts.running && ready.commit === opts.running) rmSync(this.paths.ready, { force: true });
+    else if (ready) this.hookExitSwap();
   }
 
   get appDir() {
@@ -360,9 +365,7 @@ export class OfficeUpdater {
     const built = Math.min(mtime(path.join(dist, 'public', 'index.html')) ?? NaN, mtime(path.join(dist, 'server', 'server', 'server.js')) ?? NaN);
     if (Number.isNaN(built) || !head) return undefined;
     const log = await gitOut(['rev-parse', '--git-path', 'logs/HEAD'], this.opts.appDir);
-    const changed = log ? mtime(path.resolve(this.opts.appDir, log)) : undefined;
-    // A build by hand after the checkout last changed is a build of what's checked out.
-    return changed === undefined || built >= changed ? head : undefined;
+    return builtAfterChange(built, log ? mtime(path.resolve(this.opts.appDir, log)) : undefined) ? head : undefined;
   }
 
   private ready(head: string | undefined): StagedBuild | undefined {
@@ -831,22 +834,30 @@ function floorProblem(err: string): string {
  * What the office was started on, taken once as the server starts: the build's own record (written
  * by step 4), else the app folder's commit when its build is newer than its last change.
  */
-function startupSnapshot(appDir: string | undefined): Pick<UpdaterOptions, 'running' | 'startupHead'> {
+export function startupSnapshot(appDir: string | undefined, dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')): Pick<UpdaterOptions, 'running' | 'startupHead'> {
   if (!appDir) return {};
-  const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const head = headOf(appDir);
   const info = readBuildInfo(dist);
   if (info) return { running: info.commit, startupHead: head };
   const built = Math.min(mtime(path.join(dist, 'public', 'index.html')) ?? NaN, mtime(path.join(dist, 'server', 'server', 'server.js')) ?? NaN);
   let changed: number | undefined;
   try {
-    const gitDir = path.join(appDir, '.git');
-    changed = mtime(path.join(statSync(gitDir).isDirectory() ? gitDir : appDir, 'logs', 'HEAD'));
+    // Where HEAD's reflog really is: <git dir>/logs/HEAD, and a linked worktree's git dir is elsewhere.
+    const log = execFileSync('git', ['rev-parse', '--git-path', 'logs/HEAD'], { cwd: appDir, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    changed = log ? mtime(path.resolve(appDir, log)) : undefined;
   } catch {
     changed = undefined;
   }
-  const running = head && !Number.isNaN(built) && (changed === undefined || built >= changed) ? head : undefined;
-  return { running, startupHead: head };
+  return { running: head && builtAfterChange(built, changed) ? head : undefined, startupHead: head };
+}
+
+/**
+ * A build by hand (no build-info.json) is of the checked-out commit when it's newer than the
+ * checkout's last change (HEAD's reflog). When that can't be told, it isn't: better a build step
+ * too many than "done" while the office runs old code.
+ */
+function builtAfterChange(built: number, changed: number | undefined): boolean {
+  return !Number.isNaN(built) && changed !== undefined && built >= changed;
 }
 
 const APP_DIR = officeRoot();

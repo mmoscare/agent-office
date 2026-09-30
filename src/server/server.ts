@@ -34,6 +34,7 @@ import { PhoneLine } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
+import { ChangeNotes, PlainWriter, claudeSummarizer, floorSources } from './change-notes.js';
 import { PlansError } from './plans.js';
 import { INBOX_SERVE_MAX, InTrayDoor, InboxError, fileType, plainName, readBytes } from './inbox.js';
 import { Mailroom, type MailFloor } from './mailroom.js';
@@ -41,11 +42,13 @@ import { Sky } from './sky.js';
 import { Themes } from './theme.js';
 import { OfficePrompts } from './prompts.js';
 import { LeaveOnMerge } from './leave-on-merge.js';
+import { clockOut, listWorkers, workersFloor } from './office-workers.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import { Stickies } from './stickies.js';
 import { Todos } from './todos.js';
+import { Notes, NOTE_IMAGE_TYPES } from './notes.js';
 import { TODO_IMAGE_MAX_BYTES, TodoImages } from './todo-images.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, GH_LABEL_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
@@ -58,6 +61,7 @@ import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
 import { checkStickyAction } from '../shared/stickies.js';
 import { checkTodoAction } from '../shared/todos.js';
+import { checkNoteAction, NOTE_IMAGE_MAX_BYTES } from '../shared/notes.js';
 import { checkContentAction } from '../shared/content-kanban.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
@@ -67,6 +71,8 @@ import { EMOTE_EVERY, EmoteBucket, isEmote } from '../shared/emotes.js';
 import { isThemePick } from '../shared/theme.js';
 import { PROMPTS, PROMPT_MAX, isPromptId } from '../shared/prompts.js';
 import { ROOF, isDrink } from '../shared/rooftop.js';
+import { BOTS, botDesk } from '../shared/bots.js';
+import { handleVp } from './vp.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -230,6 +236,8 @@ export async function startServer(cfg: Config) {
   const stickies = new Stickies(cfg.dataDir);
   /** Whose To Do board and stickies a connection sees: their account's, or the shared password's one list. */
   const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
+  // Everyone's own 📝 Notes pad, the To Do board's other side: kept the same way, one each for the whole building.
+  const notes = new Notes(cfg.dataDir);
   // The 🏢 Autonomous Tasks whiteboard: the same kind of board, with one list for the whole office.
   const autonomous = new Todos(cfg.dataDir, 'autonomous.json');
   const AUTONOMOUS_OWNER = 'office';
@@ -315,6 +323,12 @@ export async function startServer(cfg: Config) {
     if (error) sendTo(c, { t: 'toast', text: error, level: 'warn' });
   };
 
+  /**
+   * Who last typed or sent a prompt to each worker, and whether they're an admin: the VP's standing
+   * duty is the owner's approval for merges, so office-vp can only turn it on for an admin.
+   */
+  const askers = new Map<string, { name: string; admin: boolean }>();
+
   // --- Loopback-only endpoint for authenticated agent events -------------------------------
   let webhook!: Webhook;
   const hookServer = http.createServer(async (req, res) => {
@@ -327,8 +341,10 @@ export async function startServer(cfg: Config) {
     if (url.pathname === '/office/queue') return officeQueue(req, res, url);
     if (url.pathname === '/office/plans') return officePlans(req, res, url);
     if (url.pathname === '/office/inbox') return officeInbox(req, res, url);
+    if (url.pathname === '/office/workers') return officeWorkers(req, res, url);
     if (url.pathname === '/office/mail') return officeMail(req, res, url);
     if (url.pathname === '/office/ask') return officeAsk(req, res, url);
+    if (url.pathname === '/office/vp') return officeVp(req, res, url);
     if (req.method !== 'POST' || !['/hooks/claude', '/hooks/opencode', '/hooks/codex'].includes(url.pathname)) return send(res, 404, { ok: false });
     let payload: unknown = {};
     try {
@@ -481,6 +497,37 @@ export async function startServer(cfg: Config) {
       throw error;
     }
   };
+  /**
+   * The floor's workers, for the board agents (office-workers): GET lists them with where their work
+   * stands; POST {"action": "home", "id", "removeWorktree"} clocks one out, as X at its desk does, once
+   * the office has checked nothing would be left behind (see office-workers.ts). Only on its own floor.
+   */
+  const officeWorkers = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'office-workers');
+    if (!who) return;
+    const { floor, agent } = who;
+    const here = workersFloor(floor);
+    if (req.method === 'GET') return send(res, 200, { workers: await listWorkers(here) });
+    if (req.method !== 'POST') return send(res, 405, { error: 'GET or POST' });
+    let body: { action?: unknown; id?: unknown; removeWorktree?: unknown };
+    try {
+      body = JSON.parse(await readBody(req, 16 * 1024));
+    } catch {
+      return send(res, 400, { error: 'Send JSON: {"action": "home", "id": "…", "removeWorktree": false}' });
+    }
+    if (body?.action !== 'home') return send(res, 400, { error: 'The action is home' });
+    const r = await clockOut(here, str(body?.id, 64), body?.removeWorktree === true);
+    if (!r.ok) return send(res, r.status, { error: r.error });
+    toastFloor(floor, `🏠 The ${agent.name} clocked out ${r.worker.name}`);
+    const done = r.done.catch((e: Error) => ({ note: undefined, error: `Clocking ${r.worker.name} out went wrong: ${e.message}` }));
+    void done.then(({ note, error }) => {
+      if (note) toastFloor(floor, note);
+      if (error) toastFloor(floor, error, 'warn');
+    });
+    // Deleting a big worktree can take a while: the agent hears how it went if it's quick, the floor either way.
+    const settled = await Promise.race([done, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 60_000).unref())]);
+    return send(res, 200, { ok: true, worker: { id: r.worker.id, name: r.worker.name }, cleanup: r.cleanup, ...(r.kept ? { kept: r.kept } : {}), ...(settled ?? { pending: true }) });
+  };
   /** The Receptionist, and only her: the one board agent who writes email. */
   const receptionist = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, what: string) => {
     const who = boardAgent(req, res, url, what);
@@ -550,6 +597,33 @@ export async function startServer(cfg: Config) {
     if (typeof r === 'string') return send(res, 400, { error: r });
     toastFloor(floor, `💁‍♀️ The ${agent.name} asked the ${STATION_AGENT[to].name} to help`);
     return send(res, 200, { ok: true, agent: STATION_AGENT[to].name, hired: r.hired });
+  };
+  /**
+   * The VP, and only him (office-vp): GET ?view=status|workers|job&id=…; POST {"action": "sweep" |
+   * "verify" | "merge" | "retry" | "nudge" | "wake" | "duty", …}. The mechanics are in vp.ts.
+   */
+  const officeVp = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'office-vp');
+    if (!who) return;
+    const { floor, agent } = who;
+    if (DESK_BY_ID.get(agent.deskId)?.station !== 'vp') return send(res, 403, { error: 'Only the VP can use office-vp' });
+    let body: Record<string, unknown> | undefined;
+    if (req.method === 'POST') {
+      try {
+        body = JSON.parse((await readBody(req, 64 * 1024)) || '{}');
+      } catch {
+        return send(res, 400, { error: 'Send JSON: {"action": "sweep"}' });
+      }
+    }
+    // Whoever last typed to the VP is who asked him; an admin only if the office saw that person, signed in as one, do it.
+    const me = floor.workers.get(agent.id);
+    // Just hired, nobody has typed to him since: whoever hired him asked.
+    const asked = me?.lastInput?.by ?? me?.createdBy;
+    const asker = askers.get(agent.id);
+    const admin = !!asked && asker?.name === asked && asker.admin;
+    const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name, admin });
+    if (req.method === 'POST' && r.status === 200 && body?.action === 'duty') toastFloor(floor, body.on === true ? `👔 The ${agent.name} is on duty: he sweeps the PRs by himself` : `👔 The ${agent.name} is off duty`);
+    return send(res, r.status, r.body);
   };
   /**
    * The in-tray door: POST /api/inbox from outside the office, with the token an admin made as the
@@ -645,6 +719,20 @@ export async function startServer(cfg: Config) {
     () => clients.size > 0,
     (state) => broadcast({ t: 'limits', state }),
   );
+
+  // ✨ What's new on the queue staffer's clipboard, each change in plain words (change-notes.ts):
+  // one writer for every floor, and each floor's list read when someone opens it.
+  const plainWriter = new PlainWriter(
+    claudeSummarizer(configuredProvider(cfg.agentCmd) === 'claude' ? resolveCommand(cfg.agentCmd) : resolveCommand('claude'), childEnv()),
+    () => !!ledger.hiringPaused,
+  );
+  const whatsNew = new Map<string, ChangeNotes>();
+  const whatsNewOn = (floor: Floor) => {
+    const key = `${floor.id}|${floor.dir}`;
+    let notes = whatsNew.get(key);
+    if (!notes) whatsNew.set(key, (notes = new ChangeNotes(floor.id, path.join(floor.dir, '.agent-office'), () => floorSources(floor.dir), plainWriter)));
+    return notes;
+  };
 
   // The office phone: an agent finishing on one floor rings it on all the others.
   const phone = new PhoneLine();
@@ -758,6 +846,7 @@ export async function startServer(cfg: Config) {
     peers: (floor) => [...clients.values()].filter((c) => c.peer.floor === floor.id).map((c) => c.peer),
     inboxDoor: () => door.open,
     leaveOnMerge: () => leaveOnMerge.on,
+    pressure: () => machine.state().pressure,
   };
   const openFloor = (def: FloorDef): Floor | undefined => {
     if (!existsSync(def.dir)) {
@@ -840,6 +929,7 @@ export async function startServer(cfg: Config) {
     plans: floor?.plans.state() ?? { revision: 0, items: [] },
     inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
     content: floor?.content ? [...floor.content.list()] : null,
+    vp: floor?.vp.view(),
   });
   /** The rooftop bar: nobody works up there, so it has none of a floor's things. */
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
@@ -1238,6 +1328,36 @@ export async function startServer(cfg: Config) {
         res.end(r.body);
         return;
       }
+      if (p === '/api/notes/image') {
+        // Pictures in your own 📝 Notes: each person's are their own (see notes.ts).
+        const owner = session.account?.id ? `account:${session.account.id}` : 'shared';
+        if (req.method === 'GET') {
+          const id = url.searchParams.get('id') ?? '';
+          const file = notes.imagePath(owner, id);
+          if (!file) return send(res, 404, { error: 'No such picture' });
+          res.writeHead(200, {
+            'content-type': NOTE_IMAGE_TYPES[id.split('.').pop() ?? ''] ?? 'application/octet-stream',
+            // Named by what's in them, so they never change.
+            'cache-control': 'private, max-age=31536000, immutable',
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            'cross-origin-resource-policy': 'same-origin',
+          });
+          createReadStream(file).pipe(res);
+          return;
+        }
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: unknown;
+        try {
+          body = JSON.parse(await readBody(req, Math.ceil(NOTE_IMAGE_MAX_BYTES * 1.4) + 4096));
+        } catch (err) {
+          if ((err as Error).message === 'too large') return send(res, 413, { error: 'That picture is too big for a note' });
+          return send(res, 400, { error: 'Bad request' });
+        }
+        const r = notes.addImage(owner, body);
+        return 'error' in r ? send(res, r.status ?? 400, { error: r.error }) : send(res, 200, r);
+      }
       if (p === '/api/todo-image') {
         // Pictures on kanban cards (see todo-images.ts). Their names are hashes of what's in them, so they never change.
         if (req.method === 'GET') {
@@ -1339,6 +1459,10 @@ export async function startServer(cfg: Config) {
         return send(res, 404, { error: 'Not found' });
       }
       if (p === '/api/search' && req.method === 'GET') return send(res, 200, search(url.searchParams.get('q') ?? '', floor));
+      if (p === '/api/whats-new' && req.method === 'GET') {
+        if (!floor) return send(res, 404, { error: 'No such floor' });
+        return send(res, 200, await whatsNewOn(floor).list(Number(url.searchParams.get('show'))), { 'cache-control': 'no-store' });
+      }
       if (p.startsWith('/api/gh/') && req.method === 'GET') {
         // What the issue and PR windows show beyond the board cards (see github.ts).
         const n = Number(url.searchParams.get('number'));
@@ -1402,6 +1526,8 @@ export async function startServer(cfg: Config) {
     const a = accounts.get(accountId);
     return a ? { account: { name: a.name, role: a.role }, admin: a.role === 'admin' } : { admin: !accountId };
   };
+  /** Remembers who just typed to a worker, and whether they're an admin (see `askers`). */
+  const noteAsker = (workerId: string, c: Client, name: string) => askers.set(workerId, { name, admin: meOf(c.accountId).admin });
   /** Still signed in: the account wasn't revoked, and the shared password wasn't switched off. */
   const stillIn = (c: Client) => (c.accountId ? !!accounts.get(c.accountId) : accounts.sharedPassword);
   const signOut = (c: Client) => {
@@ -1511,6 +1637,7 @@ export async function startServer(cfg: Config) {
     screensOf(client, floor);
     sendTo(client, { t: 'timecard', state: timecard.state(client.timeKey) });
     sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
+    sendTo(client, { t: 'notes', state: notes.pad(todoOwner(client)) });
     sendTo(client, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)] });
     sendTo(client, { t: 'stickies', items: [...stickies.list(todoOwner(client))] });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
@@ -1970,6 +2097,7 @@ export async function startServer(cfg: Config) {
         const w = worker(msg.workerId);
         const err = w ? w.floor.workers.prompt(w.wid, str(msg.prompt, 20000), who, msg.pullWork ?? (msg.issue || msg.plan ? null : msg.pullWork)) : 'No such worker';
         warn(c, err);
+        if (w && !err) noteAsker(w.wid, c, who);
         const issue = w?.info.kind === 'agent' ? issueNumber(msg.issue) : undefined;
         if (w && !err && issue) {
           toastFloor(w.floor, `${who} handed issue #${issue} to ${w.info.name}`);
@@ -1984,7 +2112,10 @@ export async function startServer(cfg: Config) {
         if (!floor) break;
         const r = floor.workers.station(str(msg.deskId, 32), who, str(msg.prompt, 20000));
         if (typeof r === 'string') warn(c, r);
-        else if (r.hired) toastFloor(floor, `${who} asked the ${r.info.name} something`);
+        else {
+          noteAsker(r.info.id, c, who);
+          if (r.hired) toastFloor(floor, `${who} asked the ${r.info.name} something`);
+        }
         break;
       }
       case 'worker.pr': {
@@ -2006,7 +2137,10 @@ export async function startServer(cfg: Config) {
         break;
       }
       case 'term.input':
-        if (c.attached.has(msg.workerId)) workerFloor(msg.workerId)?.workers.write(msg.workerId, str(msg.data, 64 * 1024), who);
+        if (c.attached.has(msg.workerId)) {
+          workerFloor(msg.workerId)?.workers.write(msg.workerId, str(msg.data, 64 * 1024), who);
+          noteAsker(msg.workerId, c, who);
+        }
         break;
       case 'term.typing': {
         // Everyone else in that terminal sees who's typing. A typist says so about once a second.
@@ -2358,6 +2492,34 @@ export async function startServer(cfg: Config) {
         if (on) for (const f of floors.values()) f.sendLandedHome();
         break;
       }
+      case 'vp.deploy': {
+        const floor = here();
+        if (!floor) break;
+        if (floor.workers.list().some((w) => w.deskId === botDesk('vp'))) {
+          warn(c, `The ${BOTS.vp.name} is already on this floor: walk up to his kiosk to ask him something`);
+          break;
+        }
+        const r = floor.workers.station(botDesk('vp'), who, BOTS.vp.deployPrompt);
+        if (typeof r === 'string') warn(c, r);
+        else {
+          noteAsker(r.info.id, c, who);
+          toastFloor(floor, `👔 ${who} deployed the ${BOTS.vp.name} on this floor`);
+        }
+        break;
+      }
+      case 'vp.duty': {
+        const floor = here();
+        if (!floor) break;
+        // Standing duty is standing approval for verified merges: the owner's to give.
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can put the VP on duty: on duty he merges verified PRs by himself');
+        const on = msg.on === true;
+        const every = typeof msg.everyMin === 'number' ? msg.everyMin * 60_000 : undefined;
+        if (on === !!floor.vp.duty?.on && every === undefined) break;
+        const err = floor.vp.setDuty(on, who, every);
+        if (err) return warn(c, err);
+        toastFloor(floor, on ? `👔 ${who} put the ${BOTS.vp.name} on duty: he sweeps the PRs every ${Math.round(floor.vp.duty!.everyMs / 60_000)} minutes and merges what verifies` : `👔 ${who} took the ${BOTS.vp.name} off duty`);
+        break;
+      }
       case 'machine.limit': {
         if (!meOf(c.accountId).admin) return warn(c, 'Only admins can change the worker limit');
         const limit = msg.limit === null ? undefined : parseWorkerLimit(msg.limit);
@@ -2575,6 +2737,16 @@ export async function startServer(cfg: Config) {
         // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
         if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
         if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
+      case 'note': {
+        const change = checkNoteAction(msg.change);
+        const owner = todoOwner(c);
+        const at = Date.now();
+        const pad = change && notes.apply(owner, change, at);
+        // Every window of theirs makes the same change; one whose change did nothing gets the pad back to put itself right.
+        if (pad) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'notes.change', change: change!, at, ...(other === c ? { mine: true } : {}) });
+        if (!pad) sendTo(c, { t: 'notes', state: notes.pad(owner), mine: true });
         break;
       }
       case 'sticky': {

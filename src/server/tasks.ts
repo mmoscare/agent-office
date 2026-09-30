@@ -140,12 +140,17 @@ function describe(ctx: TaskContext): string {
   return parts.join('\n\n');
 }
 
-function run(claude: string, env: Record<string, string>, system: string, input: string): Promise<string | null> {
+/**
+ * One headless call to the small model: `input` on stdin, the answer shaped by `schema` (JSON), none of
+ * the user's settings, tools or transcript. Resolves to the CLI's JSON output, or null when it fails.
+ * Also writes the clipboard's ✨ What's new in plain words (change-notes.ts).
+ */
+export function run(claude: string, env: Record<string, string>, system: string, input: string, schema = SCHEMA): Promise<string | null> {
   const args = [
     '-p',
     '--model', 'haiku',
     '--output-format', 'json',
-    '--json-schema', SCHEMA,
+    '--json-schema', schema,
     '--system-prompt', system,
     '--tools', '',
     // Not the user's or the project's settings: no hooks, no MCP servers, no plugins, no transcript.

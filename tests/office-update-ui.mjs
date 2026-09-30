@@ -135,7 +135,7 @@ console.log('> agent-office@0.1.0 build:server');
   const floorId = await page.evaluate(() => window.__office.store.floor);
   report = async () => {
     console.log('host exits:', exits);
-    console.log('page:', await page.evaluate(() => [...document.querySelectorAll('.update-bar, [role=dialog]')].map((e) => e.textContent).join(' --- ')).catch((e) => e.message));
+    console.log('page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, floor: window.__office?.store.floor ?? null, shown: [...document.querySelectorAll('.update-bar, [role=dialog], [role=alertdialog]')].map((e) => e.textContent).join(' --- ') })).catch((e) => e.message));
     const r = await context.request.get(`${url}/api/git/office/update?floor=${floorId}`).catch((e) => e);
     console.log('state:', r.json ? JSON.stringify(await r.json().catch(() => r.status()), null, 1).slice(0, 5000) : r.message);
     console.log('office log:', log.slice(-4000));

@@ -3,6 +3,7 @@ import { ROOF, ROOF_NAME } from '../../shared/rooftop';
 import type { FloorInfo } from '../../shared/protocol';
 import { store } from '../state';
 import { h } from './dom';
+import { vpSection, type VpPanelOptions } from './vp-panel';
 
 // The floor list that drops down from the project in the corner: the main floors of the building, top
 // floor first. Picking one takes you straight there, to the same spot in the office you're standing
@@ -15,6 +16,8 @@ export interface FloorMenuOptions {
   elevator(): void;
   /** Up to the rooftop bar, by elevator. */
   roof(): void;
+  /** The VP on the floor you're on: deploy him, and his standing duty (see vp-panel.ts). */
+  vp?: VpPanelOptions;
 }
 
 let current: { el: HTMLElement; close(): void } | null = null;
@@ -86,7 +89,8 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
       close();
       opts.roof();
     });
-    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add);
+    const vp = opts.vp && vpSection(opts.vp);
+    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add, ...(vp ? [vp] : []));
   };
 
   const place = () => {
@@ -102,7 +106,7 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') close();
   };
-  const offs = [store.on('floors', render), store.on('floor', render)];
+  const offs = [store.on('floors', render), store.on('floor', render), ...(opts.vp ? [store.on('vp', render), store.on('me', render)] : [])];
   const close = () => {
     if (current?.el !== el) return;
     current = null;
