@@ -8,6 +8,7 @@ import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, Gong
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
+import { modelBrand } from '../shared/model-brand';
 import type { WorkspaceRequest } from '../shared/workspaces';
 import { openWorkspace } from './ui/workspace';
 import { isAsleep, isBusy, workerPr } from '../shared/status';
@@ -697,7 +698,7 @@ interface WorkerView {
 const workerViews = new Map<string, WorkerView>();
 /** Workers a `worker.remove` is taking out of the store right now. They walk out of the building; a worker that's gone because you changed floors just vanishes. */
 const sentHome = new Set<string>();
-// Workers sent home, packing up and walking out with a box of their things.
+// Workers clocking out, waving and walking out with a coffee. They'll be back.
 const departures = new Departures(
   scene,
   (x, z, y) => groundAt(office.colliders, x, z, y),
@@ -1364,7 +1365,11 @@ function syncWorkers() {
     }
     v.model.setAction(w.action);
     // What it last replied with, or failing that the model it was hired on.
-    v.model.setModel(w.kind === 'agent' ? modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : undefined) : undefined);
+    const modelId = w.runningModel ?? w.model;
+    v.model.setModel(
+      w.kind === 'agent' ? modelTag(modelId, w.runningModel ? w.runningEffort : undefined) : undefined,
+      w.kind === 'agent' ? modelBrand(modelId, w.provider) : undefined,
+    );
     v.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
     const engineBadge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
     v.model.setTask(meetingCard(w) ?? (w.task && w.kind === 'agent' ? { ...w.task, name: `${providerLabel(w.provider, store.project)}${engineBadge ? ` · ${engineBadge}` : ''} · ${w.task.name}` } : w.task));
@@ -1588,7 +1593,7 @@ function killWorker(id: string) {
     // The meeting's worktree is the whole table's: it's tidied away once they've all gone.
     const m = store.meeting.current;
     const on = m?.id === w.meeting && m.status === 'running';
-    confirmDialog(`Send ${w.name} home?`, on ? `${w.name} is in the meeting on “${m.title}”, which stops without it.` : `${w.name} leaves the meeting room.`, 'Send home', () => net.send({ t: 'worker.kill', workerId: id }));
+    confirmDialog(`Clock ${w.name} out?`, on ? `${w.name} steps out of the meeting on “${m.title}”, which stops without them. You can call them back.` : `${w.name} steps out of the meeting room. You can call them back.`, 'Clock out', () => net.send({ t: 'worker.kill', workerId: id }), 'primary');
     return;
   }
   if (w.worktree || w.workspace) {
@@ -1605,9 +1610,9 @@ function killWorker(id: string) {
     return;
   }
   const body = DESK_BY_ID.get(w.deskId)?.station
-    ? `This stops its ${session} for everyone, and it forgets what it was asked. The next prompt at the ${where} starts a fresh one.`
-    : `This stops the ${session} at ${where} for everyone and frees the desk.`;
-  confirmDialog(`Send ${w.name} home?`, body, 'Send home', () => net.send({ t: 'worker.kill', workerId: id }));
+    ? `This stops its ${session} for everyone. Just for now — the next prompt at the ${where} starts a fresh one, and you can hire them back.`
+    : `This stops the ${session} at ${where} and frees the desk. Just for now — hire them back whenever.`;
+  confirmDialog(`Clock ${w.name} out?`, body, 'Clock out', () => net.send({ t: 'worker.kill', workerId: id }), 'primary');
 }
 
 /** E at a board agent: type it a request. It's hired with it when nobody is there yet. */
@@ -2921,7 +2926,7 @@ function deskHint(deskId: string): Hint {
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
       w.workspace ? aside('Repositories & PRs in Changes') : w.pr ? aside(pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? aside('Open PR in Changes') : '',
-      key('X', 'Send home'),
+      key('X', 'Clock out'),
     ],
   };
 }
@@ -2963,7 +2968,7 @@ function stationHint(deskId: string): Hint {
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       aside('Terminal from Workers'),
       kind === 'queue' ? key('C', 'Clipboard') : '',
-      key('X', 'Send home'),
+      key('X', 'Clock out'),
       ...trayKey,
     ],
   };

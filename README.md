@@ -201,7 +201,7 @@ deploy/aws.sh ssh 'node /opt/agent-office/bin/agent-office.js accounts invite ad
 | O | Go to the boss's office |
 | T | Stand behind the nearest worker on this floor who is done or needs you; again for the next, then back to the office |
 | N | Go to the next worker that's waiting on you |
-| X | Send a worker home |
+| X | Clock a worker out |
 | Enter | Chat |
 | V | Join voice; then hold V to talk |
 | M | Mute / unmute in voice |

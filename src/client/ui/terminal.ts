@@ -15,6 +15,9 @@ import type { ServerMsg, WorkerInfo } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
 import { findLine } from '../../shared/search';
 import { providerLabel, providerUsageNote, providerUsageState, resolvedProvider } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelTag } from '../../shared/model';
+import { modelLogoEl } from '../world/model-logos';
 
 /** A line to scroll to once the terminal has loaded: a search hit (see search.ts). */
 export interface TerminalFind {
@@ -68,6 +71,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const branches = terminalBranches();
   const brief = terminalBrief(() => (onSide ? side?.term : term)?.focus());
   const dot = h('span.dot', { style: `background:${info.color}` });
+  const logoSlot = h('span.model-logo-slot');
   const title = h('h2', {}, info.kind === 'agent' ? `${providerLabel(info.provider, store.project)} · ${info.name}` : info.name);
   const pill = h('span.pill', {}, '');
   const cost = h('span.cost', {});
@@ -93,7 +97,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const shellTab = h('button.gh-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', title: "A shell in this worker's checkout, beside it: check the branch, git status, run the tests (Ctrl+Shift+` switches tabs)" }, '🐚 Shell');
   const tabs = info.kind === 'agent' ? h('nav.gh-tabs.term-tabs', { role: 'tablist' }, agentTab, shellTab) : null;
   const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), brief.element, branches.element, tabs, host, sideHost);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, logoSlot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), brief.element, branches.element, tabs, host, sideHost);
 
   const { term, fit } = newTerm();
 
@@ -178,6 +182,15 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     net.send({ t: 'term.typing', workerId });
   };
 
+  let shownLogo = '';
+  const paintLogo = (w: WorkerInfo) => {
+    const brand = w.kind === 'agent' ? modelBrand(w.runningModel ?? w.model, w.provider) : undefined;
+    const detail = modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : w.effort);
+    const key = `${brand ?? ''}|${detail ?? ''}`;
+    if (key === shownLogo) return;
+    shownLogo = key;
+    logoSlot.replaceChildren(...(brand ? [modelLogoEl(brand, detail)] : []));
+  };
   const refresh = () => {
     test?.refresh();
     const w = store.workers.get(workerId);
@@ -186,6 +199,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       return;
     }
     title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title].filter(Boolean).join(' · ');
+    paintLogo(w);
     brief.refresh(w);
     branches.refresh(w, store.project?.branch);
     pill.className = `pill ${w.status}`;

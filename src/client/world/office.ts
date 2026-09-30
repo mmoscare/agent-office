@@ -18,6 +18,7 @@ import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
 import { buildPlansBinder } from './plans-binder';
 import { buildTimeCard } from './time-card';
+import { buildClaudeLogo } from './claude-logo';
 import { buildGreen, buildTee, type Green, type Tee } from './golf';
 import { buildHoop, type HoopView } from './hoop';
 import { HOOP } from '../../shared/hoop';
@@ -1048,6 +1049,8 @@ export function buildOffice(): Office {
     const rug = mesh(roundedBox(6.2, 0.02, 4.6, 0.6), toon(PALETTE.rugs[i]), x, 0.011, z, false);
     group.add(rug);
   });
+  // A paper Claude logo on the floor, just in from the balcony doors.
+  group.add(buildClaudeLogo(-3, 9.4));
 
   const night: NightParts = {
     bulbs: [],

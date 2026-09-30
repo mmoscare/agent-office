@@ -6,6 +6,8 @@ import type { ChatLine } from '../../shared/protocol';
 import { $, h, openModal, STATUS_LABEL } from './dom';
 import { usageLabel, usageTitle } from './usage';
 import { providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelLogoEl } from '../world/model-logos';
 import { whereabouts } from './whereabouts';
 import { isMac } from './terminal-clipboard';
 import { DESK_BY_ID } from '../../shared/layout';
@@ -68,12 +70,14 @@ export function renderWorkers(onOpen: (id: string) => void) {
     const usageState = w.kind === 'agent' ? providerUsageState(w.provider, store.project, w.usage) : undefined;
     const usageNote = usageState === 'untracked' ? ' · usage untracked' : usageState === 'waiting' && providerKind === 'opencode' ? ' · waiting for metrics' : usageState === 'waiting' && providerKind === 'codex' ? ' · waiting for first report' : '';
     const badge = w.kind === 'agent' ? modelBadge(w.provider, w.model, w.effort) : undefined;
+    const brand = w.kind === 'agent' ? modelBrand(w.runningModel ?? w.model, w.provider) : undefined;
     const sub = [provider && `⚙️ ${provider}${badge ? ` · ${badge}` : ''}${usageNote}`, w.workspace ? `${w.workspace.repositories.length} repositories` : w.worktree && `🌿 ${w.worktree.branch}`, w.pr && `🔀 PR #${w.pr.number}`, w.activity || w.title || w.prompt].filter(Boolean).join(' · ');
     const kind = w.kind === 'agent' && w.task?.kind ? WORK_KINDS[w.task.kind] : undefined;
     ul.append(
       h(
         'li',
         { onclick: () => onOpen(w.id), title: `Open ${w.name}'s terminal`, class: kind && 'has-kind', style: kind && `--kind:${kind.color}` },
+        brand ? modelLogoEl(brand, w.runningModel ?? w.model) : null,
         h('span.dot', { style: `background:${w.color}` }),
         h('span.name', {}, w.name,
           kind ? h('span.work-kind', { style: `background:${kind.color};color:${kind.ink}`, title: `Working on: ${kind.label}${w.task ? ` — ${w.task.name}` : ''}` }, `${kind.emoji} ${kind.label}`) : null,
@@ -143,7 +147,7 @@ export function openHelp() {
     ['Click / E', "Use what you look at: hire a worker, open its terminal, read a board, call a meeting in the meeting room, watch the TV, put a song on the jukebox, tee off from the balcony, sit on a couch, a beanbag, a chair or the balcony bench (walk off to get up)"],
     ['👥', 'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are'],
     ['🛗', 'Every project is a floor: step into the elevator on the north wall and press E (or click the project name, top left) to go to another one or add a project'],
-    ['🤖', 'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. Open it from Workers to watch its terminal, X sends it home'],
+    ['🤖', 'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. Open it from Workers to watch its terminal, X clocks it out'],
     ['📝', 'The whiteboard on wheels between the desks and the lounge: press E to draw on it with everyone on your floor, live. What you draw stays up on the board'],
     ['🕹️', 'The arcade cabinet in the lounge plays BLOCKFALL: arrows (or WASD) move and turn, Space drops, C holds, P pauses. Everyone on the floor sees your game on it, and E there watches whoever is playing. One of your workers needing input pauses it'],
     ['🎉', 'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself'],
@@ -157,7 +161,7 @@ export function openHelp() {
     ['C', 'Changes: what the worker at the desk you face changed — files and diff, commit, discard, open a PR'],
     ['B', 'Open a shared shell (dev servers, git, tests) at an empty desk'],
     ['R', 'Resume a sleeping worker'],
-    ['X', 'Send a worker home (frees the desk)'],
+    ['X', 'Clock a worker out (frees the desk; hire them back any time)'],
     ['F', 'Hang a picture from the web on a wall. Look at a picture and press E to move, edit or take it down'],
     ['Q', 'Put back the issue card in your hands (E at a note on the issues board, or ✋ Pick it up in an issue; then E at an empty desk, a worker or the queue board), or drop the basketball. With nothing in your hands, Q takes you to the front of the elevator'],
     ['🐶', 'Walk up to the office dog and press E to pet it. When a worker needs input, it runs to that desk and barks. Name it in ⚙️ Settings'],
