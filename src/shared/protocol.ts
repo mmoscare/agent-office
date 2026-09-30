@@ -18,6 +18,7 @@ import type { InboxState } from './inbox.js';
 import type { MailState } from './mail.js';
 import type { TimeCardState } from './timecard.js';
 import type { TodoAction, TodoItem } from './todos.js';
+import type { NoteAction, NotesState } from './notes.js';
 import type { ContentAction, ContentItem } from './content-kanban.js';
 
 export type WorkerStatus =
@@ -1330,6 +1331,8 @@ export type ClientMsg =
   | { t: 'ping'; at: number }
   /** A change to your own 🔥 To Do board (see shared/todos.ts). */
   | { t: 'todo'; change: TodoAction }
+  /** A change to your own 📝 Notes pad (see shared/notes.ts). */
+  | { t: 'note'; change: NoteAction }
   /** A change to your floor's 🎬 Content Kanban (see shared/content-kanban.ts). */
   | { t: 'content'; change: ContentAction };
 
@@ -1473,6 +1476,16 @@ export type ServerMsg =
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
   | { t: 'todos'; items: TodoItem[] }
+  /**
+   * Your own 📝 Notes pad as it is now: on arriving, and in answer to a change of yours that did
+   * nothing (`mine`), to put that window right.
+   */
+  | { t: 'notes'; state: NotesState; mine?: boolean }
+  /**
+   * A change to your 📝 Notes pad from any of your windows, as the office made it at `at`, so every
+   * window can make it the same way. `mine` is the answer to your own change (each gets exactly one).
+   */
+  | { t: 'notes.change'; change: NoteAction; at: number; mine?: boolean }
   /**
    * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
    * answer to your own change (every one gets exactly one), so your window knows which are done.

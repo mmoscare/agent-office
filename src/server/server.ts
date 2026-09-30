@@ -45,6 +45,7 @@ import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunne
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
 import { Todos } from './todos.js';
+import { Notes, NOTE_IMAGE_TYPES } from './notes.js';
 import type { ChatLine, ClientMsg, FloorInfo, FloorView, Me, MeetingRequest, PeerInfo, SearchResults, ServerMsg, ServicesState } from '../shared/protocol.js';
 import { GH_COMMENT_MAX, GH_LABEL_MAX, ghRef, isAgentEffort, isAgentProvider } from '../shared/protocol.js';
 import { taskStatus, unshippedText } from '../shared/task-status.js';
@@ -55,6 +56,7 @@ import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
 import { checkTodoAction } from '../shared/todos.js';
+import { checkNoteAction, NOTE_IMAGE_MAX_BYTES } from '../shared/notes.js';
 import { checkContentAction } from '../shared/content-kanban.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
@@ -225,6 +227,8 @@ export async function startServer(cfg: Config) {
   const todos = new Todos(cfg.dataDir);
   /** Whose To Do board a connection sees: their account's, or the shared password's one list. */
   const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
+  // Everyone's own 📝 Notes pad, the To Do board's other side: kept the same way, one each for the whole building.
+  const notes = new Notes(cfg.dataDir);
   /** What the office is called where it has no project of its own to go by (webhooks, invites). */
   const officeName = cfg.project ? path.basename(cfg.project) : 'the office';
   const modelCommand = configuredProvider(cfg.agentCmd) === 'opencode' ? cfg.agentCmd : 'opencode';
@@ -1227,6 +1231,36 @@ export async function startServer(cfg: Config) {
         res.end(r.body);
         return;
       }
+      if (p === '/api/notes/image') {
+        // Pictures in your own 📝 Notes: each person's are their own (see notes.ts).
+        const owner = session.account?.id ? `account:${session.account.id}` : 'shared';
+        if (req.method === 'GET') {
+          const id = url.searchParams.get('id') ?? '';
+          const file = notes.imagePath(owner, id);
+          if (!file) return send(res, 404, { error: 'No such picture' });
+          res.writeHead(200, {
+            'content-type': NOTE_IMAGE_TYPES[id.split('.').pop() ?? ''] ?? 'application/octet-stream',
+            // Named by what's in them, so they never change.
+            'cache-control': 'private, max-age=31536000, immutable',
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            'cross-origin-resource-policy': 'same-origin',
+          });
+          createReadStream(file).pipe(res);
+          return;
+        }
+        if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' });
+        if (!sameOrigin(req, cfg)) return send(res, 403, { error: 'Forbidden' });
+        let body: unknown;
+        try {
+          body = JSON.parse(await readBody(req, Math.ceil(NOTE_IMAGE_MAX_BYTES * 1.4) + 4096));
+        } catch (err) {
+          if ((err as Error).message === 'too large') return send(res, 413, { error: 'That picture is too big for a note' });
+          return send(res, 400, { error: 'Bad request' });
+        }
+        const r = notes.addImage(owner, body);
+        return 'error' in r ? send(res, 400, r) : send(res, 200, r);
+      }
       // Which floor a request is about: its boards and its workers.
       const floor = floors.get(url.searchParams.get('floor') ?? '');
       if (p === '/api/whiteboard/file') {
@@ -1471,6 +1505,7 @@ export async function startServer(cfg: Config) {
     screensOf(client, floor);
     sendTo(client, { t: 'timecard', state: timecard.state(client.timeKey) });
     sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
+    sendTo(client, { t: 'notes', state: notes.pad(todoOwner(client)) });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -2525,6 +2560,16 @@ export async function startServer(cfg: Config) {
         // Every window of theirs, on any floor; one whose change did nothing gets the list back to put itself right.
         if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'todos', items: [...items] });
         if (!items) sendTo(c, { t: 'todos', items: [...todos.list(owner)] });
+        break;
+      }
+      case 'note': {
+        const change = checkNoteAction(msg.change);
+        const owner = todoOwner(c);
+        const at = Date.now();
+        const pad = change && notes.apply(owner, change, at);
+        // Every window of theirs makes the same change; one whose change did nothing gets the pad back to put itself right.
+        if (pad) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'notes.change', change: change!, at, ...(other === c ? { mine: true } : {}) });
+        if (!pad) sendTo(c, { t: 'notes', state: notes.pad(owner), mine: true });
         break;
       }
       case 'content': {
