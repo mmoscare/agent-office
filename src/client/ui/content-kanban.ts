@@ -1,4 +1,5 @@
 import './content-kanban.css';
+import { cardDetails, onTodoDetails, setTodoDetailsShown, todoDetailsShown } from './todo-details';
 import {
   CONTENT_DUMP_MAX,
   CONTENT_FORMATS,
@@ -220,6 +221,15 @@ export function openContentKanban(net: Net) {
     h('header', {}, h('h2', {}, '🎬 Content Kanban'), info ? h('span.ck-floor', {}, info.name) : null),
     body,
   );
+  // Double-click the board around the cards to show every card's subtasks and pictures (ui/todo-details.ts), and again to put them away.
+  const revealHint = h('span.todo-reveal-hint');
+  body.querySelector('.ck-bar')?.append(revealHint);
+  body.addEventListener('dblclick', (e) => {
+    if ((e.target as Element).closest('.ck-card, input, textarea, button, a, label, select, form')) return;
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    setTodoDetailsShown('content', !todoDetailsShown('content'));
+  });
 
   const showUndo = () => {
     if (!removed) return undo.replaceChildren();
@@ -361,8 +371,22 @@ export function openContentKanban(net: Net) {
       total && done === total && stage !== 'published' ? btn('🚀 All made — mark it published', 'All made — mark it published: everything on its checklist is made',() => move(item, 'published'), '.ck-ship') : null,
       h('div.ck-actions', {}, ...actions),
     );
+    // Its subtasks and pictures, while the board shows them (its notes are on it already).
+    if (todoDetailsShown('content')) {
+      const details = cardDetails(item, {
+        key: `content:${floor}:${item.id}`,
+        save: (d) => change({ action: 'details', id: item.id, ...(d.subtasks ? { subtasks: d.subtasks } : {}), ...(d.images ? { images: d.images } : {}) }),
+        current: () => find(item.id),
+        redraw: render,
+        notes: false,
+      });
+      details.addEventListener('pointerdown', () => (card.draggable = false));
+      card.addEventListener('pointerup', () => (card.draggable = true));
+      card.addEventListener('focusout', () => (card.draggable = true));
+      card.append(details);
+    }
     card.addEventListener('dblclick', (e) => {
-      if (!(e.target as HTMLElement).closest('input, label, button')) startEdit(item);
+      if (!(e.target as HTMLElement).closest('input, label, button, .todo-details')) startEdit(item);
     });
     card.addEventListener('dragstart', (e) => {
       dragging = item.id;
@@ -491,12 +515,23 @@ export function openContentKanban(net: Net) {
     const active = document.activeElement instanceof HTMLElement && cols.contains(document.activeElement) ? document.activeElement : null;
     const focused = active?.closest<HTMLElement>('.ck-card')?.dataset.id;
     const scrolled = [...cols.querySelectorAll('.ck-list')].map((ul) => ul.scrollTop);
+    revealHint.textContent = todoDetailsShown('content') ? 'Double-click the board to tuck subtasks away' : 'Double-click the board for subtasks & pictures';
+    // A box in a card's details keeps the cursor and what's typed in it.
+    const keep = active instanceof HTMLInputElement ? active.dataset.keep : undefined;
+    const kept = keep ? { value: (active as HTMLInputElement).value, start: (active as HTMLInputElement).selectionStart, end: (active as HTMLInputElement).selectionEnd } : undefined;
+    const drafts = new Map([...cols.querySelectorAll<HTMLInputElement>('[data-draft]')].map((d) => [d.dataset.draft, d.value]));
     cols.replaceChildren(...STAGE_ORDER.map(columnFor));
+    cols.querySelectorAll<HTMLInputElement>('[data-draft]').forEach((d) => (d.value = drafts.get(d.dataset.draft) ?? ''));
     cols.querySelectorAll('.ck-list').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
-    if (focused && !editing) focusCard(focused);
+    const again = keep ? cols.querySelector<HTMLInputElement>(`[data-keep="${CSS.escape(keep)}"]`) : null;
+    if (again && kept) {
+      again.value = kept.value;
+      again.focus({ preventScroll: true });
+      again.setSelectionRange(kept.start, kept.end);
+    } else if (focused && !editing) focusCard(focused);
   }
 
-  const unsubs = [store.on('content', render), store.on('floor', render)];
+  const unsubs = [store.on('content', render), store.on('floor', render), onTodoDetails('content', render)];
   modal = openModal(el, {
     doing: 'planning content',
     onClose: () => {

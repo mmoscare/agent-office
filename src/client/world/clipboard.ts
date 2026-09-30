@@ -95,7 +95,7 @@ export class ClipboardSheet {
     if (shown < total) {
       g.fillStyle = '#6c757d';
       g.font = `800 22px ${FONT}`;
-      g.fillText(`+${total - shown} more — press C to read it all`, 28, H - 18);
+      g.fillText(`+${total - shown} more — click it, or press C`, 28, H - 18);
     }
     this.texture.needsUpdate = true;
   }
@@ -127,5 +127,7 @@ export function clipboardProp(sheet: ClipboardSheet): THREE.Group {
   group.add(mesh(parts.board, parts.wood));
   group.add(mesh(parts.sheet, sheet.face, 0, -0.012, 0.011, false));
   group.add(mesh(parts.clip, parts.steel, 0, BOARD.height / 2 - 0.035, 0.018, false));
+  // A click on the board, the sheet or the clip reads it. Not in the proximity list: the kiosk already owns that.
+  group.userData.interact = { kind: 'clipboard', x: 0, z: 0, radius: 0 };
   return group;
 }
