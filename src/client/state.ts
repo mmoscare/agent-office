@@ -10,13 +10,14 @@ import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
 import type { StickyNote } from '../shared/stickies';
 import { applyTodo, type TodoAction, type TodoItem } from '../shared/todos';
+import { applyNote, EMPTY_NOTES, type NoteAction, type NotesState } from '../shared/notes';
 import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 import type { BallState } from '../shared/hoop';
 import { emptyVpView, type VpView } from '../shared/vp';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball' | 'vp';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball' | 'vp';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -161,6 +162,18 @@ class Store {
   todos: readonly TodoItem[] = [];
   /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
   todosPending = 0;
+  /** Your own 📝 Notes pad as you see it, the To Do board's other side (see ui/notes.ts). */
+  notes: NotesState = EMPTY_NOTES;
+  /** It as the office last sent it. */
+  private notesBase: NotesState = EMPTY_NOTES;
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
+  private notesPending: NoteAction[] = [];
+  /** How many times the office has sent the whole pad (on arriving, after a reconnect): unsaved drafts go again after each (see ui/note-drafts.ts). */
+  notesLoads = 0;
+  /** Your 📝 Notes pad as the office has it, without your changes still on their way: a draft is let go once it's in here. */
+  get notesOffice(): NotesState {
+    return this.notesBase;
+  }
   /** Reminder stickies on the wall by that board, the same on every floor (see ui/stickies.ts). */
   stickies: readonly StickyNote[] = [];
   /** Changes to them the office hasn't answered yet. */
@@ -300,6 +313,23 @@ class Store {
     for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball', 'vp'] as Topic[]) this.emit(t);
   }
 
+  /** Makes a change to your 📝 Notes pad on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeNote(a: NoteAction): boolean {
+    const next = applyNote(this.notes, a);
+    if (next === this.notes) return false;
+    this.notesPending.push(a);
+    this.notes = next;
+    this.emit('notes');
+    return true;
+  }
+
+  /** The pad the office sent, with your changes it hasn't answered yet on top. */
+  private replayNotes() {
+    const now = Date.now();
+    this.notes = this.notesPending.reduce((state, a) => applyNote(state, a, now), this.notesBase);
+    this.emit('notes');
+  }
+
   /** Makes a change to the 🏢 Autonomous Tasks board on screen straight away; false when it changes nothing (then there's nothing to send). */
   changeAutonomous(a: TodoAction): boolean {
     const next = applyTodo(this.autonomous, a);
@@ -336,6 +366,7 @@ class Store {
       case 'welcome':
         // A reconnect: what was on its way is lost, and the To Do board and stickies the office sends next are the ones.
         this.todosPending = 0;
+        this.notesPending = [];
         this.stickiesPending = 0;
         this.autonomousPending = [];
         this.you = msg.you;
@@ -468,6 +499,17 @@ class Store {
         if (this.todosPending > 0 && --this.todosPending > 0) break;
         this.todos = msg.items;
         this.emit('todos');
+        break;
+      case 'notes':
+        if (msg.mine) this.notesPending.shift();
+        this.notesLoads++;
+        this.notesBase = msg.state;
+        this.replayNotes();
+        break;
+      case 'notes.change':
+        if (msg.mine) this.notesPending.shift();
+        this.notesBase = applyNote(this.notesBase, msg.change, msg.at);
+        this.replayNotes();
         break;
       case 'stickies':
         if (this.stickiesPending > 0 && --this.stickiesPending > 0) break;
