@@ -101,12 +101,12 @@ try {
   assert.equal(await page.evaluate(() => window.__office.autonomousBoard().face.material.map?.image === window.__office.autonomousBoard().canvas), true, 'the stand shows the board');
   await saveStand('stand.png');
 
-  // Walk up to the stand (it faces +z) and press E.
+  // Walk up to the stand (it faces -z, toward the drawing whiteboard) and press E.
   await page.evaluate(() => {
     const p = window.__office.player;
     p.setView('first');
-    p.pos.set(5.4, 0, 8.4);
-    p.camYaw = 0;
+    p.pos.set(5.4, 0, 2.4);
+    p.camYaw = Math.PI;
     p.lookPitch = 0;
   });
   await page.waitForFunction(() => document.querySelector('#hint')?.textContent?.includes('Autonomous Tasks'));
