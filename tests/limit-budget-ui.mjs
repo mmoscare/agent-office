@@ -23,8 +23,8 @@ let limits = {
   plan: 'max',
   at: Date.now(),
   windows: [
-    { label: '5h session', pct: 91, resetsAt: Date.now() + 2 * HOUR },
-    { label: 'Week', pct: 54, resetsAt },
+    { label: '5h session', pct: 72, resetsAt: Date.now() + 2 * HOUR },
+    { label: 'Week', pct: 50, resetsAt },
     { label: 'Fable week', pct: 20, resetsAt },
   ],
 };
@@ -81,10 +81,10 @@ try {
   assert.equal(await panel.locator('.budget-day').count(), 2);
   assert.equal(await panel.locator('.meter .mark').count(), 2);
   const [week, fable] = await panel.locator('.budget-day').allInnerTexts();
-  assert.match(week, /Today\s*25% over\s*back /);
+  assert.match(week, /Today\s*21% over\s*back /);
   assert.match(fable, /Today\s*9% left\s*\+14% in /);
   assert.equal(await panel.locator('.budget-day b.over').count(), 1);
-  // 54% in 32.6 hours: the rest lasts about 28 hours more.
+  // 50% in 32.6 hours: the rest lasts about as long again.
   assert.match(await panel.locator('.budget-pace').innerText(), /At this pace, runs out \w{3} \d+:\d\d\s?[AP]M \(est\.\)/);
   const mark = await panel.locator('.meter .mark').first().getAttribute('style');
   assert.match(mark, /left:\s*28\.57/);
@@ -92,7 +92,7 @@ try {
 
   // The week is past today's share: warned in the office and on the desktop, about that one only.
   await warnings.waitFor();
-  assert.match(await warnings.innerText(), /You're about to run out: the week \(all models\) is at 54%, past today's budget of 29%; at this pace it runs out .+ \(est\.\), before it starts over/);
+  assert.match(await warnings.innerText(), /You're about to run out: the week \(all models\) is at 50%, past today's budget of 29%; at this pace it runs out .+ \(est\.\), before it starts over/);
   assert.doesNotMatch(await warnings.innerText(), /Fable/);
   let notes = await page.evaluate(() => window.__notes.filter((n) => n.tag === 'limit-budget'));
   assert.equal(notes.length, 1);

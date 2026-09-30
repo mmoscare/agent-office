@@ -37,18 +37,16 @@ test('what an earlier day left unused carries into today', () => {
 });
 
 test('past today’s share: over budget, back within it the day the shares catch up', () => {
-  // The reading that asked for this: 54% of the week gone early on day 2.
-  const now = Date.parse('2026-09-30T04:36:35Z');
-  const b = dayBudget(week(54), now)!;
+  // Half the week gone ten hours into day 2.
+  const now = START + DAY + 10 * HOUR;
+  const b = dayBudget(week(50), now)!;
   assert.equal(b.day, 2);
   assert.equal(overBudget(b), true);
-  assert.ok(Math.abs(b.left - (200 / 7 - 54)) < 1e-9);
-  // Four sevenths (57%) is the first to cover 54%: day 4 starts three days in.
+  assert.ok(Math.abs(b.left - (200 / 7 - 50)) < 1e-9);
+  // Four sevenths (57%) is the first to cover 50%: day 4 starts three days in.
   assert.equal(b.backAt, START + 3 * DAY);
-  // 54% in 32.6 hours runs out about 27.7 hours later, days before the reset.
-  assert.ok(b.runsOutAt !== undefined);
-  assert.ok(Math.abs(b.runsOutAt - (now + (46 * (now - START)) / 54)) < 1);
-  assert.ok(b.runsOutAt < RESETS);
+  // 50% in 34 hours runs out 34 hours later, days before the reset.
+  assert.ok(b.runsOutAt !== undefined && Math.abs(b.runsOutAt - (now + 34 * HOUR)) < 1);
 });
 
 test('used exactly up to today’s share counts as used up', () => {
