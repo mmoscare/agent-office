@@ -3457,6 +3457,7 @@ const hud = mountHud(
       label: 'Notes',
       section: 'Open',
       status: () => true,
+      chip: () => 'Notes',
       count: () => linksToWatch(),
       title: () => {
         const n = linksToWatch();

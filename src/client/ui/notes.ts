@@ -179,7 +179,8 @@ export function mountNotesPad(net: Net): NotesPad {
   /** On a narrow screen one pane shows at a time. */
   let pane: 'side' | 'list' | 'editor' = 'list';
   let naming = false;
-  let renaming: string | undefined;
+  /** The folder being renamed, and the box its new name goes in. */
+  let renaming: { id: string; box: HTMLInputElement } | undefined;
   let ed: Editor | undefined;
   /** Pad loads (see store.notesLoads) this window has seen. */
   let loads = store.notesLoads;
@@ -197,23 +198,10 @@ export function mountNotesPad(net: Net): NotesPad {
     query = search.value.trim().toLowerCase();
     renderList();
   });
-  search.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && search.value) {
-      e.stopPropagation();
-      search.value = query = '';
-      renderList();
-    }
-  });
   const folders = h('ul.notes-folders', { 'aria-label': 'Folders' });
   const newFolderInput = h('input.notes-folder-name', { type: 'text', maxlength: FOLDER_NAME_MAX, placeholder: 'New folder name', 'aria-label': 'New folder name' });
   const newFolderBtn = h('button.btn.notes-newfolder', { type: 'button', title: 'Make a folder of your own', onclick: () => ((naming = true), renderSide(), newFolderInput.focus()) }, '＋ New folder');
   newFolderInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      naming = false;
-      newFolderInput.value = '';
-      renderSide();
-    }
     if (e.key !== 'Enter' || e.isComposing) return;
     e.preventDefault();
     const name = newFolderInput.value.replace(/\s+/g, ' ').trim();
@@ -260,11 +248,26 @@ export function mountNotesPad(net: Net): NotesPad {
   }
 
   function startRename(id: string) {
-    renaming = id;
+    const f = store.notes.folders.find((x) => x.id === id);
+    if (!f) return;
+    const box = h('input.notes-rename', { type: 'text', maxlength: FOLDER_NAME_MAX, 'aria-label': `Rename ${f.name}` });
+    box.value = f.name;
+    const finish = () => {
+      if (renaming?.box !== box) return;
+      renaming = undefined;
+      const name = box.value.replace(/\s+/g, ' ').trim();
+      const now = store.notes.folders.find((x) => x.id === id);
+      if (now && name && name !== now.name && !change({ action: 'folder.rename', id, name }) && !net.up) offline();
+      renderSide();
+    };
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) (e.preventDefault(), finish());
+    });
+    box.addEventListener('blur', () => setTimeout(() => !box.isConnected || document.activeElement !== box ? finish() : undefined, 0));
+    renaming = { id, box };
     renderSide();
-    const box = folders.querySelector<HTMLInputElement>('.notes-rename');
-    box?.focus();
-    box?.select();
+    box.focus();
+    box.select();
   }
 
   function renderSide() {
@@ -273,24 +276,8 @@ export function mountNotesPad(net: Net): NotesPad {
     const toWatch = allLinks(s).filter((l) => !l.watched).length;
     const rows: HTMLElement[] = [folderRow('notes', String(live('notes'))), folderRow('links', String(toWatch))];
     for (const f of s.folders) {
-      if (renaming === f.id) {
-        const box = h('input.notes-rename', { type: 'text', maxlength: FOLDER_NAME_MAX, 'aria-label': `Rename ${f.name}` });
-        box.value = f.name;
-        let done = false;
-        const finish = (keep: boolean) => {
-          if (done) return;
-          done = true;
-          renaming = undefined;
-          const name = box.value.replace(/\s+/g, ' ').trim();
-          if (keep && name && name !== f.name && !change({ action: 'folder.rename', id: f.id, name }) && !net.up) offline();
-          renderSide();
-        };
-        box.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && !e.isComposing) (e.preventDefault(), finish(true));
-          if (e.key === 'Escape') (e.stopPropagation(), finish(false));
-        });
-        box.addEventListener('blur', () => finish(true));
-        rows.push(h('li.renaming', {}, box));
+      if (renaming?.id === f.id) {
+        rows.push(h('li.renaming', {}, renaming.box));
         continue;
       }
       const tools = h(
@@ -303,7 +290,9 @@ export function mountNotesPad(net: Net): NotesPad {
     }
     rows.push(h('li.notes-folders-gap', { 'aria-hidden': 'true' }), folderRow('trash', String(live('trash'))));
     folders.replaceChildren(...rows);
-    side.querySelector('.notes-side-foot')!.replaceChildren(naming ? newFolderInput : newFolderBtn);
+    const foot = side.querySelector('.notes-side-foot')!;
+    const want = naming ? newFolderInput : newFolderBtn;
+    if (foot.firstChild !== want) foot.replaceChildren(want);
   }
 
   function removeFolder(id: string) {
@@ -475,6 +464,7 @@ export function mountNotesPad(net: Net): NotesPad {
 
   function renderList() {
     const s = store.notes;
+    const inHead = document.activeElement instanceof HTMLInputElement && listHead.contains(document.activeElement) ? document.activeElement : null;
     const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
     const focusKey = focused?.dataset.url ? `[data-url="${CSS.escape(focused.dataset.url)}"]` : focused?.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : null;
     const { scrollTop } = list;
@@ -508,6 +498,7 @@ export function mountNotesPad(net: Net): NotesPad {
     list.replaceChildren(...rows);
     list.scrollTop = scrollTop;
     if (focusKey) list.querySelector<HTMLElement>(focusKey)?.focus();
+    else if (inHead?.isConnected && inHead !== document.activeElement) inHead.focus();
   }
 
   // ---- The note on the right ----------------------------------------------------------------
@@ -675,7 +666,7 @@ export function mountNotesPad(net: Net): NotesPad {
         tool('🗑️', 'Delete it (to Recently deleted)', () => deleteNote(n.id)),
       ];
     }
-    e.tools.replaceChildren(narrowBack('list', '‹ Notes'), h('span.notes-edited', {}, edited), ...tools, e.status);
+    e.tools.replaceChildren(narrowBack('list', '‹ Notes'), h('div.notes-when', {}, h('span.notes-edited', {}, edited), e.status), ...tools);
     paintLinks(e);
     const shown = [...e.images.querySelectorAll<HTMLElement>('[data-image]')].map((x) => x.dataset.image).join();
     if (shown !== n.images.join()) {
@@ -824,11 +815,14 @@ export function mountNotesPad(net: Net): NotesPad {
   });
 
   function render() {
+    const typing = document.activeElement;
     renderSide();
     renderList();
     syncEditor();
     loads = store.notesLoads;
     paintPane();
+    // A box that was redrawn around (the link box, a folder's new name) keeps the cursor.
+    if (typing instanceof HTMLInputElement && typing !== document.activeElement && typing.isConnected && el.contains(typing)) typing.focus();
   }
 
   const unsub = store.on('notes', render);

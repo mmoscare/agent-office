@@ -203,10 +203,13 @@ export function allLinks(state: NotesState): NoteLink[] {
   return out;
 }
 
-/** What a note in 🔗 Links to watch is called: its first line that isn't the link itself, or the link. */
+/** What a note in 🔗 Links to watch is called: its first words that aren't a link ("Great talk: https://…"), or the link. */
 export function linkNoteTitle(text: string, url = linksIn(text)[0] ?? ''): string {
-  const line = text.split('\n').map((l) => l.trim()).find((l) => l && !linksIn(l).length);
-  return line ? line.slice(0, 120) : url ? linkLabel(url) : '';
+  for (const line of text.split('\n')) {
+    const words = line.replace(LINK_RE, ' ').replace(/\s+/g, ' ').replace(/[\s:|–—-]+$/, '').trim();
+    if (words) return words.slice(0, 120);
+  }
+  return url ? linkLabel(url) : '';
 }
 
 /** The notes in `folder` ('trash' for Recently deleted), pinned ones first, then the most recently changed. */

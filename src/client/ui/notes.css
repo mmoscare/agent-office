@@ -1,9 +1,9 @@
 /* Your own 📝 Notes pad (ui/notes.ts): the To Do board turned over, into a notepad. */
 .modal.board.notes-mode header { background: #ffd95a; }
-.modal.board .body.notes-body { flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #fffdf4; background-image: none; }
+.modal.board .body.notes-body { container-type: inline-size; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; background: #fffdf4; background-image: none; }
 .notes-pad {
   --pad: #fffdf4; --line: #eee5c6; --accent: #d99a00; --accent-soft: #fff1bf; --rule: #e8dcb0;
-  container-type: inline-size; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(170px, 220px) minmax(220px, 320px) minmax(0, 1fr); background: var(--pad);
+  flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(170px, 220px) minmax(220px, 320px) minmax(0, 1fr); background: var(--pad);
 }
 .notes-pad button { font-family: var(--font); }
 
@@ -72,12 +72,13 @@
 .notes-editor { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .notes-sheet { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 0 22px 16px; overflow: auto; }
 .notes-tools { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 0; background: var(--pad); border-bottom: 2px solid var(--rule); }
-.notes-edited { flex: 1; min-width: 120px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.notes-when { flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 1px; }
+.notes-edited { font-size: 12px; font-weight: 800; color: var(--muted); }
 .notes-tool { padding: 4px 9px; font-size: 12px; border-width: 2px; border-radius: 8px; box-shadow: 0 2px 0 var(--ink); }
 .notes-tool.notes-on { background: var(--accent-soft); }
 .notes-tool.notes-danger { background: #ffd6de; }
 .notes-move { max-width: 170px; padding: 4px 6px; font: 800 12px var(--font); color: var(--ink); background: #fff; border: 2px solid var(--ink); border-radius: 8px; }
-.notes-status { flex-basis: 100%; min-height: 0; font-size: 11px; font-weight: 800; color: var(--muted); }
+.notes-status { font-size: 11px; font-weight: 800; color: var(--muted); }
 .notes-status:empty { display: none; }
 .modal .notes-pad input.notes-title { width: 100%; box-sizing: border-box; margin-top: 14px; padding: 4px 0; font: 900 26px/1.25 var(--font); color: var(--ink); background: transparent; border: none; border-radius: 0; outline: none; }
 .modal .notes-pad textarea.notes-body {
