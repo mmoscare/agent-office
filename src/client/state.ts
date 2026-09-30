@@ -1,4 +1,4 @@
-import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, MachineState, MeetingState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, ProjectsDirState, QueueState, QueueTask, RepoChoice, UnshippedState, ServerMsg, ServicesState, SkyState, TeamState, ThemeState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
+import type { AccountsState, ChatLine, FloorInfo, FloorView, GhIssue, GhPull, GhState, LeaveOnMergeState, MachineState, MeetingState, NotifyState, PeerInfo, PlanLimits, Me, ProjectInfo, ProjectsDirState, PromptsState, QueueState, QueueTask, RepoChoice, UnshippedState, ServerMsg, ServicesState, SkyState, TeamState, ThemeState, UpgradeState, Usage, UsageState, WorkerInfo } from '../shared/protocol';
 import type { ScreenState } from './world/laptop';
 import { randomLook, sanitizeLook, type Look } from '../shared/avatar';
 import type { Decoration } from '../shared/decor';
@@ -10,10 +10,12 @@ import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
 import type { StickyNote } from '../shared/stickies';
 import type { TodoItem } from '../shared/todos';
+import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
+import type { BallState } from '../shared/hoop';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'stickies';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'stickies' | 'content' | 'prompts' | 'ball';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -62,6 +64,8 @@ export interface Settings {
   /** The lounge jukebox, 0–1, apart from the office sounds. */
   music: number;
   musicMuted: boolean;
+  /** Voice chat starts muted and V is held down to talk, instead of an open mic. */
+  pushToTalk: boolean;
   /** Desktop notifications when a worker needs input or finishes while you're in another tab (once the browser allows them). */
   notify: boolean;
   /** Which panels show on screen. */
@@ -91,7 +95,7 @@ function rememberFloor(id: string | null) {
 }
 
 export function loadSettings(): Settings {
-  const s: Settings = { view: 'first', volume: 0.7, muted: false, music: 0.5, musicMuted: false, notify: true, hud: { ...HUD_DEFAULTS }, pins: [] };
+  const s: Settings = { view: 'first', volume: 0.7, muted: false, music: 0.5, musicMuted: false, pushToTalk: false, notify: true, hud: { ...HUD_DEFAULTS }, pins: [] };
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? 'null');
     if (saved?.view === 'first' || saved?.view === 'third') s.view = saved.view;
@@ -99,6 +103,7 @@ export function loadSettings(): Settings {
     if (typeof saved?.muted === 'boolean') s.muted = saved.muted;
     if (typeof saved?.music === 'number' && Number.isFinite(saved.music)) s.music = Math.max(0, Math.min(1, saved.music));
     if (typeof saved?.musicMuted === 'boolean') s.musicMuted = saved.musicMuted;
+    if (typeof saved?.pushToTalk === 'boolean') s.pushToTalk = saved.pushToTalk;
     if (typeof saved?.notify === 'boolean') s.notify = saved.notify;
     for (const k of Object.keys(s.hud) as HudPanel[]) if (typeof saved?.hud?.[k] === 'boolean') s.hud[k] = saved.hud[k];
     if (Array.isArray(saved?.pins)) s.pins = saved.pins.filter((p: unknown): p is string => typeof p === 'string').slice(0, 30);
@@ -159,6 +164,12 @@ class Store {
   stickies: readonly StickyNote[] = [];
   /** Changes to them the office hasn't answered yet. */
   stickiesPending = 0;
+  /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
+  content: readonly ContentItem[] | null = null;
+  /** It as the office last sent it. */
+  private contentBase: readonly ContentItem[] | null = null;
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends until it has. */
+  private contentPending: ContentAction[] = [];
   /** Who's at the arcade cabinet on your floor, and the building's high scores. */
   cabinet: CabinetState = { player: null, scores: [] };
   /** The game on the cabinet as its player last sent it; null while nobody plays. */
@@ -188,12 +199,18 @@ class Store {
   /** The dog on your floor, and when (performance.now()) the leg it's on began. */
   dog: DogState | null = null;
   dogStart = 0;
+  /** The basketball on this floor, as the office last said (see world/hoop.ts). */
+  ball: BallState = {};
   /** Outside the windows; null until the server says. */
   sky: SkyState | null = null;
   /** The building's holiday decorations: the same on every floor. */
   theme: ThemeState = { pick: 'auto', active: null };
   /** The Receptionist's mailbox: the same on every floor. */
   mail: MailState = MAIL_OFF;
+  /** The office's prompts as rewritten in ⚙️ Settings, and the worker everyone starts on: the same on every floor. */
+  prompts: PromptsState = { custom: {} };
+  /** Whether workers whose pull request merged go home by themselves (⚙️ Settings). */
+  leaveOnMerge: LeaveOnMergeState = { on: false };
   private subs = new Map<Topic, Set<() => void>>();
 
   on(topic: Topic, fn: () => void) {
@@ -266,7 +283,22 @@ class Store {
     this.cabinetFrame = v.cabinet.frame;
     this.setDog(v.dog);
     this.setJukebox(v.jukebox);
-    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame'] as Topic[]) this.emit(t);
+    this.ball = v.ball ?? {};
+    // A new floor (or a reconnect): changes still on their way were for the board left behind.
+    this.contentPending = [];
+    this.contentBase = this.content = v.content ?? null;
+    for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball'] as Topic[]) this.emit(t);
+  }
+
+  /** Makes a change to the floor's 🎬 Content Kanban on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeContent(a: ContentAction): boolean {
+    if (!this.content) return false;
+    const next = applyContent(this.content, a, Date.now(), this.profile.name);
+    if (next === this.content) return false;
+    this.contentPending.push(a);
+    this.content = next;
+    this.emit('content');
+    return true;
   }
 
   private setDog(dog: DogState | null) {
@@ -302,8 +334,10 @@ class Store {
         this.sky = msg.sky;
         this.theme = msg.theme;
         this.mail = msg.mail ?? MAIL_OFF;
+        this.prompts = msg.prompts ?? { custom: {} };
+        this.leaveOnMerge = msg.leaveOnMerge ?? { on: false };
         this.enter(msg);
-        for (const t of ['peers', 'chat', 'upgrade', 'usage', 'limits', 'me', 'notify', 'machine', 'floors', 'projectsDir', 'sky', 'theme', 'mail'] as Topic[]) this.emit(t);
+        for (const t of ['peers', 'chat', 'upgrade', 'usage', 'limits', 'me', 'notify', 'machine', 'floors', 'projectsDir', 'sky', 'theme', 'mail', 'prompts', 'leaveOnMerge'] as Topic[]) this.emit(t);
         break;
       case 'floor.enter':
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
@@ -410,6 +444,16 @@ class Store {
         this.stickies = msg.items;
         this.emit('stickies');
         break;
+      case 'content': {
+        // Rode the elevator meanwhile: that was the other floor's board.
+        if (msg.floor !== this.floor || !this.contentBase) break;
+        if (msg.mine) this.contentPending.shift();
+        this.contentBase = msg.items;
+        const now = Date.now();
+        this.content = this.contentPending.reduce((items, a) => applyContent(items, a, now, this.profile.name), this.contentBase);
+        this.emit('content');
+        break;
+      }
       case 'cabinet.frame':
         this.cabinetFrame = msg.frame;
         this.emit('cabinetFrame');
@@ -479,6 +523,10 @@ class Store {
         this.setDog(msg.dog);
         this.emit('dog');
         break;
+      case 'ball':
+        this.ball = msg.ball;
+        this.emit('ball');
+        break;
       case 'sky':
         this.sky = msg.state;
         this.emit('sky');
@@ -486,6 +534,14 @@ class Store {
       case 'theme':
         this.theme = msg.state;
         this.emit('theme');
+        break;
+      case 'prompts':
+        this.prompts = msg.state;
+        this.emit('prompts');
+        break;
+      case 'leaveOnMerge':
+        this.leaveOnMerge = msg.state;
+        this.emit('leaveOnMerge');
         break;
       case 'chat':
         this.chat.push(msg);

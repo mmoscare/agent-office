@@ -24,6 +24,8 @@ function initRepo(dir: string) {
   writeFileSync(path.join(dir, '.gitignore'), '.agent-office/\n');
   git(dir, 'add', '.');
   git(dir, 'commit', '-m', 'Initial');
+  // Branch lookups ask GitHub's REST API about origin's repository by name.
+  git(dir, 'remote', 'add', 'origin', 'https://github.com/me/app.git');
 }
 
 function fixture(t: { after(fn: () => void): void }) {
@@ -41,6 +43,21 @@ function fixture(t: { after(fn: () => void): void }) {
 }
 
 const board = (items: Partial<GhPull>[] = [], error?: string): (() => GhState<GhPull>) => () => ({ items: items as GhPull[], fetchedAt: 1, loading: false, error });
+/** A pull request as GitHub's REST API lists it. */
+const rest = (p: { number: number; state: string; headRefName: string; headRefOid?: string }) => ({
+  number: p.number,
+  html_url: `https://github.com/me/app/pull/${p.number}`,
+  state: p.state === 'OPEN' ? 'open' : 'closed',
+  merged_at: p.state === 'MERGED' ? '2026-09-28T21:54:54Z' : null,
+  head: { ref: p.headRefName, sha: p.headRefOid ?? '0'.repeat(40) },
+});
+/** The branch a REST lookup asked about: the path's head=owner:branch, decoded. */
+const askedBranch = (args: string[]) => decodeURIComponent(/[?&]head=[^:&]+:([^&]+)/.exec(args[args.length - 1])![1]);
+/** What gh api -i gives for a primary rate limit: the headers on stdout, GitHub's message as the error. */
+const limited = (reset: number) =>
+  Object.assign(new Error('API rate limit exceeded for user ID 62819637. If you reach out to GitHub Support for help, please include the request ID (HTTP 403)'), {
+    stdout: `HTTP/2.0 403 Forbidden\nX-Ratelimit-Limit: 5000\r\nX-Ratelimit-Remaining: 0\r\nX-Ratelimit-Reset: ${reset}\r\nX-Ratelimit-Resource: core\r\n\r\n{"message":"API rate limit exceeded"}`,
+  });
 /** gh, answering "no PRs" for every branch, and counting how often it was asked. */
 function noPrs() {
   const calls: string[][] = [];
@@ -152,16 +169,20 @@ test('an open or merged PR ships a branch; a closed one does not', async (t) => 
       { headRefName: 'office/merged-b', state: 'MERGED', headRefOid: git(f.root, 'rev-parse', 'office/merged-b') },
       { headRefName: 'office/closed-c', state: 'CLOSED' },
     ]),
-    async (args) => {
-      const branch = args[args.indexOf('--head') + 1];
+    async (args, cwd) => {
+      const branch = askedBranch(args);
       asked.push(branch);
-      // Older than the board's list reaches: only gh for the branch itself knows.
-      return JSON.stringify(branch === 'office/asked-d' ? [{ number: 3, state: 'MERGED', headRefName: branch, headRefOid: git(f.root, 'rev-parse', branch) }] : [{ number: 2, state: 'CLOSED', headRefName: branch }]);
+      // Over REST, of origin's repository by name, the branch's "/" encoded.
+      assert.deepEqual(args, ['api', '-i', `repos/me/app/pulls?state=all&head=me:${encodeURIComponent(branch)}&per_page=100`]);
+      assert.equal(cwd, f.root);
+      // Older than the board's list reaches: only GitHub for the branch itself knows.
+      return JSON.stringify(branch === 'office/asked-d' ? [rest({ number: 3, state: 'MERGED', headRefName: branch, headRefOid: git(f.root, 'rev-parse', branch) })] : [rest({ number: 2, state: 'CLOSED', headRefName: branch })]);
     },
   );
   const found = await scan(f.root, { pulls });
   assert.deepEqual(found.map((x) => x.item.branch), ['office/closed-c']);
   assert.deepEqual(asked.sort(), ['office/asked-d', 'office/closed-c']);
+  assert.equal(found[0].item.pr, 'none');
   // Remembered: a second look doesn't ask GitHub again.
   await scan(f.root, { pulls });
   assert.equal(asked.length, 2);
@@ -180,8 +201,63 @@ test('rate-limited: local findings still show, PR status unknown, and GitHub is 
   assert.equal(found.length, 1);
   assert.equal(found[0].item.pr, 'unknown');
   assert.match(pulls.error ?? '', /rate limit/);
+  assert.deepEqual(pulls.limit, { secondary: false, resetAt: undefined });
   await scan(f.root, { pulls });
   assert.equal(calls, 1);
+});
+
+test("REST's rate limit: unknown until the quota's reset from its headers, then asked again", async (t) => {
+  const f = fixture(t);
+  const wt = f.hire('reset-4545');
+  writeFileSync(path.join(wt.abs, 'x.txt'), 'x\n');
+  let now = 1_790_645_000_000;
+  const reset = 1_790_647_178; // about 36 minutes on, in seconds as GitHub sends it
+  let calls = 0;
+  let fail = true;
+  const pulls = new BranchPulls(board(), async () => {
+    calls++;
+    if (fail) throw limited(reset);
+    return '[]';
+  }, () => now);
+  assert.equal(await pulls.has(wt.branch, f.root), undefined);
+  assert.deepEqual(pulls.limit, { secondary: false, resetAt: reset * 1000 });
+  // Past the old five-minute backoff, but the quota hasn't reset: asking again would only fail again.
+  now += 5 * 60_000 + 1;
+  assert.equal(await pulls.has(wt.branch, f.root), undefined);
+  assert.equal(calls, 1);
+  now = reset * 1000 + 1001;
+  fail = false;
+  assert.equal(await pulls.has(wt.branch, f.root), false);
+  assert.equal(calls, 2);
+  assert.equal(pulls.error, undefined);
+  assert.equal(pulls.limit, undefined);
+});
+
+test('the note: plain words for a REST rate limit, none when only the board is GraphQL-limited and REST answered', async (t) => {
+  const f = fixture(t);
+  const wt = f.hire('note-4646');
+  writeFileSync(path.join(wt.abs, 'x.txt'), 'x\n');
+  const reset = Math.floor(Date.now() / 1000) + 600;
+  // The board's GraphQL list is rate-limited; the branch's REST lookup still answers.
+  const graphqlLimited = board([], 'GitHub API rate limit reached. Board requests are paused until 2026-09-29T01:15:44.000Z');
+  const watch = new UnshippedWatch(f.root, { workers: () => [], tasks: () => [], board: graphqlLimited, update() {}, branches() {} }, async () => '[]');
+  t.after(() => watch.stop());
+  await watch.scan(true);
+  assert.equal(watch.state.items[0].pr, 'none');
+  assert.equal(watch.state.prNote, undefined);
+  assert.equal(watch.state.prLimit, undefined);
+
+  // Now REST itself is out of quota (a fresh watch: the answer above is remembered).
+  const again = new UnshippedWatch(f.root, { workers: () => [], tasks: () => [], board: graphqlLimited, update() {}, branches() {} }, async () => {
+    throw limited(reset);
+  });
+  t.after(() => again.stop());
+  await again.scan(true);
+  assert.equal(again.state.items[0].pr, 'unknown');
+  assert.deepEqual(again.state.prLimit, { secondary: false, resetAt: reset * 1000 });
+  // Not gh's own words: the board says the quota ran out and when it resets.
+  assert.ok(again.state.prNote);
+  assert.doesNotMatch(again.state.prNote!, /62819637|HTTP 403|Support/);
 });
 
 test('multi-repository floors: workspace worktrees in each repository are looked at', async (t) => {
@@ -250,7 +326,7 @@ test('merged PR head and cached result never hide later commits or dirty files',
   const headRefOid = git(f.root, 'rev-parse', wt.branch);
   const merged = { number: 1, headRefName: wt.branch, state: 'MERGED', headRefOid };
   for (const fromBoard of [true, false]) {
-    const pulls = new BranchPulls(board(fromBoard ? [merged] : []), async () => JSON.stringify([merged]));
+    const pulls = new BranchPulls(board(fromBoard ? [merged] : []), async () => JSON.stringify([rest(merged)]));
     assert.equal(await pulls.has(wt.branch, f.root), true);
     writeFileSync(path.join(wt.abs, 'later.txt'), String(fromBoard));
     assert.equal((await scan(f.root, { pulls }))[0].item.dirty, 1);
@@ -266,7 +342,7 @@ test('a refreshed closed PR invalidates a cached open answer immediately', async
   let items: Partial<GhPull>[] = [];
   let state = 'OPEN'; let calls = 0;
   const pulls = new BranchPulls(() => board(items)(), async () => {
-    calls++; return JSON.stringify([{ number: 1, headRefName: wt.branch, state }]);
+    calls++; return JSON.stringify([rest({ number: 1, headRefName: wt.branch, state })]);
   });
   assert.equal(await pulls.has(wt.branch, f.root), true);
   state = 'CLOSED'; items = [{ number: 1, headRefName: wt.branch, state }];
@@ -312,4 +388,20 @@ test('multi-repository recovery requests the managed repository and leaves the s
   assert.equal(git(source, 'status', '--porcelain'), before);
   const checked = await new Workspaces(root).inspect(recovery);
   assert.equal(checked.error, undefined); assert.equal(checked.repositories?.length, 1);
+});
+
+test("a folder floor's repository is asked about by the name it was given, and never through another remote", async (t) => {
+  const f = fixture(t);
+  const wt = f.hire('named-7777');
+  git(f.root, 'remote', 'add', 'upstream', 'https://github.com/Author/app.git');
+  const asked: string[][] = [];
+  const pulls = new BranchPulls(board(), async (args) => {
+    asked.push(args);
+    return 'HTTP/2.0 200 OK\nX-Ratelimit-Remaining: 4975\r\n\r\n' + JSON.stringify([rest({ number: 9, state: 'OPEN', headRefName: wt.branch })]);
+  });
+  assert.equal(await pulls.has(wt.branch, f.root, 'Me/App'), true);
+  assert.deepEqual(asked[0], ['api', '-i', 'repos/Me/App/pulls?state=all&head=Me:office%2Fnamed-7777&per_page=100']);
+  const byOrigin = new BranchPulls(board(), async (args) => (asked.push(args), '[]'));
+  assert.equal(await byOrigin.has(wt.branch, f.root), false);
+  assert.deepEqual(asked[1], ['api', '-i', 'repos/me/app/pulls?state=all&head=me:office%2Fnamed-7777&per_page=100'], 'origin, never upstream');
 });

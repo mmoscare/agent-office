@@ -10,12 +10,14 @@ import { openModelUsage } from './model-usage';
 import { testChangesButton } from './test-changes';
 import { terminalBranches } from './terminal-branches';
 import { terminalBrief } from './terminal-brief';
-import { clipboardAction, isMac } from './terminal-clipboard';
-import { copyText } from './copy-code';
+import { bindTerminalClipboard, clipboardAction, isMac } from './terminal-clipboard';
 import type { ServerMsg, WorkerInfo } from '../../shared/protocol';
 import { isAsleep } from '../../shared/status';
 import { findLine } from '../../shared/search';
 import { providerLabel, providerUsageNote, providerUsageState, resolvedProvider } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelTag } from '../../shared/model';
+import { modelLogoEl } from '../world/model-logos';
 
 /** A line to scroll to once the terminal has loaded: a search hit (see search.ts). */
 export interface TerminalFind {
@@ -69,6 +71,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const branches = terminalBranches();
   const brief = terminalBrief(() => (onSide ? side?.term : term)?.focus());
   const dot = h('span.dot', { style: `background:${info.color}` });
+  const logoSlot = h('span.model-logo-slot');
   const title = h('h2', {}, info.kind === 'agent' ? `${providerLabel(info.provider, store.project)} · ${info.name}` : info.name);
   const pill = h('span.pill', {}, '');
   const cost = h('span.cost', {});
@@ -83,15 +86,18 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const typed = h('span.typed', {});
   const changesBtn = h('button.btn', { type: 'button', title: 'What this worker changed: files, diff, commit, open a PR (C at the desk)' }, '🌿 Changes');
   const closeBtn = h('button.btn.close', { title: 'Close terminal view · Esc stays inside the terminal', 'aria-label': 'Close terminal' }, '✕');
-  const host = h('div.term-host');
+  const clipTitle = mac
+    ? '⌘C copies the selection. ⌘V pastes. Hold ⌥ Option and drag if a program takes the mouse.'
+    : 'Ctrl+C copies the selection. Ctrl+V pastes. Hold Shift and drag if a program takes the mouse.';
+  const host = h('div.term-host', { title: clipTitle });
   // An agent's window has a second tab: a plain shell in the same checkout, to look around beside
   // the agent (which branch, git status, run the tests) without typing into its session.
-  const sideHost = h('div.term-host.hidden');
+  const sideHost = h('div.term-host.hidden', { title: clipTitle });
   const agentTab = h('button.gh-tab.on', { type: 'button', role: 'tab', 'aria-selected': 'true', title: "The worker's own session" }, `🤖 ${info.name}`);
   const shellTab = h('button.gh-tab', { type: 'button', role: 'tab', 'aria-selected': 'false', title: "A shell in this worker's checkout, beside it: check the branch, git status, run the tests (Ctrl+Shift+` switches tabs)" }, '🐚 Shell');
   const tabs = info.kind === 'agent' ? h('nav.gh-tabs.term-tabs', { role: 'tablist' }, agentTab, shellTab) : null;
   const test = info.kind === 'agent' ? testChangesButton(net, workerId, () => term.focus()) : null;
-  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), brief.element, branches.element, tabs, host, sideHost);
+  const el = h('div.modal.term', { role: 'dialog', 'aria-label': `${info.name} terminal` }, h('header', {}, dot, logoSlot, title, pill, cost, viewers, typed, modelsBtn, info.kind === 'agent' ? usageBtn : null, test?.element ?? null, onChanges ? changesBtn : null, closeBtn), brief.element, branches.element, tabs, host, sideHost);
 
   const { term, fit } = newTerm();
 
@@ -176,6 +182,15 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
     net.send({ t: 'term.typing', workerId });
   };
 
+  let shownLogo = '';
+  const paintLogo = (w: WorkerInfo) => {
+    const brand = w.kind === 'agent' ? modelBrand(w.runningModel ?? w.model, w.provider) : undefined;
+    const detail = modelTag(w.runningModel ?? w.model, w.runningModel ? w.runningEffort : w.effort);
+    const key = `${brand ?? ''}|${detail ?? ''}`;
+    if (key === shownLogo) return;
+    shownLogo = key;
+    logoSlot.replaceChildren(...(brand ? [modelLogoEl(brand, detail)] : []));
+  };
   const refresh = () => {
     test?.refresh();
     const w = store.workers.get(workerId);
@@ -184,6 +199,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       return;
     }
     title.textContent = [w.kind === 'agent' ? providerLabel(w.provider, store.project) : null, w.name, w.title].filter(Boolean).join(' · ');
+    paintLogo(w);
     brief.refresh(w);
     branches.refresh(w, store.project?.branch);
     pill.className = `pill ${w.status}`;
@@ -305,26 +321,12 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   agentTab.addEventListener('click', () => showTab(false));
   shellTab.addEventListener('click', () => showTab(true));
   /**
-   * Ctrl+Shift+` flips between the agent and the shell. Ctrl+C copies what's selected and Ctrl+V
-   * pastes (see terminal-clipboard.ts). Every other key (Esc and Ctrl+] included) goes to the
-   * terminal; the window is left through its ✕.
+   * Ctrl+Shift+` flips between the agent and the shell. Ctrl+C / Ctrl+V are handled on the window
+   * before this (see bindTerminalClipboard): if one still arrives, don't let xterm cancel it.
+   * Every other key (Esc and Ctrl+] included) goes to the terminal; the window is left through its ✕.
    */
   const keysFor = (t: Terminal) => (e: KeyboardEvent) => {
-    const clip = clipboardAction(e, t.hasSelection(), mac);
-    if (clip === 'copy') {
-      e.preventDefault();
-      const text = t.getSelection();
-      // The selection stays until the copy lands, so the right-click fallback still has it.
-      if (text)
-        void copyText(text).then((ok) => {
-          t.focus();
-          if (ok) t.clearSelection();
-          else toast("Couldn't copy here: right-click the selection and choose Copy", 'warn');
-        });
-      return false;
-    }
-    // Leave it to the browser, whose paste lands in xterm's own paste handling (bracketed, as typed).
-    if (clip === 'paste') return false;
+    if (clipboardAction(e, t.hasSelection(), mac)) return false;
     if (e.type !== 'keydown' || !e.ctrlKey) return true;
     if (tabs && e.shiftKey && (e.key === '~' || e.key === '`' || e.code === 'Backquote')) {
       showTab(!onSide);
@@ -378,6 +380,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
   const ro = new ResizeObserver(() => sendSize());
   const sideRo = new ResizeObserver(() => sideSize());
 
+  const unbindClipboard = bindTerminalClipboard(el, () => (onSide ? side?.term : term), (message) => toast(message, 'warn'));
   const modal = openModal(el, {
     escCloses: false,
     backdropCloses: true,
@@ -391,6 +394,7 @@ export function openTerminal(net: Net, workerId: string, onChanges?: () => void,
       branches.dispose();
       brief.dispose();
       sideRo.disconnect();
+      unbindClipboard();
       net.send({ t: 'worker.detach', workerId });
       term.dispose();
       if (side) {
@@ -456,7 +460,7 @@ export function newTerm(): { term: Terminal; fit: FitAddon } {
     allowProposedApi: true,
     macOptionIsMeta: true,
     // A program that takes the mouse (OpenCode, vim) would get every drag: Shift-drag (⌥-drag on a
-    // Mac) selects text anyway, to copy.
+    // Mac) selects text anyway, to copy. Ctrl+C then copies that selection (see terminal-clipboard.ts).
     macOptionClickForcesSelection: true,
   });
   const fit = new FitAddon();

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, CABINET, CALENDAR, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
+import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
 import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
@@ -9,14 +9,19 @@ import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
 import { buildPhone, type Phone } from './phone';
 import { buildJukebox, type JukeboxView } from './jukebox';
+import { buildBookshelf } from './bookshelf';
+import { buildBookshelf as buildManualShelf } from './manual-shelf';
 import { buildCabinet, type CabinetModel } from './cabinet';
 import { buildWhiteboard, type WhiteboardStand } from './whiteboard';
-import { buildBookshelf } from './bookshelf';
 import { buildStack, type Stack } from './stack';
 import { buildTower } from './tower';
 import { buildProjectSigns } from './project-signs';
 import { buildPlansBinder } from './plans-binder';
 import { buildTimeCard } from './time-card';
+import { buildClaudeLogo } from './claude-logo';
+import { buildGreen, buildTee, type Green, type Tee } from './golf';
+import { buildHoop, type HoopView } from './hoop';
+import { HOOP } from '../../shared/hoop';
 
 export interface Collider {
   minX: number;
@@ -30,7 +35,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'sticky' | 'stickyAdd';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'sticky' | 'stickyAdd';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -107,6 +112,11 @@ export interface Office {
   cabinet: CabinetModel;
   /** The rolling whiteboard everyone draws on together. */
   whiteboard: WhiteboardStand;
+  /** The golf tee on the balcony, and the hole across the street it's hit at. */
+  tee: Tee;
+  green: Green;
+  /** The basketball hoop on the west wall (the ball is main.ts's: see world/hoop.ts). */
+  hoop: HoopView;
   /** The ceiling, the floor, and the ladder and fire poles between the floors of the building. */
   stack: Stack;
   /** The repo/directory plaques behind the whiteboard and above every doorway. */
@@ -1041,6 +1051,8 @@ export function buildOffice(): Office {
     const rug = mesh(roundedBox(6.2, 0.02, 4.6, 0.6), toon(PALETTE.rugs[i]), x, 0.011, z, false);
     group.add(rug);
   });
+  // A paper Claude logo on the floor, just in from the balcony doors.
+  group.add(buildClaudeLogo(-3, 9.4));
 
   const night: NightParts = {
     bulbs: [],
@@ -1070,6 +1082,7 @@ export function buildOffice(): Office {
   doors.push(slider.door);
   fixture(BALCONY_DOOR.wall, BALCONY_DOOR.u, (BALCONY_DOOR.y1 + 0.1) / 2, BALCONY_DOOR.width + 0.2, BALCONY_DOOR.y1 + 0.1);
   buildBalcony(group, colliders, interactables, night);
+  const tee = buildTee(group, colliders, interactables);
 
   // Down to the street, which is the bottom floor's: its exit door and the steps down from it, the
   // posts under its balcony, the garage under it and the street out front. On a floor above it, all
@@ -1088,6 +1101,7 @@ export function buildOffice(): Office {
   buildGarage(ground, groundColliders);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, groundColliders, night, group);
+  const green = buildGreen(ground, groundColliders, night);
   group.add(ground);
   colliders.push(...groundColliders);
   const groundBase = groundColliders.map((c) => ({ c, top: c.top, bottom: c.bottom ?? 0 }));
@@ -1279,6 +1293,13 @@ export function buildOffice(): Office {
   interactables.push(cabinet.interactable);
   fixture('east', CABINET.z, CABINET.height / 2, CABINET.width + 0.1, CABINET.height);
 
+  // The bookshelf of the project's docs, on the south wall between the middle window and the balcony doors.
+  const shelf = buildBookshelf();
+  group.add(shelf.group);
+  colliders.push(shelf.collider);
+  interactables.push(shelf.interactable);
+  fixture('south', BOOKSHELF.x, (BOOKSHELF.height + 0.55) / 2, BOOKSHELF.width + 0.2, BOOKSHELF.height + 0.55);
+
   // Kitchen corner: counter + coffee machine + fridge
   const kitchen = new THREE.Group();
   kitchen.add(mesh(box(5, 0.95, 1), toon('#8ecae6'), 0, 0.475, 0));
@@ -1355,6 +1376,12 @@ export function buildOffice(): Office {
   colliders.push(...gong.colliders);
   interactables.push(gong.interactable);
   fixture('north', GONG.x, (GONG.height + 0.3) / 2, GONG.width + 1.2, GONG.height + 0.3);
+
+  // The basketball hoop, on the west wall between the exit door and the kitchen.
+  const hoop = buildHoop();
+  group.add(hoop.group);
+  colliders.push(...hoop.colliders);
+  fixture('west', HOOP.z, (HOOP.board.bottom - 0.6 + HOOP.board.top + 0.1) / 2, HOOP.board.width + 0.2, HOOP.board.top - HOOP.board.bottom + 0.7);
 
   // The whiteboard, out on the floor between the desks and the lounge.
   const whiteboard = buildWhiteboard();
@@ -1440,6 +1467,8 @@ export function buildOffice(): Office {
     elevator.update(dt);
     gong.update(dt);
     phone.update(dt);
+    green.update(t);
+    hoop.update(dt);
   };
 
   /** Paper in the receptionist's in-tray: one sheet per item, a little askew, up to a stack of eight. */
@@ -1455,7 +1484,7 @@ export function buildOffice(): Office {
     }
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */
@@ -1842,8 +1871,8 @@ function buildLoft(group: THREE.Group, colliders: Collider[], interactables: Int
   lamp.position.set(deskX, roofY - 0.4, cz);
   group.add(lamp);
 
-  // A bookshelf on the back wall, under the sign, with the Office Manual on it (world/bookshelf.ts).
-  const shelf = buildBookshelf();
+  // A bookshelf on the back wall, under the sign, with the Office Manual on it (world/manual-shelf.ts).
+  const shelf = buildManualShelf();
   const shelfX = maxX - 3;
   const shelfZ = maxZ - shelf.depth / 2 - 0.02;
   shelf.group.position.set(shelfX, floorY, shelfZ);

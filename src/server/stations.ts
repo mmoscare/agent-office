@@ -1,9 +1,13 @@
 // What the board agents are told when they're hired: the agents standing by the Issues board, the PR
 // board, the task queue and the in-tray (STATIONS in shared/layout.ts). Whoever walks up types them a
-// request; the first one follows this brief in the same prompt.
+// request; the first one follows this brief in the same prompt. A rewritten brief in ⚙️ Settings
+// (shared/prompts.ts) replaces the default for that agent; the office still adds which repositories
+// this floor holds, and how the Receptionist's mailbox stands, because those change as the office does.
 
 import { STATION_AGENT, type StationKind } from '../shared/layout.js';
 import type { MailBrief } from '../shared/mail.js';
+import { PROMPTS, isPromptId } from '../shared/prompts.js';
+import type { PromptSource } from './prompts.js';
 
 /** What a board agent is told about the office as it stands when it's hired. */
 export interface StationContext {
@@ -81,7 +85,33 @@ function folderNote(checkouts: Checkout[]): string {
   return `This floor isn't one repository: it's a folder holding several checkouts, and the boards show all of them. gh can't tell from here which one you mean, so pass --repo owner/name to every gh command (or run it inside that repository's folder). They are:\n${checkouts.map((c) => `- ${c.repo}, in ${c.dir}/`).join('\n')}\nWhen you queue a task for an issue, send its "repo" (owner/name) along with "issue", and tell the worker which folder to work in.`;
 }
 
-export function stationBrief(kind: StationKind, checkouts: Checkout[] = [], context: StationContext = {}): string {
+function isPromptSource(value: unknown): value is PromptSource {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && typeof (value as PromptSource).text === 'function';
+}
+
+/** A brief rewritten in ⚙️ Settings, or nothing when it's still the default (the merged brief below). */
+function customBrief(kind: StationKind, prompts?: PromptSource): string | undefined {
+  if (!prompts) return undefined;
+  const id = `station.${kind}`;
+  if (!isPromptId(id)) return undefined;
+  const text = prompts.text(id);
+  return text === PROMPTS[id].text ? undefined : text;
+}
+
+/** Notes Settings can't know: which checkouts this floor holds, and whether the mailbox is up. */
+function runtimeNotes(kind: StationKind, checkouts: Checkout[], context: StationContext): string[] {
+  return [...(checkouts.length ? [folderNote(checkouts)] : []), ...(kind === 'inbox' ? [mailNote(context.mail)] : [])];
+}
+
+function withRuntime(base: string, notes: string[]): string {
+  if (!notes.length) return base;
+  const marker = '\n\nThe request:';
+  const at = base.lastIndexOf(marker);
+  if (at < 0) return [base, ...notes].filter(Boolean).join('\n\n');
+  return [base.slice(0, at), ...notes, base.slice(at + 2)].filter(Boolean).join('\n\n');
+}
+
+function builtBrief(kind: StationKind, checkouts: Checkout[], context: StationContext): string {
   const queue = kind === 'queue';
   const inbox = kind === 'inbox';
   const wrapUp = queue
@@ -101,6 +131,13 @@ export function stationBrief(kind: StationKind, checkouts: Checkout[] = [], cont
     `Follow the worker handoff rule: save the detailed outcome on the relevant issue or PR. ${wrapUp} Then wait: the next request may come from someone else.`,
     `The request:`,
   ].join('\n\n');
+}
+
+export function stationBrief(kind: StationKind, checkoutsOrPrompts?: Checkout[] | PromptSource, context: StationContext = {}, prompts?: PromptSource): string {
+  if (isPromptSource(checkoutsOrPrompts)) return customBrief(kind, checkoutsOrPrompts) ?? builtBrief(kind, [], {});
+  const custom = customBrief(kind, prompts);
+  if (custom !== undefined) return withRuntime(custom, runtimeNotes(kind, checkoutsOrPrompts ?? [], context));
+  return builtBrief(kind, checkoutsOrPrompts ?? [], context);
 }
 
 /** Claude Code tools the queue agent and the receptionist are launched without, so they can't edit the checkout even by mistake. */
