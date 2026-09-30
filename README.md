@@ -199,7 +199,7 @@ deploy/aws.sh ssh 'node /opt/agent-office/bin/agent-office.js accounts invite ad
 | P | Give a task to a new worker, or to the one at this desk |
 | C | See a worker's changes: diff, commit, open a PR |
 | N | Go to the next worker that's waiting on you |
-| X | Send a worker home |
+| X | Clock a worker out |
 | U | Summon the staffer (queue agent) to where you are; U again beside him sends him back |
 | T / Enter | Chat |
 | V | Join voice; then hold V to talk |

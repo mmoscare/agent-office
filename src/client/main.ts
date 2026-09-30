@@ -702,7 +702,7 @@ interface WorkerView {
 const workerViews = new Map<string, WorkerView>();
 /** Workers a `worker.remove` is taking out of the store right now. They walk out of the building; a worker that's gone because you changed floors just vanishes. */
 const sentHome = new Set<string>();
-// Workers sent home, packing up and walking out with a box of their things.
+// Workers clocking out, waving and walking out with a coffee. They'll be back.
 const departures = new Departures(
   scene,
   (x, z, y) => groundAt(office.colliders, x, z, y),
@@ -1381,7 +1381,7 @@ function syncWorkers() {
     arrivals.forget(v.model);
     const desk = office.desks.get(v.deskId);
     // Sent home: it packs up and walks out, and the seat shows as free once it's up (see departures).
-    // The staffer, called over to you (U), packs up where he stands and walks out from there.
+    // The staffer, called over to you (U), waves where he stands and walks out from there.
     const away = staffer.has(v.model);
     staffer.forget(v.model);
     if (desk && sentHome.has(id)) departures.add(v.model, v.laptop, desk, away);
@@ -1593,7 +1593,7 @@ function killWorker(id: string) {
     // The meeting's worktree is the whole table's: it's tidied away once they've all gone.
     const m = store.meeting.current;
     const on = m?.id === w.meeting && m.status === 'running';
-    confirmDialog(`Send ${w.name} home?`, on ? `${w.name} is in the meeting on “${m.title}”, which stops without it.` : `${w.name} leaves the meeting room.`, 'Send home', () => net.send({ t: 'worker.kill', workerId: id }));
+    confirmDialog(`Clock ${w.name} out?`, on ? `${w.name} steps out of the meeting on “${m.title}”, which stops without them. You can call them back.` : `${w.name} steps out of the meeting room. You can call them back.`, 'Clock out', () => net.send({ t: 'worker.kill', workerId: id }), 'primary');
     return;
   }
   if (w.worktree || w.workspace) {
@@ -1610,9 +1610,9 @@ function killWorker(id: string) {
     return;
   }
   const body = DESK_BY_ID.get(w.deskId)?.station
-    ? `This stops its ${session} for everyone, and it forgets what it was asked. The next prompt at the ${where} starts a fresh one.`
-    : `This stops the ${session} at ${where} for everyone and frees the desk.`;
-  confirmDialog(`Send ${w.name} home?`, body, 'Send home', () => net.send({ t: 'worker.kill', workerId: id }));
+    ? `This stops its ${session} for everyone. Just for now — the next prompt at the ${where} starts a fresh one, and you can hire them back.`
+    : `This stops the ${session} at ${where} and frees the desk. Just for now — hire them back whenever.`;
+  confirmDialog(`Clock ${w.name} out?`, body, 'Clock out', () => net.send({ t: 'worker.kill', workerId: id }), 'primary');
 }
 
 /** E at a board agent: type it a request. It's hired with it when nobody is there yet. */
@@ -2888,7 +2888,7 @@ function deskHint(deskId: string): Hint {
       key('C', 'Changes'),
       isAsleep(w.status) ? key('R', shell ? 'Restart' : 'Resume') : key('P', shell ? 'Run command' : 'Prompt'),
       w.workspace ? key('O', 'Repositories & PRs') : w.pr ? key('O', pullRequestLabel(w.pr)) : w.prOpening ? aside('⏳ Opening PR…') : prReady(w) ? key('O', 'Open PR') : '',
-      key('X', 'Send home'),
+      key('X', 'Clock out'),
     ],
   };
 }
@@ -2932,7 +2932,7 @@ function stationHint(deskId: string): Hint {
       key('O', 'Terminal'),
       kind === 'queue' ? key('C', 'Clipboard') : '',
       kind === 'queue' ? aside('or click it') : '',
-      key('X', 'Send home'),
+      key('X', 'Clock out'),
       ...trayKey,
     ],
   };
