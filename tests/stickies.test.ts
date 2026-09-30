@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { Stickies } from '../src/server/stickies.js';
-import { applySticky, checkStickyAction, checkStickyItem, clampSticky, nextStickySpot, presetStickies, STICKY_LIMIT, STICKY_PRESETS, STICKY_TEXT_MAX, STICKY_ZONE, type StickyAction, type StickyNote } from '../src/shared/stickies.js';
+import { Stickies, STICKY_LISTS_KEPT } from '../src/server/stickies.js';
+import { applySticky, checkStickyAction, checkStickyItem, clampSticky, isStickyColor, nextStickySpot, presetStickies, STICKY_LIMIT, STICKY_PRESETS, STICKY_TEXT_MAX, STICKY_ZONE, type StickyAction, type StickyNote } from '../src/shared/stickies.js';
 
 const id = (n: number) => `note${String(n).padStart(4, '0')}`;
 const run = (...changes: StickyAction[]) => changes.reduce<readonly StickyNote[]>((items, a) => applySticky(items, a, 1000), []);
@@ -84,6 +84,18 @@ test('a browser change is checked, and junk is refused', () => {
   assert.equal(resized && resized.action === 'resize' && resized.h, 1.35);
 });
 
+test("only the palette's own colors count, not what every object inherits", () => {
+  for (const color of ['yellow', 'pink', 'blue', 'green', 'orange', 'purple']) assert.equal(isStickyColor(color), true, color);
+  for (const color of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+    assert.equal(isStickyColor(color), false, color);
+    assert.equal(checkStickyAction({ action: 'color', id: 'post45times', color }), null, color);
+    assert.equal(checkStickyAction({ action: 'add', id: 'fresh1', text: 'hi', color, u: -12, y: 5.2, w: 1, h: 0.8 }), null, color);
+    assert.equal(checkStickyItem({ id: 'post45times', text: 'hi', color, u: -12, y: 5.2, w: 1, h: 0.8, at: 3 }), null, color);
+  }
+  // Straight off the wire, where "__proto__" is an ordinary key.
+  assert.equal(checkStickyAction(JSON.parse('{"action":"color","id":"post45times","color":"__proto__"}')), null);
+});
+
 test('a saved note is read back, and a broken one is not', () => {
   const ok = checkStickyItem({ id: 'post45times', text: 'hi', color: 'blue', u: -12, y: 5.2, w: 1, h: 0.8, at: 3 });
   assert.equal(ok?.hidden, false);
@@ -112,6 +124,38 @@ test('the office seeds the four notes once, and an emptied list stays empty', ()
     const saved = JSON.parse(readFileSync(path.join(dir, 'stickies.json'), 'utf8')) as Record<string, unknown[]>;
     assert.deepEqual(saved['account:ada'], []);
     assert.equal(saved.shared.length, 4);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('with every list taken, someone new still gets theirs, and the one seen longest ago goes', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'stickies-'));
+  const owner = (n: number) => `account:u${n}`;
+  try {
+    const office = new Stickies(dir);
+    for (let i = 0; i < STICKY_LISTS_KEPT; i++) office.list(owner(i));
+    // u0 and u1 are the oldest; u1 was here again just now and changed a note.
+    assert.ok(office.apply(owner(1), { action: 'edit', id: 'post45times', text: 'still mine' }));
+    const fresh = office.list('account:new');
+    assert.equal(fresh.length, 4, 'the newcomer gets the four reminders');
+    const added = office.apply('account:new', { action: 'add', id: 'newnote1', text: 'call back', color: 'orange', u: -12, y: 5.2, w: 1, h: 0.8 });
+    assert.equal(added?.length, 5, "and the newcomer's changes are kept");
+    const saved = JSON.parse(readFileSync(path.join(dir, 'stickies.json'), 'utf8')) as Record<string, StickyNote[]>;
+    assert.equal(Object.keys(saved).length, STICKY_LISTS_KEPT);
+    assert.equal(saved[owner(0)], undefined, 'the list seen longest ago went');
+    assert.equal(saved[owner(1)]?.[0].text, 'still mine', 'a list used just now stays');
+
+    const again = new Stickies(dir);
+    assert.equal(again.list('account:new').find((s) => s.id === 'newnote1')?.text, 'call back', 'still there after a restart');
+    assert.equal(again.list(owner(1))[0].text, 'still mine');
+    // And the next newcomer after the restart pushes out the next oldest, u2, not anyone just seen.
+    assert.equal(again.list('account:newer').length, 4);
+    assert.ok(again.apply('account:newer', { action: 'hide', id: 'viralshort1', hidden: true }));
+    const later = JSON.parse(readFileSync(path.join(dir, 'stickies.json'), 'utf8')) as Record<string, StickyNote[]>;
+    assert.equal(Object.keys(later).length, STICKY_LISTS_KEPT);
+    assert.equal(later[owner(2)], undefined);
+    assert.ok(later['account:new'] && later[owner(1)] && later['account:newer']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -60,7 +60,8 @@ export type StickyAction =
 const ID_RE = /^[a-z0-9]{6,32}$/;
 
 export function isStickyColor(value: unknown): value is StickyColor {
-  return typeof value === 'string' && value in STICKY_COLORS;
+  // Own keys only: `in` would let through what every object inherits (constructor, toString, __proto__).
+  return typeof value === 'string' && Object.hasOwn(STICKY_COLORS, value);
 }
 
 export function newStickyId(): string {
