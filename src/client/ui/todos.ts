@@ -18,10 +18,7 @@ export function changeTodo(net: Net, change: TodoAction, board: TodoBoardId = 'm
   const next = applyTodo(was, change);
   if (next === was) return;
   if (board === 'autonomous') {
-    store.autonomous = next;
-    store.autonomousPending++;
-    store.emit('autonomous');
-    net.send({ t: 'todo', change, board });
+    if (store.changeAutonomous(change)) net.send({ t: 'todo', change, board });
     return;
   }
   store.todos = next;

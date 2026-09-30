@@ -101,3 +101,11 @@ All 86 Notion tasks were written into the **live office's data folder**, `C:\Use
 - The Autonomous board is office-wide: anyone signed in to the office can see and edit it. Today only the shared password is in use.
 - The Notion import is a one-time copy. Later Notion edits don't sync. The card ids are the Notion page ids, in case a sync is wanted later.
 - Optional: detail badges on the Content Kanban's stand texture.
+
+## Review fixes (Codex findings on #82)
+1. **Own changes lost to someone else's broadcast** (`src/client/state.ts`): the Autonomous board now works like the Content Kanban. The office marks the answer to the sender's own change with `mine`, the page keeps its changes that haven't been answered yet, and it replays them on top of every broadcast (`store.changeAutonomous`). Unit test: `tests/todo-details.test.ts`, "your changes stay on screen until the office answers them".
+2. **Subtask rewording lost on a redraw** (`src/client/ui/todo-details.ts`): the subtask being reworded, and what's typed so far, are kept outside the page. A redraw draws the box again and gives it back the cursor. Blur is checked only after the redraw, so the box being taken off the page doesn't end the edit.
+   - The new browser step in `tests/autonomous-ui.mjs` also found two older bugs, both fixed:
+     - Double-clicking a subtask's words toggled its checkbox, because the words sit inside the checkbox's label.
+     - The double-click bubbled up to the card, which opened the card's own editor.
+   - With those fixed, the step rewords a subtask while another user's change arrives, carries on typing, and saves.

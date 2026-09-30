@@ -80,6 +80,11 @@ export async function uploadTodoImage(file: File): Promise<string> {
 const typing = new Map<string, { timer: ReturnType<typeof setTimeout>; value: string; send: () => void }>();
 /** Cards with pictures on their way up, and how many. */
 const uploading = new Map<string, number>();
+/**
+ * The subtask being reworded on each card, and what's typed so far. It lives here, not in the page, so a
+ * redraw (anyone's change, on a shared board) draws the box again with the wording in it.
+ */
+const rewording = new Map<string, { id: string; draft: string }>();
 
 export interface DetailsContext {
   /** Names the card among every board's, so what's typed in it lasts across redraws. */
@@ -110,32 +115,58 @@ export function cardDetails(item: TodoDetails, ctx: DetailsContext): HTMLElement
     box.checked = s.done;
     box.addEventListener('change', () => setSubs(subsNow().map((x) => (x.id === s.id ? { ...x, done: box.checked } : x))));
     const text = h('span.todo-sub-text', { title: 'Double-click to reword it' }, s.text);
-    text.addEventListener('dblclick', () => {
+    // It's in the checkbox's label, but clicking the words doesn't tick it: a double-click would tick and untick it, and redraw the card before it could open the box.
+    text.addEventListener('click', (e) => e.preventDefault());
+    /** The box to reword it in, with `draft` typed so far. */
+    const editor = (draft: string) => {
       const edit = h('input.todo-sub-edit', { type: 'text', maxlength: TODO_TEXT_MAX, 'aria-label': 'Reword subtask', 'data-keep': `${key}:sub:${s.id}` });
-      edit.value = s.text;
+      edit.value = draft;
+      rewording.set(key, { id: s.id, draft });
+      edit.addEventListener('input', () => rewording.set(key, { id: s.id, draft: edit.value }));
       let finished = false;
-      const finish = () => {
+      const finish = (value: string) => {
         if (finished) return;
         finished = true;
-        const t = edit.value.replace(/\s+/g, ' ').trim();
-        if (t && t !== s.text) setSubs(subsNow().map((x) => (x.id === s.id ? { ...x, text: t } : x)));
-        else edit.replaceWith(text);
+        rewording.delete(key);
+        const t = value.replace(/\s+/g, ' ').trim();
+        const now = subsNow().find((x) => x.id === s.id);
+        if (t && now && t !== now.text) setSubs(subsNow().map((x) => (x.id === s.id ? { ...x, text: t } : x)));
+        else redraw();
       };
       edit.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.isComposing) {
           e.preventDefault();
-          finish();
+          finish(edit.value);
         }
       });
-      edit.addEventListener('blur', finish);
+      // A redraw (anyone's change, on a shared board) takes the box off the page, and the browser may
+      // call that a blur. So look once it's over: the box drawn again in its place carries on if it has
+      // the cursor; otherwise this was a real blur, and the wording is kept.
+      edit.addEventListener('blur', () =>
+        setTimeout(() => {
+          if (finished) return;
+          const live = edit.isConnected ? edit : document.querySelector<HTMLInputElement>(`input.todo-sub-edit[data-keep="${CSS.escape(`${key}:sub:${s.id}`)}"]`);
+          if (live && live !== edit && live === document.activeElement) return;
+          finish((live ?? edit).value);
+        }),
+      );
+      return edit;
+    };
+    text.addEventListener('dblclick', (e) => {
+      // Its own double-click: not the card's (edit the card) nor the board's (put the details away).
+      e.stopPropagation();
+      const edit = editor(s.text);
       text.replaceWith(edit);
       edit.focus();
       edit.select();
     });
+    const open = rewording.get(key);
     const x = h('button.btn.todo-mini.todo-sub-x', { type: 'button', title: 'Take this subtask off', 'aria-label': `Remove subtask: ${s.text}` }, '✕');
     x.addEventListener('click', () => setSubs(subsNow().filter((y) => y.id !== s.id)));
-    subList.append(h('li.todo-sub', { class: s.done ? 'done' : '' }, h('label', {}, box, text), x));
+    subList.append(h('li.todo-sub', { class: s.done ? 'done' : '' }, h('label', {}, box, open?.id === s.id ? editor(open.draft) : text), x));
   }
+  // Someone else took off the subtask being reworded.
+  if (rewording.has(key) && !subtasks.some((x) => x.id === rewording.get(key)!.id)) rewording.delete(key);
   const addSub = h('input.todo-sub-add', { type: 'text', maxlength: TODO_TEXT_MAX, placeholder: '＋ Add a subtask', 'aria-label': 'Add a subtask', 'data-keep': `${key}:sub-add`, 'data-draft': `${key}:sub-add` });
   addSub.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;

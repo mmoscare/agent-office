@@ -57,9 +57,15 @@ wss.on('connection', (ws) => {
     assert.ok(change, `a well-formed change: ${JSON.stringify(msg.change)}`);
     changes[board].push(change);
     lists[board] = [...applyTodo(lists[board], change)];
-    for (const c of wss.clients) send(c, { t: 'todos', items: lists[board], ...(board === 'autonomous' ? { board } : {}) });
+    // Like the office: everyone gets the Autonomous board, and the sender learns it answers its change.
+    for (const c of wss.clients) send(c, { t: 'todos', items: lists[board], ...(board === 'autonomous' ? { board, ...(c === ws ? { mine: true } : {}) } : {}) });
   });
 });
+/** A change to the Autonomous board from someone else in the office. */
+const someoneElse = (change) => {
+  lists.autonomous = [...applyTodo(lists.autonomous, change)];
+  for (const c of wss.clients) send(c, { t: 'todos', board: 'autonomous', items: lists.autonomous });
+};
 
 let browser;
 try {
@@ -151,6 +157,17 @@ try {
   await fresh.locator('.todo-sub', { hasText: 'Write chapter 1' }).locator('input[type=checkbox]').check();
   await page.waitForFunction(() => window.__office.store.autonomous.find((t) => t.id === 'auto000002')?.subtasks?.[0]?.done === true);
   assert.equal(await fresh.locator('.todo-sub-count').innerText(), '1/2');
+
+  // Rewording a subtask while someone else changes the board: the box, the cursor and what's typed stay.
+  await fresh.locator('.todo-sub', { hasText: 'Review chapter 1' }).locator('.todo-sub-text').dblclick();
+  await fresh.locator('input.todo-sub-edit').fill('Review chapter 1 twice');
+  someoneElse({ action: 'add', id: 'other00001', text: 'Their new card', column: 'urgent' });
+  await card('Their new card').waitFor();
+  await page.waitForFunction(() => document.activeElement?.matches?.('input.todo-sub-edit') && document.activeElement.value === 'Review chapter 1 twice');
+  await page.keyboard.type(' today');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__office.store.autonomous.find((t) => t.id === 'auto000002')?.subtasks?.some((s) => s.text === 'Review chapter 1 twice today'));
+  assert.equal(await fresh.locator('input.todo-sub-edit').count(), 0, 'done rewording');
 
   // Notes: typed, kept across the redraws other changes make, and sent once typing stops.
   const notes = fresh.locator('textarea.todo-notes');

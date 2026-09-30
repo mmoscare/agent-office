@@ -2559,8 +2559,9 @@ export async function startServer(cfg: Config) {
         if (msg.board === 'autonomous') {
           const items = change && autonomous.apply(AUTONOMOUS_OWNER, change);
           // Everyone's windows, on any floor: it's the office's board.
-          if (items) for (const other of clients.values()) if (!other.out) sendTo(other, { t: 'todos', board: 'autonomous', items: [...items] });
-          if (!items) sendTo(c, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)] });
+          // `mine` tells the sender this answers its change, so its window can let go of it.
+          if (items) for (const other of clients.values()) if (!other.out) sendTo(other, { t: 'todos', board: 'autonomous', items: [...items], ...(other === c ? { mine: true } : {}) });
+          if (!items) sendTo(c, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)], mine: true });
           break;
         }
         const owner = todoOwner(c);

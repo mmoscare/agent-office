@@ -8,7 +8,7 @@ import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
-import type { TodoItem } from '../shared/todos';
+import { applyTodo, type TodoAction, type TodoItem } from '../shared/todos';
 import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
 import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
@@ -159,9 +159,12 @@ class Store {
   todos: readonly TodoItem[] = [];
   /** Changes to it the office hasn't answered yet (see changeTodo): until it has, what's on screen is newer than what it sends. */
   todosPending = 0;
-  /** The office's 🏢 Autonomous Tasks board (one list for everyone), and its changes the office hasn't answered yet. */
+  /** The office's 🏢 Autonomous Tasks board as you see it (one list for everyone; see ui/todos.ts). */
   autonomous: readonly TodoItem[] = [];
-  autonomousPending = 0;
+  /** It as the office last sent it. */
+  private autonomousBase: readonly TodoItem[] = [];
+  /** Your changes to it the office hasn't answered yet, oldest first: they stay on top of what it sends (anyone's change, as well as yours) until it has. */
+  private autonomousPending: TodoAction[] = [];
   /** The floor's 🎬 Content Kanban as you see it (see ui/content-kanban.ts); null on a floor that has the whiteboard instead. */
   content: readonly ContentItem[] | null = null;
   /** It as the office last sent it. */
@@ -288,6 +291,16 @@ class Store {
     for (const t of ['floor', 'project', 'workers', 'issues', 'pulls', 'queue', 'unshipped', 'plans', 'inbox', 'meeting', 'decor', 'services', 'dog', 'jukebox', 'whiteboard', 'drawing', 'cabinet', 'cabinetFrame', 'content', 'ball'] as Topic[]) this.emit(t);
   }
 
+  /** Makes a change to the 🏢 Autonomous Tasks board on screen straight away; false when it changes nothing (then there's nothing to send). */
+  changeAutonomous(a: TodoAction): boolean {
+    const next = applyTodo(this.autonomous, a);
+    if (next === this.autonomous) return false;
+    this.autonomousPending.push(a);
+    this.autonomous = next;
+    this.emit('autonomous');
+    return true;
+  }
+
   /** Makes a change to the floor's 🎬 Content Kanban on screen straight away; false when it changes nothing (then there's nothing to send). */
   changeContent(a: ContentAction): boolean {
     if (!this.content) return false;
@@ -314,7 +327,7 @@ class Store {
       case 'welcome':
         // A reconnect: what was on its way is lost, and the To Do board the office sends next is the one.
         this.todosPending = 0;
-        this.autonomousPending = 0;
+        this.autonomousPending = [];
         this.you = msg.you;
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
         this.floors = msg.floors;
@@ -433,9 +446,11 @@ class Store {
         break;
       case 'todos':
         if (msg.board === 'autonomous') {
-          // Everyone's changes come back to everyone; while one of yours is on its way, what's on screen is newer.
-          if (this.autonomousPending > 0 && --this.autonomousPending > 0) break;
-          this.autonomous = msg.items;
+          // Everyone's changes come back to everyone; `mine` is the answer to one of yours (each gets exactly
+          // one). Yours not answered yet go back on top of the office's copy, so none of them blinks out.
+          if (msg.mine) this.autonomousPending.shift();
+          this.autonomousBase = msg.items;
+          this.autonomous = this.autonomousPending.reduce<readonly TodoItem[]>((items, a) => applyTodo(items, a), this.autonomousBase);
           this.emit('autonomous');
           break;
         }

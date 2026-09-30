@@ -1472,7 +1472,8 @@ export type ServerMsg =
   /** Your role changed. */
   | { t: 'me'; me: Me }
   /** Your own 🔥 To Do board as it is now: on arriving, and after every change to it from any of your windows. */
-  | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId }
+  /** On the 🏢 Autonomous Tasks board, everyone's changes come to everyone; `mine` is the answer to your own change (every one gets exactly one). */
+  | { t: 'todos'; items: TodoItem[]; board?: TodoBoardId; mine?: boolean }
   /**
    * `floor`'s 🎬 Content Kanban as it is now, to everyone on it after every change. `mine` is the
    * answer to your own change (every one gets exactly one), so your window knows which are done.

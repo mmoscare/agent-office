@@ -106,3 +106,24 @@ test('Content Kanban cards take subtasks and pictures too', () => {
   assert.equal(checkContentAction({ action: 'details', id: id(1), images: ['x.svg'] }), null);
   assert.deepEqual(checkContentItem({ ...card, images: [pic(5)], subtasks: [{ id: 'sub001', text: 'x', done: true }] })?.images, [pic(5)]);
 });
+
+test('on the shared Autonomous board, your changes stay on screen until the office answers them', async () => {
+  const { store } = await import('../src/client/state.js');
+  const text = (n: number) => store.autonomous.find((t) => t.id === id(n))?.text;
+  store.apply({ t: 'todos', board: 'autonomous', items: [{ id: id(1), text: 'a', column: 'todo', at: 1 }] });
+  assert.equal(store.changeAutonomous({ action: 'add', id: id(2), text: 'mine', column: 'urgent' }), true);
+  assert.equal(store.changeAutonomous({ action: 'add', id: id(2), text: 'again', column: 'urgent' }), false, 'nothing to send');
+  // Someone else's change reaches the office first: its broadcast isn't the answer to yours.
+  store.apply({ t: 'todos', board: 'autonomous', items: [{ id: id(1), text: 'a', column: 'todo', at: 1 }, { id: id(3), text: 'theirs', column: 'todo', at: 2 }] });
+  assert.deepEqual([text(2), text(3)], ['mine', 'theirs'], 'yours is still there, on top of theirs');
+  // A quick follow-up of yours, before the office has answered the first.
+  store.changeAutonomous({ action: 'edit', id: id(2), text: 'mine, reworded' });
+  const office = [{ id: id(2), text: 'mine', column: 'urgent' as const, at: 3 }, { id: id(1), text: 'a', column: 'todo' as const, at: 1 }, { id: id(3), text: 'theirs', column: 'todo' as const, at: 2 }];
+  store.apply({ t: 'todos', board: 'autonomous', items: office, mine: true });
+  assert.equal(text(2), 'mine, reworded', 'the follow-up survives the answer to the first change');
+  store.apply({ t: 'todos', board: 'autonomous', items: [{ ...office[0], text: 'mine, reworded' }, office[1], office[2]], mine: true });
+  assert.deepEqual(store.autonomous.map((t) => t.text), ['mine, reworded', 'a', 'theirs']);
+  // All answered: the office's copy is the one on screen.
+  store.apply({ t: 'todos', board: 'autonomous', items: [office[1]] });
+  assert.deepEqual(store.autonomous.map((t) => t.id), [id(1)]);
+});
