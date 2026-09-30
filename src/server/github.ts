@@ -3,11 +3,14 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { normalizeRepo } from '../shared/floors.js';
 import { ghKey } from '../shared/protocol.js';
-import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
+import type { GhCheck, GhCloseReason, GhComment, GhIssue, GhIssueDetail, GhLabel, GhMergeMethod, GhPull, GhPullDetail, GhRepoInfo, GhReviewComment, GhState, GhWhere } from '../shared/protocol.js';
 import { pullForBranch } from '../shared/pulls.js';
 import { BoardRequests, boardList } from './github-board.js';
+import { branchPulls } from './github-rest.js';
 
 const REFRESH_MS = 90_000;
+/** How long the repo's list of labels is kept before the label picker asks GitHub again. */
+const LABELS_MS = 60_000;
 
 /** Turns gh's stderr into something a person standing at the board can act on. */
 function friendly(raw: string): string {
@@ -23,7 +26,8 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
     execFile('gh', args, { cwd, maxBuffer: 32 * 1024 * 1024, timeout }, (err, stdout, stderr) => {
       if (err) {
         const msg = (stderr || err.message || '').trim().split('\n').slice(-2).join(' ');
-        reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'GitHub CLI (gh) is not installed on the server' : friendly(msg)));
+        // stdout rides along: `gh api -i` prints the failed response's headers there (its rate limit's reset).
+        reject(Object.assign(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'GitHub CLI (gh) is not installed on the server' : friendly(msg)), { stdout }));
       } else resolve(stdout);
     });
   });
@@ -31,10 +35,13 @@ export function gh(args: string[], cwd: string, timeout = 30_000): Promise<strin
 
 const boardRequests = new BoardRequests(gh);
 
-/** Check all states before offering to create another PR for an existing worker branch. */
-export async function findBranchPr(branch: string, cwd: string, query = gh) {
-  const out = await query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,url,state,headRefName'], cwd);
-  return pullForBranch(JSON.parse(out || '[]'), branch);
+/**
+ * Check all states before offering to create another PR for an existing worker branch. Asked over
+ * REST (github-rest.ts), of `repository` or else the checkout's origin, so it still answers when the
+ * GraphQL quota is gone.
+ */
+export async function findBranchPr(branch: string, cwd: string, query = gh, repository?: string) {
+  return pullForBranch(await branchPulls(branch, cwd, query, repository), branch);
 }
 
 function git(args: string[], cwd: string): Promise<string | undefined> {
@@ -86,7 +93,7 @@ export async function findCheckouts(root: string, depth = 2): Promise<GhSource[]
   return found;
 }
 
-function labels(raw: any[]): { name: string; color: string }[] {
+function labels(raw: any[]): GhLabel[] {
   return (raw ?? []).map((l) => ({ name: String(l.name), color: `#${l.color ?? '888888'}` }));
 }
 
@@ -188,6 +195,10 @@ export class GitHub {
   private repos = new Map<string, Promise<GhRepoInfo>>();
   private login?: Promise<string>;
   private nextFolderRefresh = 0;
+  /** Label lists, by repository ('' on a one-repo floor). Asked again after a minute, or a failure. */
+  private labelLists = new Map<string, { at: number; list: Promise<GhLabel[]> }>();
+  /** Labels just changed from the office, by kind and ghKey, and when. */
+  private relabeled = new Map<string, { labels: GhLabel[]; at: number }>();
 
   constructor(
     private dir: string,
@@ -401,6 +412,86 @@ export class GitHub {
     return undefined;
   }
 
+  /** Every label the repository has, for the label picker. Asked again after a minute (or a failure). */
+  async repoLabels(repo?: string): Promise<GhLabel[]> {
+    const src = await this.source(repo);
+    const key = src.repo?.toLowerCase() ?? '';
+    let cached = this.labelLists.get(key);
+    if (!cached || Date.now() - cached.at > LABELS_MS) {
+      const list = gh(['api', 'repos/{owner}/{repo}/labels?per_page=100', '--paginate', '--jq', '.[] | {name, color, description}'], src.dir).then((out) =>
+        out
+          .split('\n')
+          .filter((l) => l.trim())
+          .map((l) => JSON.parse(l))
+          .map((l: any) => ({ name: String(l.name), color: `#${l.color ?? '888888'}`, description: l.description || undefined })),
+      );
+      cached = { at: Date.now(), list };
+      this.labelLists.set(key, cached);
+      list.catch(() => this.labelLists.get(key)?.list === list && this.labelLists.delete(key));
+    }
+    return cached.list;
+  }
+
+  /**
+   * Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as whoever
+   * gh is signed in as. Returns the labels it has now, or why they didn't change.
+   */
+  async setLabels(kind: 'issue' | 'pull', n: number, add: string[], remove: string[], repo?: string): Promise<{ labels?: GhLabel[]; error?: string }> {
+    const api = `repos/{owner}/{repo}/issues/${n}/labels`;
+    const jq = '[.[] | {name, color}]';
+    let now: GhLabel[] | undefined;
+    let where: GhSource;
+    try {
+      where = await this.source(repo);
+      // -f labels[]=… sends a JSON array of plain strings: no @file reading, no {owner} filling in.
+      if (add.length) now = labels(JSON.parse(await gh(['api', '--method', 'POST', api, ...add.flatMap((l) => ['-f', `labels[]=${l}`]), '--jq', jq], where.dir)));
+      for (const l of remove) {
+        try {
+          now = labels(JSON.parse(await gh(['api', '--method', 'DELETE', `${api}/${encodeURIComponent(l)}`, '--jq', jq], where.dir)));
+        } catch (err) {
+          // Someone took it off already, which is what was asked for.
+          if (!/label does not exist/i.test((err as Error).message)) throw err;
+        }
+      }
+      now ??= labels(JSON.parse(await gh(['api', `${api}?per_page=100`, '--jq', jq], where.dir)));
+    } catch (err) {
+      // Some may have changed before it failed.
+      void (kind === 'issue' ? this.refreshIssues() : this.refreshPulls());
+      return { error: (err as Error).message };
+    }
+    if (!now) return { error: 'The labels did not change' };
+    // The board shows them at once, before the next look at GitHub (see relabel).
+    const at = Date.now();
+    this.relabeled.set(`${kind}:${ghKey({ number: n, repo: where.repo })}`, { labels: now, at });
+    if (kind === 'issue') {
+      this.issues = { ...this.issues, items: this.relabel('issue', this.issues.items, at) };
+      this.onIssues(this.issues);
+      void this.refreshIssues();
+    } else {
+      this.pulls = { ...this.pulls, items: this.relabel('pull', this.pulls.items, at) };
+      this.onPulls(this.pulls);
+      void this.refreshPulls();
+    }
+    return { labels: now };
+  }
+
+  /**
+   * A list asked for before a label change made here still has the old labels, so the new ones are
+   * kept over it; a list asked for after the change is believed, and the change forgotten.
+   */
+  private relabel<T extends GhIssue | GhPull>(kind: 'issue' | 'pull', items: T[], asked: number): T[] {
+    return items.map((it) => {
+      const key = `${kind}:${ghKey(it)}`;
+      const r = this.relabeled.get(key);
+      if (!r) return it;
+      if (r.at < asked) {
+        this.relabeled.delete(key);
+        return it;
+      }
+      return { ...it, labels: r.labels };
+    });
+  }
+
   /** Assigns the issue to whoever gh is signed in as, which moves it to In progress on the board. */
   async claim(issue: number, repo?: string): Promise<string | undefined> {
     try {
@@ -436,9 +527,10 @@ export class GitHub {
     if (this.issues.loading) return;
     this.issues = { ...this.issues, loading: true };
     this.onIssues(this.issues);
+    const asked = Date.now();
     try {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
-      const { items, error } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
+      const { items: fetched, error } = await this.fromAll(async (dir): Promise<GhIssue[]> => {
         return (await boardList('issues', dir, this.boardQuery)).map((i: any) => ({
           number: i.number,
           title: i.title,
@@ -455,7 +547,8 @@ export class GitHub {
       }, this.issues.items);
       // Highest priority first, so the board (and the notes that fit on the wall) lead with it. Within
       // a priority, open before closed and newest first, as gh lists them, across every repository.
-      items.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels) || Number(a.state !== 'OPEN') - Number(b.state !== 'OPEN') || b.createdAt.localeCompare(a.createdAt));
+      fetched.sort((a, b) => priorityRank(a.labels) - priorityRank(b.labels) || Number(a.state !== 'OPEN') - Number(b.state !== 'OPEN') || b.createdAt.localeCompare(a.createdAt));
+      const items = this.relabel('issue', fetched, asked);
       this.issues = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
       this.issues = { ...this.issues, loading: false, error: (err as Error).message };
@@ -467,8 +560,9 @@ export class GitHub {
     if (this.pulls.loading) return;
     this.pulls = { ...this.pulls, loading: true };
     this.onPulls(this.pulls);
+    const asked = Date.now();
     try {
-      const { items, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
+      const { items: fetched, error } = await this.fromAll(async (dir): Promise<GhPull[]> => {
         const all = await boardList('pulls', dir, this.boardQuery);
         return all.map((p: any) => ({
           number: p.number,
@@ -480,7 +574,7 @@ export class GitHub {
           labels: labels(p.labels),
           reviewDecision: p.reviewDecision ?? '',
           headRefName: p.headRefName,
-          headRefOid: p.headRefOid,
+          headRefOid: typeof p.headRefOid === 'string' ? p.headRefOid : undefined,
           baseRefName: p.baseRefName,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
@@ -492,6 +586,7 @@ export class GitHub {
           closes: (p.closingIssuesReferences ?? []).map((r: any) => Number(r.number)).filter((n: number) => Number.isInteger(n) && n > 0),
         }));
       }, this.pulls.items);
+      const items = this.relabel('pull', fetched, asked);
       this.pulls = { items, fetchedAt: Date.now(), loading: false, error };
     } catch (err) {
       this.pulls = { ...this.pulls, loading: false, error: (err as Error).message };

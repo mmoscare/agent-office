@@ -54,7 +54,7 @@ export function openQueue(net: Net, actions: QueueActions) {
   );
 
   const ta = h('textarea', { rows: 2, placeholder: 'Describe a task for the next free worker…', 'aria-label': 'New task' }) as HTMLTextAreaElement;
-  const provider = providerPicker(store.project, 'queue-provider', 'Provider', 'queue');
+  const provider = providerPicker(store.project, 'queue-provider');
   const addBtn = h('button.btn.primary', { type: 'submit' }, 'Add to queue');
   const form = h('form.queue-add', {}, ta, provider.element, addBtn) as HTMLFormElement;
   form.noValidate = true;
@@ -167,8 +167,8 @@ export function openQueue(net: Net, actions: QueueActions) {
         ' on an issue. Whenever a desk is free and fewer than ',
         h('b', {}, q.maxWorkers === 0 ? '0' : String(q.maxWorkers)),
         store.project?.branch
-          ? ' workers are busy, the next task gets a fresh worker in its own git worktree. Issues are assigned on GitHub when they start, and the pull request is linked when it shows up.'
-          : ' workers are busy, the next task gets a fresh worker in this shared folder. For separate worktrees across repositories, hire from an empty desk and select those repositories instead.',
+          ? " of its tasks are running, the next task gets a fresh worker in its own git worktree (workers you hire yourself don't count). Issues are assigned on GitHub when they start, and the pull request is linked when it shows up."
+          : " of its tasks are running, the next task gets a fresh worker in this shared folder (workers you hire yourself don't count). For separate worktrees across repositories, hire from an empty desk and select those repositories instead.",
       ),
       queued.length && officeFull(m)
         ? h('p.note', {}, `⏸ The office is at its limit of ${m.limit} worker${m.limit === 1 ? '' : 's'}, so the next task waits until one goes home. A queue worker that's finished goes home by itself to make room.`)

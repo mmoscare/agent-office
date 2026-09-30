@@ -8,6 +8,7 @@ import type { WorkerWorkspace, WorkspaceRequest } from '../shared/workspaces.js'
 import { isBusy } from '../shared/status.js';
 import { recoveryTitle } from '../shared/task-status.js';
 import { gh } from './github.js';
+import { branchPulls, rateLimitOf, type RateLimit } from './github-rest.js';
 import { WORKSPACES_DIR, floorRepository, workspaceRepositories } from './workspaces.js';
 import { Worktrees, gitError } from './worktrees.js';
 
@@ -23,6 +24,8 @@ const MIN_SCAN_MS = 60_000;
 const HAS_PR_MS = 30 * 60_000;
 const NO_PR_MS = 5 * 60_000;
 const BACKOFF_MS = 5 * 60_000;
+/** The longest wait for a quota to reset: GitHub's are hourly. */
+const MAX_BACKOFF_MS = 60 * 60_000;
 const MAX_STAT = 200;
 
 /** One office branch in one repository, with its worktree when it still has one. */
@@ -128,12 +131,15 @@ export async function held(c: Candidate, base: string | undefined): Promise<Held
 
 /**
  * Whether a branch has an open or merged pull request: the PR board's list first (already fetched),
- * then gh for the branch itself, remembered for a while. Undefined when GitHub can't say (rate-limited,
- * offline, no gh): then it stays alone for a few minutes, and the board says the status is unknown.
+ * then GitHub's REST API for the branch itself (github-rest.ts: its quota outlasts the board's GraphQL
+ * one), remembered for a while. Undefined when GitHub can't say (rate-limited, offline, no gh): then
+ * it stays alone for a few minutes, or until its quota resets, and the board says the status is unknown.
  */
 export class BranchPulls {
   /** Why GitHub couldn't be asked, while it's being left alone. */
   error?: string;
+  /** Set when that was its rate limit: whether a secondary one, and when it lifts (ms), when GitHub said. */
+  limit?: RateLimit;
   private cache = new Map<string, { at: number; has: boolean; revision: string }>();
   private backoffUntil = 0;
 
@@ -156,13 +162,17 @@ export class BranchPulls {
     if (hit && hit.revision === revision && this.now() - hit.at < (hit.has ? HAS_PR_MS : NO_PR_MS)) return hit.has;
     if (this.now() < this.backoffUntil) return undefined;
     try {
-      const out = await this.query(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '100', '--json', 'number,state,headRefName,headRefOid'], repoDir);
-      const has = (JSON.parse(out || '[]') as { state: string; headRefName: string; headRefOid?: string }[]).some((p) => p.headRefName === branch && carries(p));
+      const has = (await branchPulls(branch, repoDir, this.query, repo)).some((p) => p.headRefName === branch && carries(p));
       this.cache.set(key, { at: this.now(), has, revision });
       this.error = undefined;
+      this.limit = undefined;
       return has;
     } catch (err) {
-      this.backoffUntil = this.now() + BACKOFF_MS;
+      const now = this.now();
+      this.limit = rateLimitOf(err, now);
+      const resetAt = this.limit?.resetAt;
+      // Past a known reset nothing is gained by waiting; before one, asking sooner only fails again.
+      this.backoffUntil = resetAt && resetAt > now ? Math.min(resetAt + 1000, now + MAX_BACKOFF_MS) : now + BACKOFF_MS;
       this.error = (err as Error).message || 'GitHub could not be asked';
       return undefined;
     }
@@ -422,8 +432,17 @@ export class UnshippedWatch {
     try {
       const found = await scanUnshipped({ floorDir: this.floorDir, workers: this.deps.workers(), tasks: this.deps.tasks(), pulls: this.pulls, repoName: this.deps.repoName });
       this.found = new Map(found.map((f) => [f.item.key, f]));
+      // Only the branch lookups' own failures leave a status unknown: the board's list failing too
+      // (its GraphQL quota gone) says nothing about a branch REST answered for.
       const unknown = found.some((f) => f.item.pr === 'unknown');
-      this.state = { items: found.map((f) => f.item), scannedAt: Date.now(), scanning: false, prNote: unknown ? this.pulls.error ?? this.deps.board().error : undefined };
+      const limit = unknown ? this.pulls.limit : undefined;
+      this.state = {
+        items: found.map((f) => f.item),
+        scannedAt: Date.now(),
+        scanning: false,
+        prNote: unknown ? (limit ? "GitHub's API rate limit" : this.pulls.error ?? 'GitHub could not be asked') : undefined,
+        prLimit: limit,
+      };
       // Queue tasks have no repository of their own: only one-repo floors give them branches.
       this.deps.branches(new Map(found.filter((f) => !f.item.repository).map((f) => [f.item.branch, { dirty: f.item.dirty, commits: f.item.commits }])));
     } catch (err) {
