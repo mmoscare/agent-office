@@ -202,6 +202,7 @@ deploy/aws.sh ssh 'node /opt/agent-office/bin/agent-office.js accounts invite ad
 | T | Stand behind the nearest worker on this floor who is done or needs you; again for the next, then back to the office |
 | N | Go to the next worker that's waiting on you |
 | X | Clock a worker out |
+| U | Summon the staffer (queue agent) to where you are; U again beside him sends him back |
 | Enter | Chat |
 | V | Join voice; then hold V to talk |
 | M | Mute / unmute in voice |
