@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
+import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, CPU_APPS, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
 import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { deskPoint } from '../../shared/nav';
 import { FLOOR_PALETTES, type FloorPalette } from '../../shared/floors';
@@ -97,6 +97,8 @@ export interface Office {
   bossScreen: THREE.Mesh;
   /** The monitor on the west wall showing how busy the office's machine is (world/machine.ts). */
   machineScreen: THREE.Mesh;
+  /** The top-CPU list above that monitor (world/cpu-apps.ts). */
+  cpuAppsScreen: THREE.Mesh;
   /** The meeting room's board, showing the meeting's output as it's written, and the sign by its door. */
   meetingBoard: THREE.Mesh;
   meetingSign: THREE.Mesh;
@@ -1251,6 +1253,19 @@ export function buildOffice(): Office {
   group.add(monitor);
   fixture('west', MACHINE_MONITOR.z, MACHINE_MONITOR.y, MACHINE_MONITOR.width + 0.2, MACHINE_MONITOR.height + 0.2);
 
+  // The top-CPU list, above the windows in the same column. The pier the monitor sits in is too short.
+  const apps = new THREE.Group();
+  const appsBezel = mesh(roundedBox(CPU_APPS.width + 0.16, 0.1, CPU_APPS.height + 0.16, 0.06), toon(PALETTE.ink), 0, 0, 0);
+  appsBezel.rotation.x = Math.PI / 2;
+  apps.add(appsBezel);
+  const cpuAppsScreen = new THREE.Mesh(new THREE.PlaneGeometry(CPU_APPS.width, CPU_APPS.height), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+  cpuAppsScreen.position.z = 0.06;
+  apps.add(cpuAppsScreen);
+  apps.position.set(CPU_APPS.x + 0.07, CPU_APPS.y, CPU_APPS.z);
+  apps.rotation.y = Math.PI / 2;
+  group.add(apps);
+  fixture('west', CPU_APPS.z, CPU_APPS.y, CPU_APPS.width + 0.2, CPU_APPS.height + 0.2);
+
   const couch = new THREE.Group();
   const couchMat = toon('#5b8def');
   couch.add(mesh(roundedBox(1, 0.45, 4.2, 0.2), couchMat, 0, 0.3, 0));
@@ -1484,7 +1499,7 @@ export function buildOffice(): Office {
     }
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */

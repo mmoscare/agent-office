@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { MachineState } from '../shared/protocol.js';
+import type { CpuApp, MachineState } from '../shared/protocol.js';
+import { CpuAppSampler } from './cpu-apps.js';
 
 /** How often the CPU and memory are read. */
 const SAMPLE_MS = 5_000;
@@ -64,9 +65,10 @@ function availableMemory(): Promise<number> {
 
 /**
  * The machine the office runs on: how busy its CPU and memory are (for the monitor on the wall, and
- * a warning before hiring while it's under pressure), and the most workers the office runs at once,
- * across every floor. That limit comes from --max-workers, or from ⚙️ Settings (kept in
- * .agent-office/machine.json), which can lower it but never raise it past --max-workers.
+ * a warning before hiring while it's under pressure), which apps are using the CPU (the list above
+ * that monitor), and the most workers the office runs at once, across every floor. That limit comes
+ * from --max-workers, or from ⚙️ Settings (kept in .agent-office/machine.json), which can lower it
+ * but never raise it past --max-workers.
  */
 export class Machine implements Capacity {
   private saved?: Saved;
@@ -78,6 +80,9 @@ export class Machine implements Capacity {
   private history: [number, number][] = [];
   /** The worker count everyone was last told. */
   private told = -1;
+  /** The top apps, once two readings have come in. Missing until then. */
+  private apps?: CpuApp[];
+  private sampler: CpuAppSampler;
 
   constructor(
     dataDir: string,
@@ -90,6 +95,11 @@ export class Machine implements Capacity {
     this.path = path.join(dataDir, 'machine.json');
     this.restore();
     this.memUsed = os.totalmem() - os.freemem();
+    this.sampler = new CpuAppSampler(() => os.cpus().length, (apps) => {
+      if (JSON.stringify(apps) === JSON.stringify(this.apps)) return;
+      this.apps = apps;
+      this.emit();
+    });
   }
 
   start() {
@@ -98,10 +108,12 @@ export class Machine implements Capacity {
     void this.sample(false);
     this.timer = setInterval(() => void this.sample(), SAMPLE_MS);
     this.timer.unref();
+    this.sampler.start();
   }
 
   stop() {
     clearInterval(this.timer);
+    this.sampler.stop();
   }
 
   /** The most workers the office takes, or undefined for no limit. */
@@ -135,6 +147,7 @@ export class Machine implements Capacity {
       limit: this.limit,
       ceiling: this.ceiling,
       set: this.saved && { ...this.saved },
+      ...(this.apps ? { apps: this.apps } : {}),
     };
   }
 
