@@ -46,6 +46,7 @@ const FRIENDLY: Record<string, string> = {
   pwsh: 'PowerShell',
   windowsterminal: 'Terminal',
   opencode: 'OpenCode',
+  claude: 'Claude',
   windowserver: 'Window Server',
 };
 

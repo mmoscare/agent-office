@@ -12,6 +12,7 @@ test('app names drop paths, .exe and kernel threads', () => {
   assert.equal(appName('C:\\Program Files\\Google\\chrome.exe'), 'Chrome');
   assert.equal(appName('/Applications/Cursor.app/Contents/MacOS/Cursor'), 'Cursor');
   assert.equal(appName('Agent Office'), 'Agent Office');
+  assert.equal(appName('claude.exe'), 'Claude');
   assert.equal(appName('Idle'), '');
   assert.equal(appName('[kworker/0:1]'), '');
   assert.equal(appName('kernel_task'), '');
