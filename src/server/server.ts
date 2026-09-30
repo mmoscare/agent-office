@@ -44,6 +44,7 @@ import { LeaveOnMerge } from './leave-on-merge.js';
 import { RELAY_LOGIN, relayRequest, relayUpgrade, signInPage, stoppedPage, tunneledPort } from './relay.js';
 import { ChatLog } from './history.js';
 import { Arcade, HighScores } from './cabinet.js';
+import { Stickies } from './stickies.js';
 import { Todos } from './todos.js';
 import { Notes, NOTE_IMAGE_TYPES } from './notes.js';
 import { TODO_IMAGE_MAX_BYTES, TodoImages } from './todo-images.js';
@@ -56,6 +57,7 @@ import { INBOX_FILE_MAX, INBOX_NOTE_MAX, inboxPlanText, inboxPrompt } from '../s
 import { DESK_BY_ID, STATION_AGENT, elevatorSpot, seatHere, streetBelow } from '../shared/layout.js';
 import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { checkFrame, scoreText, type CabinetFrame, type CabinetState } from '../shared/cabinet.js';
+import { checkStickyAction } from '../shared/stickies.js';
 import { checkTodoAction } from '../shared/todos.js';
 import { checkNoteAction, NOTE_IMAGE_MAX_BYTES } from '../shared/notes.js';
 import { checkContentAction } from '../shared/content-kanban.js';
@@ -226,7 +228,9 @@ export async function startServer(cfg: Config) {
   });
   // Everyone's own 🔥 To Do board: one list each for the whole building, so it follows them onto every floor.
   const todos = new Todos(cfg.dataDir);
-  /** Whose To Do board a connection sees: their account's, or the shared password's one list. */
+  // Reminder stickies on the wall by that board: the same list on every floor, one per person.
+  const stickies = new Stickies(cfg.dataDir);
+  /** Whose To Do board and stickies a connection sees: their account's, or the shared password's one list. */
   const todoOwner = (c: Client) => (c.accountId ? `account:${c.accountId}` : 'shared');
   // Everyone's own 📝 Notes pad, the To Do board's other side: kept the same way, one each for the whole building.
   const notes = new Notes(cfg.dataDir);
@@ -1542,6 +1546,7 @@ export async function startServer(cfg: Config) {
     sendTo(client, { t: 'todos', items: [...todos.list(todoOwner(client))] });
     sendTo(client, { t: 'notes', state: notes.pad(todoOwner(client)) });
     sendTo(client, { t: 'todos', board: 'autonomous', items: [...autonomous.list(AUTONOMOUS_OWNER)] });
+    sendTo(client, { t: 'stickies', items: [...stickies.list(todoOwner(client))] });
     broadcast({ t: 'peer.join', peer: client.peer }, id);
     if (account) accountsChanged(); // now online
     floorsChanged();
@@ -2614,6 +2619,14 @@ export async function startServer(cfg: Config) {
         // Every window of theirs makes the same change; one whose change did nothing gets the pad back to put itself right.
         if (pad) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'notes.change', change: change!, at, ...(other === c ? { mine: true } : {}) });
         if (!pad) sendTo(c, { t: 'notes', state: notes.pad(owner), mine: true });
+        break;
+      }
+      case 'sticky': {
+        const change = checkStickyAction(msg.change);
+        const owner = todoOwner(c);
+        const items = change && stickies.apply(owner, change);
+        if (items) for (const other of clients.values()) if (!other.out && todoOwner(other) === owner) sendTo(other, { t: 'stickies', items: [...items] });
+        if (!items) sendTo(c, { t: 'stickies', items: [...stickies.list(owner)] });
         break;
       }
       case 'content': {

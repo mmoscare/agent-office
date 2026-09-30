@@ -8,6 +8,7 @@ import { JUKEBOX_TUNES, type JukeboxState } from '../shared/jukebox';
 import type { CabinetFrame, CabinetState } from '../shared/cabinet';
 import type { PlansState } from '../shared/plans';
 import type { TimeCardState } from '../shared/timecard';
+import type { StickyNote } from '../shared/stickies';
 import { applyTodo, type TodoAction, type TodoItem } from '../shared/todos';
 import { applyNote, EMPTY_NOTES, type NoteAction, type NotesState } from '../shared/notes';
 import { applyContent, type ContentAction, type ContentItem } from '../shared/content-kanban';
@@ -15,7 +16,7 @@ import type { InboxState } from '../shared/inbox';
 import { MAIL_OFF, type MailState } from '../shared/mail';
 import type { BallState } from '../shared/hoop';
 
-export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'autonomous' | 'content' | 'prompts' | 'ball';
+export type Topic = 'peers' | 'workers' | 'issues' | 'pulls' | 'chat' | 'project' | 'screens' | 'team' | 'upgrade' | 'services' | 'decor' | 'usage' | 'limits' | 'queue' | 'me' | 'accounts' | 'notify' | 'machine' | 'floors' | 'floor' | 'projectsDir' | 'repos' | 'dog' | 'jukebox' | 'sky' | 'theme' | 'leaveOnMerge' | 'whiteboard' | 'drawing' | 'cabinet' | 'cabinetFrame' | 'meeting' | 'unshipped' | 'plans' | 'inbox' | 'mail' | 'timecard' | 'todos' | 'notes' | 'stickies' | 'autonomous' | 'content' | 'prompts' | 'ball';
 
 const zeroUsage = (): Usage => ({ input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0 });
 
@@ -172,6 +173,10 @@ class Store {
   get notesOffice(): NotesState {
     return this.notesBase;
   }
+  /** Reminder stickies on the wall by that board, the same on every floor (see ui/stickies.ts). */
+  stickies: readonly StickyNote[] = [];
+  /** Changes to them the office hasn't answered yet. */
+  stickiesPending = 0;
   /** The office's 🏢 Autonomous Tasks board as you see it (one list for everyone; see ui/todos.ts). */
   autonomous: readonly TodoItem[] = [];
   /** It as the office last sent it. */
@@ -355,9 +360,10 @@ class Store {
   apply(msg: ServerMsg) {
     switch (msg.t) {
       case 'welcome':
-        // A reconnect: what was on its way is lost, and the To Do board the office sends next is the one.
+        // A reconnect: what was on its way is lost, and the To Do board and stickies the office sends next are the ones.
         this.todosPending = 0;
         this.notesPending = [];
+        this.stickiesPending = 0;
         this.autonomousPending = [];
         this.you = msg.you;
         this.peers = new Map(msg.peers.map((p) => [p.id, p]));
@@ -500,6 +506,11 @@ class Store {
         if (msg.mine) this.notesPending.shift();
         this.notesBase = applyNote(this.notesBase, msg.change, msg.at);
         this.replayNotes();
+        break;
+      case 'stickies':
+        if (this.stickiesPending > 0 && --this.stickiesPending > 0) break;
+        this.stickies = msg.items;
+        this.emit('stickies');
         break;
       case 'content': {
         // Rode the elevator meanwhile: that was the other floor's board.

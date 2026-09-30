@@ -58,9 +58,14 @@ export function openWorkspace(net: Net, workerId: string, onTerminal: () => void
     const form = h('form.modal', { role: 'dialog', 'aria-label': 'Add repositories' }, h('header', {}, h('h2', {}, 'Add repositories')), h('div.body', {}, picker.element), h('footer', {}, cancel, submit));
     const dialog = openModal(form);
     cancel.addEventListener('click', () => dialog.close());
-    form.addEventListener('submit', e => {
+    let adding = false;
+    form.addEventListener('submit', async e => {
       e.preventDefault();
-      if (!picker.valid()) return;
+      if (adding) return;
+      adding = true;
+      const ready = await picker.ready(submit);
+      adding = false;
+      if (!ready || !form.isConnected) return;
       const request = picker.value().workspace;
       if (request) net.send({ t: 'worker.workspace.add', workerId, workspace: request });
       dialog.close();
