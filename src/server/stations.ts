@@ -74,6 +74,12 @@ const INBOX_API = `The 📥 in-tray holds what came in from outside: notes, forw
 - Read one: office-inbox read <name> (a note's text; for a file, its path, to open with your own tools)
 - Put one away: office-inbox archive <name>, once it's filed or needs nothing (it goes to the folder's archive/).`;
 
+/** For the PR agent: clocking out the worker whose pull request it merged, with the office-workers command. */
+const WORKERS_API = `When you've merged a pull request, see to the worker who made it with the office-workers command, on your PATH like office-queue:
+- See the floor's workers: office-workers list (each one's id, status, branch, pull request, what its worktree holds, and whether the office would let it go)
+- Clock one out: office-workers home <id> --remove-worktree, by id, never by name (names are reused). The office refuses, and says why, while it's busy or holds work no remote has, and keeps its worktree until its branch has merged.
+Clock the PR's worker out once it's done or idle with a clean worktree and nothing unpushed, and say so in the merge record. Also clock out workers with no changes that only answered a question and have been done for a while. Never clock out a worker with unshipped work: name it for the owner instead.`;
+
 /** A GitHub checkout in a floor that's a folder of them: owner/name, and its folder relative to the floor. */
 export interface Checkout {
   repo: string;
@@ -127,6 +133,7 @@ function builtBrief(kind: StationKind, checkouts: Checkout[], context: StationCo
     QUEUE_API,
     PLANS_API,
     INBOX_API,
+    ...(kind === 'pulls' ? [WORKERS_API] : []),
     ...(inbox ? [MAIL_API, mailNote(context.mail)] : []),
     `Follow the worker handoff rule: save the detailed outcome on the relevant issue or PR. ${wrapUp} Then wait: the next request may come from someone else.`,
     `The request:`,
