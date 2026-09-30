@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
-import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, GOLF_HOLE, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, GOLF_HOLE, LADDER, LOFT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, stationLabel, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
@@ -97,6 +97,7 @@ import { renderLimits } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
+import { CpuAppsTexture } from './world/cpu-apps';
 import { mountHud } from './ui/menu';
 import { openJukebox } from './ui/jukebox';
 import { openLedger } from './ui/ledger';
@@ -112,6 +113,7 @@ import { wayTo } from './walkto';
 import { MeetingBoardTexture, MeetingSignTexture, meetingStage } from './world/meeting';
 import { issueMeeting, openMeeting, type MeetingPreset } from './ui/meeting';
 import { ClipboardSheet, clipboardProp } from './world/clipboard';
+import { STAFFER_BESIDE, StafferSummon, summonSpot, stepOnto } from './world/staffer';
 import { currentRoster, openClipboard } from './ui/clipboard';
 import { rosterByRepo } from '../shared/roster';
 
@@ -192,7 +194,11 @@ const idleAgents = STATIONS.map((def) => {
   model.setStatus('idle', false);
   model.setTask({ name: STATION_INFO[kind].offer, summary: STATION_INFO[kind].does });
   if (kind === 'inbox') model.accessory(receptionistLook());
-  if (kind === 'queue') model.hold(clipboardProp(clipboardSheet));
+  if (kind === 'queue') {
+    model.hold(clipboardProp(clipboardSheet));
+    model.setName(stationLabel('queue'));
+    model.root.userData.interact = { kind: 'station', deskId: def.id, x: 0, z: 0, radius: 0 };
+  }
   const view = office.desks.get(def.id)!;
   view.vacancy.children[0].add(model.root);
   noOutline(model.root);
@@ -315,9 +321,11 @@ const servicesTex = new ServicesBoardTexture();
 mountBoard(office.boardMeshes.services, servicesTex.texture, () => servicesTex.render(store.services.items, store.workers), ['services', 'workers']);
 const queueTex = new QueueBoardTexture();
 mountBoard(office.boardMeshes.queue, queueTex.texture, () => queueTex.render(store.queue, store.workers), ['queue', 'workers']);
-// The machine monitor on the west wall.
+// The machine monitor on the west wall, and the top-CPU list above it.
 const machineTex = new MachineTexture();
 mountBoard(office.machineScreen, machineTex.texture, () => machineTex.render(store.machine), ['machine']);
+const cpuAppsTex = new CpuAppsTexture();
+mountBoard(office.cpuAppsScreen, cpuAppsTex.texture, () => cpuAppsTex.render(store.machine.apps), ['machine']);
 // The meeting room: its output as it's written on the back wall, and how it's going on the door.
 const meetingBoardTex = new MeetingBoardTexture();
 mountBoard(office.meetingBoard, meetingBoardTex.texture, () => meetingBoardTex.render(store.meeting), ['meeting']);
@@ -714,6 +722,12 @@ const arrivals = new Arrivals(
   (x, z, y) => groundAt(office.colliders, x, z, y),
   (x, y, z) => sound.stepAt(x, z, y),
 );
+// The queue agent, called off his kiosk to wherever you are (U). Parented to the office so a click still finds his clipboard.
+const staffer = new StafferSummon(
+  office.group,
+  (x, z, y) => stepOnto(office.colliders, x, z, y),
+  (x, y, z) => sound.stepAt(x, z, y),
+);
 /** Set while a floor's workers arrive with it (a welcome, an elevator ride): they're in their seats already. */
 let seatedAlready = false;
 let firstWelcome = true;
@@ -734,6 +748,7 @@ net.onMessage((msg) => {
   if (msg.t === 'welcome' || msg.t === 'floor.enter') {
     departures.clear();
     arrivals.clear();
+    staffer.clear();
     seatedAlready = true;
   }
   if (msg.t === 'worker.remove') sentHome.add(msg.workerId);
@@ -1104,7 +1119,7 @@ function setPlace() {
 
 /** What you can use where you are, and what's in the way of looking at it. */
 function usable(): Interactable[][] {
-  return upTop && roof ? [roof.interactables] : [office.interactables, gallery.interactables, dog.interactables, ball.interactables];
+  return upTop && roof ? [roof.interactables] : [office.interactables, gallery.interactables, dog.interactables, ball.interactables, staffer.interactables()];
 }
 
 /** You're on a floor (or in the building without one): paint it, and open the doors (or carry on down the pole…). */
@@ -1311,8 +1326,14 @@ function syncWorkers() {
       const model = new Worker(w.name, w.color);
       model.setCostume(store.theme.active);
       if (desk.def.station === 'inbox') model.accessory(receptionistLook());
-      // The queue agent never goes anywhere without its clipboard.
-      if (desk.def.station === 'queue') model.hold(clipboardProp(clipboardSheet));
+      // The queue agent never goes anywhere without its clipboard. His name stays Queue agent; the label does not.
+      if (desk.def.station === 'queue') {
+        const idle = idleAgents.find((a) => a.kind === 'queue');
+        if (idle && staffer.has(idle.model)) staffer.clear();
+        model.hold(clipboardProp(clipboardSheet));
+        model.setName(stationLabel('queue'));
+        model.root.userData.interact = { kind: 'station', deskId: w.deskId, x: 0, z: 0, radius: 0 };
+      }
       desk.seatAnchor.add(model.root);
       // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over
       // its head and the back of its chair, so it shows from across the room.
@@ -1366,7 +1387,10 @@ function syncWorkers() {
     arrivals.forget(v.model);
     const desk = office.desks.get(v.deskId);
     // Sent home: it packs up and walks out, and the seat shows as free once it's up (see departures).
-    if (desk && sentHome.has(id)) departures.add(v.model, v.laptop, desk);
+    // The staffer, called over to you (U), waves where he stands and walks out from there.
+    const away = staffer.has(v.model);
+    staffer.forget(v.model);
+    if (desk && sentHome.has(id)) departures.add(v.model, v.laptop, desk, away);
     else {
       v.model.root.removeFromParent();
       v.laptop.root.removeFromParent();
@@ -1421,8 +1445,8 @@ function arrangeSeats() {
 }
 store.on('workers', syncWorkers);
 // ---- Clipboard ------------------------------------------------------------------------------------
-// The queue agent's clipboard lists every worker in the building by repository; walk up to it and
-// press C to read it all (see ui/clipboard.ts).
+// The queue agent's clipboard lists every worker in the building by repository. Walk up and press C,
+// or click the clipboard, wherever he is (see ui/clipboard.ts). U summons him to you.
 const renderClipboard = () => clipboardSheet.render(rosterByRepo(currentRoster()));
 for (const topic of ['workers', 'floors', 'floor', 'project'] as const) store.on(topic, renderClipboard);
 renderClipboard();
@@ -1946,6 +1970,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
     if (key === 'O' && w) return pullRequestFor(w);
     return;
   }
+  if (target.kind === 'clipboard' && (key === 'E' || key === 'C')) return showClipboard();
   if (target.kind === 'station' && target.deskId) {
     const w = store.workerAtDesk(target.deskId);
     if (key === 'E' || key === 'P') return askStation(target.deskId);
@@ -2525,10 +2550,10 @@ function stageOf(desk: DeskView, model: Worker): Stage {
 function danceParty() {
   for (const [id, v] of workerViews) {
     const desk = office.desks.get(v.deskId);
-    if (desk && !isAsleep(store.workers.get(id)?.status ?? 'offline')) v.model.dance(stageOf(desk, v.model));
+    if (desk && !staffer.has(v.model) && !isAsleep(store.workers.get(id)?.status ?? 'offline')) v.model.dance(stageOf(desk, v.model));
   }
-  // The board agents still waiting to be asked, too.
-  for (const a of idleAgents) if (a.view.vacancy.visible) a.model.dance(stageOf(a.view, a.model));
+  // The board agents still waiting to be asked, too. One that's been summoned stays where you called him.
+  for (const a of idleAgents) if (a.view.vacancy.visible && !staffer.has(a.model)) a.model.dance(stageOf(a.view, a.model));
 }
 
 /** Where confetti rains from downstairs over (x, z): the ceiling, or under the loft, the underside of its floor. */
@@ -2654,6 +2679,8 @@ function hintFor(it: Interactable): Hint {
       return it.deskId ? deskHint(it.deskId) : { k: '', parts: [] };
     case 'station':
       return it.deskId ? stationHint(it.deskId) : { k: '', parts: [] };
+    case 'clipboard':
+      return { k: '', parts: [title('📋 staffer/queue agent'), key('E', 'Read the clipboard'), aside('or click it')] };
     case 'issues':
       if (issuesWallMode() === 'todo') {
         const now = activeTodos();
@@ -2889,10 +2916,11 @@ function stationHint(deskId: string): Hint {
     return {
       k: `${full}|${m.workers}|${m.limit}|${tray}|${mailNote}`,
       parts: [
-        h('span.title', {}, `${info.icon} ${STATION_AGENT[kind].name}`),
+        h('span.title', {}, `${info.icon} ${stationLabel(kind)}`),
         aside(trayNote ? `${trayNote} · ${info.offer.replace(/^Ask me /, '')}` : info.offer.replace(/^Ask me /, '')),
         full ? h('span.cost', {}, `🚫 Office full · ${m.workers} of ${m.limit} workers`) : key('E', 'Prompt'),
         kind === 'queue' ? key('C', 'Clipboard') : '',
+        kind === 'queue' ? aside('or click it') : '',
         ...trayKey,
       ],
     };
@@ -2903,12 +2931,13 @@ function stationHint(deskId: string): Hint {
   return {
     k: w.status + w.id + doing + spent + tray + mailNote,
     parts: [
-      h('span.title', {}, `${info.icon} ${w.name} · ${STATUS_LABEL[w.status]}`),
+      h('span.title', {}, `${info.icon} ${kind === 'queue' ? stationLabel(kind) : w.name} · ${STATUS_LABEL[w.status]}`),
       doing ? aside(doing) : trayNote ? aside(trayNote) : '',
       spent ? h('span.cost', { title: usageTitle(w.usage!, provider) }, spent) : '',
       key('E', isAsleep(w.status) ? 'Wake with a prompt' : 'Prompt'),
       key('O', 'Terminal'),
       kind === 'queue' ? key('C', 'Clipboard') : '',
+      kind === 'queue' ? aside('or click it') : '',
       key('X', 'Clock out'),
       ...trayKey,
     ],
@@ -3165,6 +3194,9 @@ function officeKey(e: KeyboardEvent): boolean {
         putBack();
       } else toElevator();
       return true;
+    case 'KeyU':
+      summonStaffer();
+      return true;
   }
   // By the character, so it's / on any keyboard layout. The search box opens without it.
   if (e.key === '/') {
@@ -3274,7 +3306,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -3464,6 +3496,7 @@ const hud = mountHud(
     { id: 'git', icon: '🌿', label: 'Git repositories', section: 'Open', title: () => 'Every Git repository on this floor: branches, uncommitted changes, and what differs from GitHub', run: showGitBoard },
     { id: 'author-updates', icon: '🆕', label: 'Author updates', section: 'Office', shown: () => authorUpdates.enabled, count: () => authorUpdates.behind ?? 0, status: () => authorUpdates.enabled && !!(authorUpdates.behind || authorUpdates.merging), chip: () => authorUpdates.merging ? 'Merge needs attention' : 'Author updates', run: showAuthorUpdates },
     { id: 'queue', icon: '📋', label: 'Task queue', section: 'Open', count: () => store.queue.tasks.filter((t) => t.status !== 'done').length, title: () => 'Issues and tasks waiting for a worker', run: showQueue },
+    { id: 'staffer', icon: '📋', label: 'Summon staffer', section: 'Office', key: 'U', title: () => 'Call the queue staffer to where you are. Click his clipboard to read who’s on what. U again beside him sends him back', run: () => summonStaffer() },
     { id: 'services', icon: '🌐', label: 'Services', section: 'Open', count: () => store.services.items.length, title: () => 'Web servers the workers are running', run: () => openServices() },
     { id: 'plans', icon: '📒', label: 'To Do Next', section: 'Open', count: () => store.plans.items.filter((p) => p.status === 'todo').length, title: () => 'Your plans for this floor: hand them to the workers from here', run: () => openPlans(plansActions()) },
     { id: 'timecard', icon: '🗂️', label: 'Indirect Time', section: 'Office', title: () => `Your hours with the office open, per day: ${todayText()} today`, run: () => openTimeCard(net) },
@@ -3553,6 +3586,39 @@ const hud = mountHud(
 );
 onAuthorUpdates(() => hud.refresh());
 onCalendarChores(() => hud.refresh());
+/** The queue agent on this floor: the one who's been hired, or the one waiting at the kiosk. */
+function queueAgent(): Worker | undefined {
+  for (const v of workerViews.values()) if (v.deskId === 'station-queue') return v.model;
+  return idleAgents.find((a) => a.kind === 'queue')?.model;
+}
+
+/** Set once he's been told he's on his way, so the arrival line isn't said twice. */
+let stafferAnnounced = false;
+
+/**
+ * U: the staffer walks to you, wherever you are on the floor (up the stairs, out on the balcony), and
+ * stands on the same floor as you (see summonSpot). Beside him, U sends him back to the queue. The
+ * roof, the garage and the landing outside the exit door he can't reach.
+ */
+function summonStaffer() {
+  if (trip) return;
+  if (upTop || player.pos.y < -0.5) return toast('The staffer stays on the office floor — come back inside', 'warn');
+  const model = queueAgent();
+  if (!model) return;
+  const at = model.root.getWorldPosition(new THREE.Vector3());
+  const beside = staffer.has(model) && staffer.phase !== 'back' && Math.hypot(at.x - player.pos.x, at.z - player.pos.z) < STAFFER_BESIDE && Math.abs(at.y - player.pos.y) < 1.5;
+  const spot = beside ? null : summonSpot(office.colliders, player.pos, player.facing);
+  const dest = beside ? staffer.kioskAt() : spot;
+  if (!dest) return toast('The staffer stays on the office floor — come back inside', 'warn');
+  const from = { x: at.x, y: at.y, z: at.z };
+  const to = { x: dest.x, y: spot?.y ?? 0, z: dest.z };
+  const way = beside ? [...wayTo(from, to), dest] : wayTo(from, to);
+  const which = staffer.call(model, way, beside ? 'back' : 'to');
+  const far = Math.hypot(at.x - dest.x, at.z - dest.z) > 2;
+  stafferAnnounced = which === 'coming' && far;
+  toast(which === 'back' ? '📋 Sent the staffer back to the queue' : far ? '📋 The staffer is on his way' : '📋 The staffer is here — click his clipboard');
+}
+
 /** F: hang a picture on a wall of this floor. There are no walls for them up on the roof. */
 function startHanging() {
   if (upTop) return toast('No walls to hang pictures on up here — take the elevator down to a floor', 'warn');
@@ -3734,6 +3800,12 @@ function frame(ts?: number) {
   }
 
   const camPos = camera.position;
+  const stafferWas = staffer.phase;
+  staffer.update(dt, player.pos);
+  if (stafferWas === 'to' && staffer.phase === 'here' && stafferAnnounced) {
+    stafferAnnounced = false;
+    toast('📋 The staffer is here — click his clipboard. U sends him back');
+  }
   for (const [id, v] of workerViews) {
     const desk = DESK_BY_ID.get(v.deskId)!;
     // A jumping worker holds still while you're near enough to read its card, and jumps again once you walk away.
@@ -3749,7 +3821,7 @@ function frame(ts?: number) {
   dog.update(dt);
   if (!upTop) updateBall(now, dt);
   if (!upTop) {
-    office.update(t, dt, [player.pos, ...[...remotes.values()].map((r) => r.person.root.position), ...departures.positions(), ...arrivals.positions()]);
+    office.update(t, dt, [player.pos, ...[...remotes.values()].map((r) => r.person.root.position), ...departures.positions(), ...arrivals.positions(), ...staffer.positions()]);
     office.stack.update(dt, [{ x: player.pos.x, y: player.pos.y, z: player.pos.z, grip }, ...[...remotes.values()].map((r) => ({ x: r.person.root.position.x, y: r.person.root.position.y, z: r.person.root.position.z, grip: r.grip }))], camera.position);
     office.jukebox.update(t, dt, sound.beat());
   }
@@ -3860,7 +3932,7 @@ void whoami().then(() => {
 });
 
 // Debug handle for quick checks from the console / headless screenshots.
-(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball };
+(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball, staffer };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;

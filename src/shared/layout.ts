@@ -104,13 +104,18 @@ export const STATIONS: DeskDef[] = [
 ];
 /** A board agent's kiosk: its top, and how far behind its middle (toward the wall) the agent stands. */
 export const KIOSK = { width: 0.8, depth: 0.5, height: 0.55, stand: 0.55 } as const;
-/** Each board agent's name and its color, the same whenever it's hired. */
-export const STATION_AGENT: Record<StationKind, { name: string; color: string }> = {
+/** Each board agent's name and its color, the same whenever it's hired. `label` is the nameplate, when that isn't the name. */
+export const STATION_AGENT: Record<StationKind, { name: string; color: string; label?: string }> = {
   issues: { name: 'Issues agent', color: '#ef476f' },
   pulls: { name: 'PR agent', color: '#118ab2' },
-  queue: { name: 'Queue agent', color: '#06d6a0' },
+  queue: { name: 'Queue agent', color: '#06d6a0', label: 'staffer/queue agent' },
   inbox: { name: 'Receptionist', color: '#ffd166' },
 };
+
+/** What floats over a board agent's head. The queue agent's name stays "Queue agent"; the label does not. */
+export function stationLabel(kind: StationKind): string {
+  return STATION_AGENT[kind].label ?? STATION_AGENT[kind].name;
+}
 
 /** The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks. */
 export const LOFT = { minX: 9, maxX: FLOOR.maxX, minZ: 8, maxZ: FLOOR.maxZ, y: 3, height: 2.8 } as const;
@@ -209,6 +214,11 @@ export const TV = { x: FLOOR.maxX - 0.1, y: 2.2, z: 0, width: 6.4, height: 3.6 }
  * workers it runs of the most it takes.
  */
 export const MACHINE_MONITOR = { x: FLOOR.minX, y: 2.2, z: -6, width: 2.3, height: 1.3 } as const;
+/**
+ * The top-CPU list, in the same column as the machine monitor and facing the desks. The west windows
+ * end at y = 3.3, so this sits above them rather than in the pier with the monitor.
+ */
+export const CPU_APPS = { x: FLOOR.minX, y: 4.25, z: -6, width: 2.3, height: 1.4 } as const;
 /** The lounge jukebox, against the east wall south of the TV, facing into the room. `y` is its speaker. */
 export const JUKEBOX = { x: FLOOR.maxX - 0.42, y: 0.75, z: 5.4, width: 1.3, depth: 0.72, height: 1.85 } as const;
 /** The arcade cabinet, against the east wall between the jukebox and the loft, facing into the room. `width` runs along the wall. */
