@@ -68,6 +68,8 @@ export interface ContentPiece {
   doneAt?: number;
 }
 
+import { cleanImages, cleanSubtasks, type TodoSubtask } from './todos.js';
+
 export interface ContentItem {
   id: string;
   title: string;
@@ -84,6 +86,9 @@ export interface ContentItem {
   at: number;
   /** When it last went to Published. */
   publishedAt?: number;
+  /** Its own to-dos, and pictures (see shared/todos.ts): shown once the board is double-clicked. */
+  subtasks?: TodoSubtask[];
+  images?: string[];
 }
 
 export type ContentAction =
@@ -97,6 +102,8 @@ export type ContentAction =
   | { action: 'formats'; id: string; formats: ContentFormat[] }
   /** A box ticked, or unticked. */
   | { action: 'check'; id: string; format: ContentFormat; done: boolean }
+  /** Its subtasks or pictures, replaced; an empty list takes them off. */
+  | { action: 'details'; id: string; subtasks?: TodoSubtask[]; images?: string[] }
   | { action: 'remove'; id: string }
   /** A removed card put back as it was (Undo). */
   | { action: 'restore'; item: ContentItem; index?: number };
@@ -185,6 +192,12 @@ export function checkContentAction(raw: unknown): ContentAction | null {
     }
     case 'check':
       return isContentFormat(a.format) && typeof a.done === 'boolean' ? { action: 'check', id, format: a.format, done: a.done } : null;
+    case 'details': {
+      const subtasks = a.subtasks === undefined ? undefined : cleanSubtasks(a.subtasks);
+      const images = a.images === undefined ? undefined : cleanImages(a.images);
+      if (subtasks === null || images === null || (subtasks === undefined && images === undefined)) return null;
+      return { action: 'details', id, ...(subtasks ? { subtasks } : {}), ...(images ? { images } : {}) };
+    }
     case 'remove':
       return { action: 'remove', id };
     default:
@@ -207,6 +220,8 @@ export function checkContentItem(raw: unknown): ContentItem | null {
   }
   const notes = cleanNotes(t.notes);
   const due = cleanDue(t.due);
+  const subtasks = t.subtasks === undefined ? null : cleanSubtasks(t.subtasks);
+  const images = t.images === undefined ? null : cleanImages(t.images);
   return {
     id: t.id,
     title,
@@ -217,6 +232,8 @@ export function checkContentItem(raw: unknown): ContentItem | null {
     ...(typeof t.by === 'string' && t.by.trim() ? { by: t.by.trim().slice(0, 60) } : {}),
     at: t.at,
     ...(t.stage === 'published' && typeof t.publishedAt === 'number' && Number.isFinite(t.publishedAt) ? { publishedAt: t.publishedAt } : {}),
+    ...(subtasks?.length ? { subtasks } : {}),
+    ...(images?.length ? { images } : {}),
   };
 }
 
@@ -292,6 +309,16 @@ export function applyContent(items: readonly ContentItem[], a: ContentAction, no
         const piece = was.pieces.find((p) => p.format === a.format);
         if (!piece || !!piece.done === a.done) return items;
         next = swap({ ...was, pieces: was.pieces.map((p) => (p === piece ? (a.done ? { format: p.format, done: true, doneAt: now } : { format: p.format }) : p)) });
+        break;
+      }
+      case 'details': {
+        const card: ContentItem = { ...was };
+        if (a.subtasks !== undefined) card.subtasks = a.subtasks;
+        if (a.images !== undefined) card.images = a.images;
+        if (!card.subtasks?.length) delete card.subtasks;
+        if (!card.images?.length) delete card.images;
+        if (JSON.stringify(card) === JSON.stringify(was)) return items;
+        next = swap(card);
         break;
       }
       case 'remove':
