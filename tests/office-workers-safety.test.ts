@@ -81,7 +81,7 @@ function worker(over: Partial<WorkerInfo> = {}): WorkerInfo {
 }
 
 /** The floor as the office has it, with a WorkerManager that sends workers home the way it does. */
-function office(root: string, workers: WorkerInfo[], opts: { tasks?: QueueTask[]; pulls?: Partial<GhPull>[]; fresh?: BranchPull[]; get?: (id: string) => WorkerInfo | undefined } = {}) {
+function office(root: string, workers: WorkerInfo[], opts: { tasks?: QueueTask[]; pulls?: Partial<GhPull>[]; fresh?: BranchPull[] | ((branch: string) => BranchPull[]); get?: (id: string) => WorkerInfo | undefined } = {}) {
   const killed: { id: string; cleanup?: WorktreeCleanup }[] = [];
   const asked: string[] = [];
   const floor: WorkersFloor = {
@@ -102,7 +102,7 @@ function office(root: string, workers: WorkerInfo[], opts: { tasks?: QueueTask[]
     pulls: () => (opts.pulls ?? []) as GhPull[],
     async branchPulls(branch) {
       asked.push(branch);
-      return opts.fresh ?? [];
+      return typeof opts.fresh === 'function' ? opts.fresh(branch) : (opts.fresh ?? []);
     },
   };
   return { floor, killed, asked };
@@ -284,6 +284,48 @@ test('commits its merged pull request delivered are not unpushed, even once GitH
   assert.ok(r.ok);
   assert.equal(r.cleanup, 'all');
   await r.done;
+});
+
+test('right after gh pr merge --delete-branch, before the board has heard, GitHub is asked before refusing', async () => {
+  const f = fixture();
+  const wt = f.hire('pixel-0011');
+  const head = commit(wt.abs, 'login');
+  git(wt.abs, 'push', '-q', 'origin', wt.branch);
+  // Merged on GitHub and its branch deleted there; this checkout hasn't fetched, and the board still says open.
+  git(wt.abs, 'push', '-q', 'origin', '--delete', wt.branch);
+  const merged: BranchPull[] = [{ number: 11, url: 'https://github.com/me/app/pull/11', state: 'MERGED', headRefName: wt.branch, headRefOid: head }];
+  const pixel = worker({ worktree: wt });
+  const { floor, asked, killed } = office(f.root, [pixel], { pulls: [{ number: 11, state: 'OPEN', headRefName: wt.branch, headRefOid: head }], fresh: merged });
+  const r = await clockOut(floor, pixel.id, true);
+  assert.ok(r.ok, r.ok ? '' : r.error);
+  assert.equal(r.cleanup, 'all');
+  // Asked once, for the unpushed count and the merge check both.
+  assert.deepEqual(asked, [wt.branch]);
+  assert.deepEqual(killed, [{ id: pixel.id, cleanup: 'all' }]);
+  await r.done;
+  assert.equal(existsSync(wt.abs), false);
+  assert.equal(hasBranch(f.root, wt.branch), false);
+});
+
+test('files that appear while GitHub is being asked stop it: nothing new is deleted with the worktree', async () => {
+  const f = fixture();
+  const wt = f.hire('pixel-0012');
+  const head = commit(wt.abs, 'login');
+  git(wt.abs, 'push', '-q', 'origin', wt.branch);
+  const pixel = worker({ worktree: wt });
+  // An editor saves a file while the office waits on GitHub, which then says the PR merged.
+  const { floor, killed } = office(f.root, [pixel], {
+    fresh: (branch) => {
+      writeFileSync(path.join(wt.abs, 'late.txt'), 'saved just now\n');
+      return [{ number: 12, url: 'https://github.com/me/app/pull/12', state: 'MERGED', headRefName: branch, headRefOid: head }];
+    },
+  });
+  const r = refused(await clockOut(floor, pixel.id, true));
+  assert.equal(r.status, 409);
+  assert.match(r.error, /^Pixel has 1 uncommitted change in \.agent-office[\\/]worktrees[\\/]pixel-0012: clocking it out would leave that work unshipped/);
+  assert.deepEqual(killed, []);
+  assert.ok(existsSync(path.join(wt.abs, 'late.txt')));
+  assert.ok(hasBranch(f.root, wt.branch));
 });
 
 test('checks again after asking git: a worker prompted meanwhile stays', async () => {

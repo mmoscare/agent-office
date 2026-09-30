@@ -224,16 +224,30 @@ async function unmerged(c: WorkerCheckout, heads: string[]): Promise<string | un
   return missing === undefined ? `the office couldn't compare ${c.branch} with ${c.base}` : `${c.branch} has ${plural(missing, 'commit')} not merged into ${c.base}`;
 }
 
+/**
+ * The heads of these checkouts' merged pull requests as GitHub has them now: the board may not have
+ * caught up with a merge a moment ago. Asked once, however often it's called.
+ */
+function freshHeads(floor: WorkersFloor, checkouts: WorkerCheckout[]): () => Promise<string[]> {
+  let asked: Promise<string[]> | undefined;
+  return () =>
+    (asked ??= Promise.all(
+      checkouts.map(async (c) => {
+        if (!c.branch) return [];
+        const pulls = await floor.branchPulls(c.branch, c.repo).catch(() => [] as BranchPull[]);
+        return pulls.filter((p) => p.state === 'MERGED' && p.headRefName === c.branch && p.headRefOid).map((p) => p.headRefOid!);
+      }),
+    ).then((heads) => heads.flat()));
+}
+
 /** Why `w`'s worktree and branch should stay, or undefined when every branch has merged and they can go. */
-async function keepReason(floor: WorkersFloor, w: WorkerInfo, checkouts: WorkerCheckout[], heads: string[]): Promise<string | undefined> {
+async function keepReason(w: WorkerInfo, checkouts: WorkerCheckout[], heads: string[], fresh: () => Promise<string[]>): Promise<string | undefined> {
   if (!w.worktree && !w.workspace) return `${w.name} works in the floor's own checkout, so there's no worktree to remove`;
   for (const c of checkouts) {
     let why = await unmerged(c, heads);
     if (why && c.branch) {
-      // The board may not have caught up with a merge a moment ago: ask GitHub itself.
-      const fresh = await floor.branchPulls(c.branch, c.repo).catch(() => [] as BranchPull[]);
-      const merged = fresh.filter((p) => p.state === 'MERGED' && p.headRefName === c.branch && p.headRefOid).map((p) => p.headRefOid!);
-      if (merged.length) why = await unmerged(c, merged);
+      const merged = await fresh();
+      if (merged.length) why = await unmerged(c, [...heads, ...merged]);
     }
     if (why) return why;
   }
@@ -267,11 +281,27 @@ export async function clockOut(floor: WorkersFloor, id: string, removeWorktree: 
   const blocked = clockOutBlock(w, floor.tasks());
   if (blocked) return { ok: false, status: 409, error: blocked };
   const checkouts = workerCheckouts(floor.dir, w, floor.branch);
-  const heads = mergedHeads(floor.pulls(), checkouts);
-  const stranded = strandedWork(w, checkouts, await Promise.all(checkouts.map((c) => checkoutWork(c, heads))));
+  const fresh = freshHeads(floor, checkouts);
+  let heads = mergedHeads(floor.pulls(), checkouts);
+  const look = () => Promise.all(checkouts.map((c) => checkoutWork(c, heads)));
+  let works = await look();
+  // Commits no remote has may be a pull request merged a moment ago with its branch deleted
+  // (gh pr merge --delete-branch), before the board has heard: ask GitHub, then count again.
+  if (strandedWork(w, checkouts, works) && works.some((s) => s.unpushed && !s.dirty && !s.error)) {
+    const merged = await fresh();
+    if (merged.length) {
+      heads = [...heads, ...merged];
+      works = await look();
+    }
+  }
+  const stranded = strandedWork(w, checkouts, works);
   if (stranded) return { ok: false, status: 409, error: stranded };
-  const kept = removeWorktree ? await keepReason(floor, w, checkouts, heads) : undefined;
-  // Someone may have prompted it, or opened its terminal, while git was being asked.
+  const kept = removeWorktree ? await keepReason(w, checkouts, heads, fresh) : undefined;
+  // Files may have changed while GitHub was being asked (an editor, a process of its own): look again,
+  // last thing, since sending it home with 'all' deletes the worktree.
+  const changed = strandedWork(w, checkouts, await look());
+  if (changed) return { ok: false, status: 409, error: changed };
+  // Someone may have prompted it, or opened its terminal, meanwhile: checked with nothing to wait on before it goes.
   const now = floor.workers.get(id);
   const late = now ? clockOutBlock(now, floor.tasks()) : `${w.name} has already gone home`;
   if (late) return { ok: false, status: 409, error: late };
