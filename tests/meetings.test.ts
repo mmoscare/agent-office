@@ -160,7 +160,7 @@ test('sending a worker home stops the meeting and names who left', async (t) => 
   await f.kill(f.room.state().current!.seats[2].workerId!);
   const m = f.room.state().current!;
   assert.equal(m.status, 'stopped');
-  assert.match(m.reason!, /the Skeptic \(Worker 3\) was sent home/);
+  assert.match(m.reason!, /the Skeptic \(Worker 3\) clocked out/);
 });
 
 test('red / blue ends early when red finds nothing more', (t) => {

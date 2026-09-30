@@ -28,7 +28,7 @@ function outcome(t: QueueTask): string {
     case 'exited':
       return t.error ? `stopped: ${t.error}` : 'stopped before finishing';
     case 'killed':
-      return 'sent home';
+      return 'clocked out';
     case 'failed':
       return `couldn't start: ${t.error ?? 'unknown error'}`;
     default:
@@ -109,8 +109,8 @@ export function openQueue(net: Net, actions: QueueActions) {
         buttons.push(
           h('button.btn', {
             type: 'button',
-            title: 'Send the worker home; the task counts as stopped',
-            onclick: () => confirmDialog(`Stop ${w.name}?`, `This sends ${w.name} home and stops the task. You can requeue it afterwards.`, 'Stop', () => net.send({ t: 'worker.kill', workerId: w.id })),
+            title: 'Clock the worker out; the task counts as stopped',
+            onclick: () => confirmDialog(`Clock ${w.name} out?`, `This clocks ${w.name} out and stops the task. You can requeue it, and hire them back, afterwards.`, 'Clock out', () => net.send({ t: 'worker.kill', workerId: w.id }), 'primary'),
           }, '⏹ Stop'),
         );
       }
