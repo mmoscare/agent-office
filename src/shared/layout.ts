@@ -119,6 +119,11 @@ export function stationLabel(kind: StationKind): string {
 
 /** The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks. */
 export const LOFT = { minX: 9, maxX: FLOOR.maxX, minZ: 8, maxZ: FLOOR.maxZ, y: 3, height: 2.8 } as const;
+/**
+ * Where O stands you, and where T's circle of waiting seats ends: in the boss's office, clear of the
+ * desk, the telescope and the glass, looking west over the floor. `facing` is the player's heading.
+ */
+export const OFFICE_SPOT = { x: 11.2, y: LOFT.y, z: 9.4, facing: -Math.PI / 2, pitch: -0.28 } as const;
 /** Its stairs climb east along the south wall and arrive at the loft's west door. */
 export const STAIRS = { fromX: 3, toX: LOFT.minX, minZ: 11.2, maxZ: FLOOR.maxZ, steps: 15 } as const;
 /**
@@ -214,6 +219,11 @@ export const TV = { x: FLOOR.maxX - 0.1, y: 2.2, z: 0, width: 6.4, height: 3.6 }
  * workers it runs of the most it takes.
  */
 export const MACHINE_MONITOR = { x: FLOOR.minX, y: 2.2, z: -6, width: 2.3, height: 1.3 } as const;
+/**
+ * The top-CPU list, in the same column as the machine monitor and facing the desks. The west windows
+ * end at y = 3.3, so this sits above them rather than in the pier with the monitor.
+ */
+export const CPU_APPS = { x: FLOOR.minX, y: 4.25, z: -6, width: 2.3, height: 1.4 } as const;
 /** The lounge jukebox, against the east wall south of the TV, facing into the room. `y` is its speaker. */
 export const JUKEBOX = { x: FLOOR.maxX - 0.42, y: 0.75, z: 5.4, width: 1.3, depth: 0.72, height: 1.85 } as const;
 /** The arcade cabinet, against the east wall between the jukebox and the loft, facing into the room. `width` runs along the wall. */
@@ -249,6 +259,11 @@ export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[]
  * edge is `bottom` above the floor.
  */
 export const WHITEBOARD = { x: 5.4, z: -5.4, width: 4, height: 2.2, bottom: 0.5 } as const;
+/**
+ * The 🏢 Autonomous Tasks whiteboard: another on wheels, south of the drawing one, between the desks
+ * and the lounge, facing into the room (+z, rotY 0). Its face is 2:1, like the To Do board's texture.
+ */
+export const AUTONOMOUS_BOARD = { x: 5.4, z: 5.4, width: 4, height: 2, bottom: 0.6, rotY: 0, label: '🏢 Autonomous Tasks' } as const;
 
 /**
  * The bottom floor of the building is its second storey: the street, and the open garage under the
