@@ -64,6 +64,8 @@ import { EMOTE_EVERY, EmoteBucket, isEmote } from '../shared/emotes.js';
 import { isThemePick } from '../shared/theme.js';
 import { PROMPTS, PROMPT_MAX, isPromptId } from '../shared/prompts.js';
 import { ROOF, isDrink } from '../shared/rooftop.js';
+import { BOTS, botDesk } from '../shared/bots.js';
+import { handleVp } from './vp.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -319,6 +321,7 @@ export async function startServer(cfg: Config) {
     if (url.pathname === '/office/inbox') return officeInbox(req, res, url);
     if (url.pathname === '/office/mail') return officeMail(req, res, url);
     if (url.pathname === '/office/ask') return officeAsk(req, res, url);
+    if (url.pathname === '/office/vp') return officeVp(req, res, url);
     if (req.method !== 'POST' || !['/hooks/claude', '/hooks/opencode', '/hooks/codex'].includes(url.pathname)) return send(res, 404, { ok: false });
     let payload: unknown = {};
     try {
@@ -542,6 +545,29 @@ export async function startServer(cfg: Config) {
     return send(res, 200, { ok: true, agent: STATION_AGENT[to].name, hired: r.hired });
   };
   /**
+   * The VP, and only him (office-vp): GET ?view=status|workers|job&id=…; POST {"action": "sweep" |
+   * "verify" | "merge" | "retry" | "nudge" | "wake" | "duty", …}. The mechanics are in vp.ts.
+   */
+  const officeVp = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    const who = boardAgent(req, res, url, 'office-vp');
+    if (!who) return;
+    const { floor, agent } = who;
+    if (DESK_BY_ID.get(agent.deskId)?.station !== 'vp') return send(res, 403, { error: 'Only the VP can use office-vp' });
+    let body: Record<string, unknown> | undefined;
+    if (req.method === 'POST') {
+      try {
+        body = JSON.parse((await readBody(req, 64 * 1024)) || '{}');
+      } catch {
+        return send(res, 400, { error: 'Send JSON: {"action": "sweep"}' });
+      }
+    }
+    // Whoever last typed to the VP is who asked him.
+    const asked = floor.workers.get(agent.id)?.lastInput?.by;
+    const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name });
+    if (req.method === 'POST' && r.status === 200 && body?.action === 'duty') toastFloor(floor, body.on === true ? `👔 The ${agent.name} is on duty: he sweeps the PRs by himself` : `👔 The ${agent.name} is off duty`);
+    return send(res, r.status, r.body);
+  };
+  /**
    * The in-tray door: POST /api/inbox from outside the office, with the token an admin made as the
    * bearer token (or ?token=). A JSON body {"title", "text", "from"} or a text body becomes a note;
    * anything else is saved as a file named by its X-Filename header (or ?name=). ?floor= says which
@@ -748,6 +774,7 @@ export async function startServer(cfg: Config) {
     peers: (floor) => [...clients.values()].filter((c) => c.peer.floor === floor.id).map((c) => c.peer),
     inboxDoor: () => door.open,
     leaveOnMerge: () => leaveOnMerge.on,
+    pressure: () => machine.state().pressure,
   };
   const openFloor = (def: FloorDef): Floor | undefined => {
     if (!existsSync(def.dir)) {
@@ -830,6 +857,7 @@ export async function startServer(cfg: Config) {
     plans: floor?.plans.state() ?? { revision: 0, items: [] },
     inbox: floor?.inbox.state() ?? { revision: 0, items: [], dir: '', door: door.open },
     content: floor?.content ? [...floor.content.list()] : null,
+    vp: floor?.vp.view(),
   });
   /** The rooftop bar: nobody works up there, so it has none of a floor's things. */
   const roofView = (): FloorView => ({ ...floorView(undefined), floor: ROOF });
@@ -2314,6 +2342,31 @@ export async function startServer(cfg: Config) {
         toastAll(on ? `🏠 ${who} set workers to go home by themselves once their pull request merges` : `🪑 ${who} set workers whose pull request merged to stay until they're clocked out`);
         // The ones already merged go now.
         if (on) for (const f of floors.values()) f.sendLandedHome();
+        break;
+      }
+      case 'vp.deploy': {
+        const floor = here();
+        if (!floor) break;
+        if (floor.workers.list().some((w) => w.deskId === botDesk('vp'))) {
+          warn(c, `The ${BOTS.vp.name} is already on this floor: walk up to his kiosk to ask him something`);
+          break;
+        }
+        const r = floor.workers.station(botDesk('vp'), who, BOTS.vp.deployPrompt);
+        if (typeof r === 'string') warn(c, r);
+        else toastFloor(floor, `👔 ${who} deployed the ${BOTS.vp.name} on this floor`);
+        break;
+      }
+      case 'vp.duty': {
+        const floor = here();
+        if (!floor) break;
+        // Standing duty is standing approval for verified merges: the owner's to give.
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can put the VP on duty: on duty he merges verified PRs by himself');
+        const on = msg.on === true;
+        const every = typeof msg.everyMin === 'number' ? msg.everyMin * 60_000 : undefined;
+        if (on === !!floor.vp.duty?.on && every === undefined) break;
+        const err = floor.vp.setDuty(on, who, every);
+        if (err) return warn(c, err);
+        toastFloor(floor, on ? `👔 ${who} put the ${BOTS.vp.name} on duty: he sweeps the PRs every ${Math.round(floor.vp.duty!.everyMs / 60_000)} minutes and merges what verifies` : `👔 ${who} took the ${BOTS.vp.name} off duty`);
         break;
       }
       case 'machine.limit': {
