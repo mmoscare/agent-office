@@ -205,6 +205,22 @@ try {
   assert.deepEqual(await titles('edit'), ['Building a 3D office in three.js']);
   await win.screenshot({ path: path.join(screenshotDir, 'board.png') });
 
+  // Double-click the board around the cards: each card shows its own subtasks and pictures (its notes
+  // are on it already), and again puts them away (ui/todo-details.ts, as on the To Do boards).
+  assert.equal(await win.locator('.todo-details').count(), 0, 'as it always was, to start with');
+  await win.locator('.ck-body').dblclick({ position: { x: 4, y: 4 } });
+  await win.locator('.todo-details').first().waitFor();
+  assert.equal(await win.locator('.todo-details').count(), await win.locator('.ck-card').count());
+  assert.equal(await win.locator('.todo-details textarea.todo-notes').count(), 0, 'notes stay where they were');
+  const detailed = win.locator('.ck-card', { hasText: 'Claude vs Codex' });
+  await detailed.locator('input.todo-sub-add').fill('Record both runs');
+  await detailed.locator('input.todo-sub-add').press('Enter');
+  await detailed.locator('.todo-sub', { hasText: 'Record both runs' }).waitFor();
+  assert.ok(changes.some((c) => c.action === 'details' && c.subtasks?.[0]?.text === 'Record both runs'));
+  await win.screenshot({ path: path.join(screenshotDir, 'board-details.png') });
+  await win.locator('.ck-body').dblclick({ position: { x: 4, y: 4 } });
+  await page.waitForFunction(() => !document.querySelector('.ck-modal .todo-details'));
+
   // Someone else on the floor sees it all, and their changes reach this window live.
   const other = await context.newPage();
   other.setDefaultTimeout(30000);

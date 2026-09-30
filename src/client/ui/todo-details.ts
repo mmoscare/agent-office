@@ -1,25 +1,26 @@
-import { newTodoId, TODO_IMAGES_MAX, TODO_NOTES_MAX, TODO_SUBTASKS_MAX, TODO_TEXT_MAX, type TodoAction, type TodoBoardId, type TodoItem, type TodoSubtask } from '../../shared/todos';
-import { store } from '../state';
+import { newTodoId, TODO_IMAGES_MAX, TODO_NOTES_MAX, TODO_SUBTASKS_MAX, TODO_TEXT_MAX, type TodoDetails, type TodoSubtask } from '../../shared/todos';
 import { h, toast } from './dom';
 
 // A kanban card's notes, subtasks and pictures (see shared/todos.ts). The boards look just as they
 // always did until you double-click around the cards: then every card shows its details, until you
-// double-click again. Each board (your To Do, the Autonomous Tasks) remembers that on its own, for
-// as long as the page is open.
+// double-click again. Each board (your To Do, the Autonomous Tasks, the Content Kanban) remembers
+// that on its own, for as long as the page is open.
 
-const shown: Record<TodoBoardId, boolean> = { mine: false, autonomous: false };
-const listeners = new Set<{ board: TodoBoardId; fn: () => void }>();
+/** Which board: 'mine', 'autonomous' or 'content'. */
+export type DetailsBoard = string;
+const shown = new Map<DetailsBoard, boolean>();
+const listeners = new Set<{ board: DetailsBoard; fn: () => void }>();
 
 /** Whether `board`'s cards show their notes, subtasks and pictures. */
-export function todoDetailsShown(board: TodoBoardId): boolean {
-  return shown[board];
+export function todoDetailsShown(board: DetailsBoard): boolean {
+  return shown.get(board) ?? false;
 }
-export function setTodoDetailsShown(board: TodoBoardId, on: boolean) {
-  if (shown[board] === on) return;
-  shown[board] = on;
+export function setTodoDetailsShown(board: DetailsBoard, on: boolean) {
+  if (todoDetailsShown(board) === on) return;
+  shown.set(board, on);
   for (const l of [...listeners]) if (l.board === board) l.fn();
 }
-export function onTodoDetails(board: TodoBoardId, fn: () => void): () => void {
+export function onTodoDetails(board: DetailsBoard, fn: () => void): () => void {
   const l = { board, fn };
   listeners.add(l);
   return () => listeners.delete(l);
@@ -75,28 +76,31 @@ export async function uploadTodoImage(file: File): Promise<string> {
   return body.id;
 }
 
-const listOf = (board: TodoBoardId) => (board === 'autonomous' ? store.autonomous : store.todos);
-/** The card as it is now, not as it was when it was drawn. */
-const now = (board: TodoBoardId, id: string) => listOf(board).find((t) => t.id === id);
-
 /** Notes typed but not sent yet, per card: sent a moment after typing stops, or when the box loses the cursor. */
 const typing = new Map<string, { timer: ReturnType<typeof setTimeout>; value: string; send: () => void }>();
 /** Cards with pictures on their way up, and how many. */
 const uploading = new Map<string, number>();
 
 export interface DetailsContext {
-  board: TodoBoardId;
-  change: (a: TodoAction) => void;
+  /** Names the card among every board's, so what's typed in it lasts across redraws. */
+  key: string;
+  /** Saves whichever of the card's notes, subtasks and pictures `d` names. */
+  save(d: TodoDetails): void;
+  /** The card's details as they are now, not as they were when it was drawn. */
+  current(): TodoDetails | undefined;
+  /** Draws the board again. */
+  redraw(): void;
+  /** False where the card shows its notes itself (the Content Kanban's). */
+  notes?: boolean;
 }
 
 /** A card's notes, subtasks and pictures, to put on the card while the board shows them. */
-export function cardDetails(item: TodoItem, ctx: DetailsContext): HTMLElement {
-  const { board, change } = ctx;
-  const key = `${board}:${item.id}`;
+export function cardDetails(item: TodoDetails, ctx: DetailsContext): HTMLElement {
+  const { key, save, current, redraw } = ctx;
   const subtasks = item.subtasks ?? [];
   const images = item.images ?? [];
-  const setSubs = (next: TodoSubtask[]) => change({ action: 'details', id: item.id, subtasks: next });
-  const subsNow = () => now(board, item.id)?.subtasks ?? [];
+  const setSubs = (next: TodoSubtask[]) => save({ subtasks: next });
+  const subsNow = () => current()?.subtasks ?? [];
 
   // Subtasks: tick them off, double-click one to reword it, ✕ to take it off.
   const done = subtasks.filter((s) => s.done).length;
@@ -158,7 +162,7 @@ export function cardDetails(item: TodoItem, ctx: DetailsContext): HTMLElement {
     const value = notes.value;
     const was = typing.get(key);
     if (was) clearTimeout(was.timer);
-    const send = () => change({ action: 'details', id: item.id, notes: value });
+    const send = () => save({ notes: value });
     typing.set(key, { value, send, timer: setTimeout(sendNotes, 700) });
   });
   notes.addEventListener('blur', sendNotes);
@@ -176,7 +180,7 @@ export function cardDetails(item: TodoItem, ctx: DetailsContext): HTMLElement {
     const x = h('button.btn.todo-mini.todo-pic-x', { type: 'button', title: 'Take this picture off', 'aria-label': 'Remove picture' }, '✕');
     x.addEventListener('click', (e) => {
       e.preventDefault();
-      change({ action: 'details', id: item.id, images: (now(board, item.id)?.images ?? []).filter((p) => p !== id) });
+      save({ images: (current()?.images ?? []).filter((p) => p !== id) });
     });
     pics.append(h('a.todo-pic', { href: todoImageUrl(id), target: '_blank', rel: 'noopener', title: 'Open it full size' }, h('img', { src: todoImageUrl(id), alt: 'Picture on this card', loading: 'lazy' }), x));
   }
@@ -185,17 +189,16 @@ export function cardDetails(item: TodoItem, ctx: DetailsContext): HTMLElement {
   const addPics = async (files: File[]) => {
     const pictures = files.filter((f) => f.type.startsWith('image/'));
     if (!pictures.length) return;
-    const room = TODO_IMAGES_MAX - (now(board, item.id)?.images?.length ?? 0) - (uploading.get(key) ?? 0);
+    const room = TODO_IMAGES_MAX - (current()?.images?.length ?? 0) - (uploading.get(key) ?? 0);
     if (room <= 0) return void toast(`A card takes ${TODO_IMAGES_MAX} pictures at most`, 'warn');
     const batch = pictures.slice(0, room);
     uploading.set(key, (uploading.get(key) ?? 0) + batch.length);
-    const redraw = () => store.emit(board === 'autonomous' ? 'autonomous' : 'todos');
     redraw(); // to say they're on their way
     for (const file of batch) {
       try {
         const id = await uploadTodoImage(file);
-        const card = now(board, item.id);
-        if (card) change({ action: 'details', id: item.id, images: [...(card.images ?? []), id] });
+        const card = current();
+        if (card) save({ images: [...(card.images ?? []), id] });
       } catch (err) {
         toast(`🖼 ${(err as Error).message}`, 'error');
       } finally {
@@ -221,8 +224,8 @@ export function cardDetails(item: TodoItem, ctx: DetailsContext): HTMLElement {
     h('div.todo-details-head', {}, h('span', {}, '☑ Subtasks'), subtasks.length ? h('span.todo-sub-count', { class: done === subtasks.length ? 'all' : '' }, `${done}/${subtasks.length}`) : null),
     subList,
     addSub,
-    h('div.todo-details-head', {}, h('span', {}, '📝 Notes')),
-    notes,
+    ctx.notes === false ? null : h('div.todo-details-head', {}, h('span', {}, '📝 Notes')),
+    ctx.notes === false ? null : notes,
     h('div.todo-details-head', {}, h('span', {}, '🖼 Pictures'), addPic, file),
     pics,
   );

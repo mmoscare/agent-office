@@ -244,6 +244,11 @@ export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[]
  * edge is `bottom` above the floor.
  */
 export const WHITEBOARD = { x: 5.4, z: -5.4, width: 4, height: 2.2, bottom: 0.5 } as const;
+/**
+ * The 🏢 Autonomous Tasks whiteboard: another on wheels, south of the drawing one, between the desks
+ * and the lounge, facing into the room (+z, rotY 0). Its face is 2:1, like the To Do board's texture.
+ */
+export const AUTONOMOUS_BOARD = { x: 5.4, z: 5.4, width: 4, height: 2, bottom: 0.6, rotY: 0, label: '🏢 Autonomous Tasks' } as const;
 
 /**
  * The bottom floor of the building is its second storey: the street, and the open garage under the

@@ -87,7 +87,8 @@ const cleanNotes = (value: unknown): string | null => {
   const notes = value.replace(/\r\n?/g, '\n').replace(/\s+$/, '');
   return notes.length <= TODO_NOTES_MAX ? notes : null;
 };
-const cleanSubtasks = (value: unknown): TodoSubtask[] | null => {
+/** Subtasks as sent or saved, if they all read; null if any doesn't. */
+export const cleanSubtasks = (value: unknown): TodoSubtask[] | null => {
   if (!Array.isArray(value) || value.length > TODO_SUBTASKS_MAX) return null;
   const seen = new Set<string>();
   const out: TodoSubtask[] = [];
@@ -101,7 +102,8 @@ const cleanSubtasks = (value: unknown): TodoSubtask[] | null => {
   }
   return out;
 };
-const cleanImages = (value: unknown): string[] | null => {
+/** Picture names as sent or saved, each once, if they all read; null if any doesn't. */
+export const cleanImages = (value: unknown): string[] | null => {
   if (!Array.isArray(value) || value.length > TODO_IMAGES_MAX) return null;
   if (!value.every((v) => typeof v === 'string' && TODO_IMAGE_RE.test(v))) return null;
   return [...new Set(value as string[])];

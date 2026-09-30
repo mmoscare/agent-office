@@ -270,7 +270,12 @@ export function mountTodoBoard(net: Net, board: TodoBoardId = 'mine'): TodoBoard
     );
     // Notes, subtasks and pictures, while the board shows them. Working in them doesn't pick the card up.
     if (todoDetailsShown(board)) {
-      const details = cardDetails(item, { board, change });
+      const details = cardDetails(item, {
+        key: `${board}:${item.id}`,
+        save: (d) => change({ action: 'details', id: item.id, ...d }),
+        current: () => items().find((t) => t.id === item.id),
+        redraw: render,
+      });
       details.addEventListener('pointerdown', () => (card.draggable = false));
       card.addEventListener('pointerup', () => (card.draggable = true));
       card.addEventListener('focusout', () => (card.draggable = true));
@@ -460,7 +465,8 @@ export function openAutonomousBoard(net: Net) {
   );
   const modal = openModal(el, { doing: '🏢 at the Autonomous Tasks board', onClose: () => board.destroy() });
   close.addEventListener('click', () => modal.close());
-  board.focus();
+  // Once the E that opened it is done with, so it isn't typed into the add box.
+  requestAnimationFrame(() => board.focus());
 }
 
 /** What's Active on the Autonomous Tasks board. */

@@ -1,64 +1,103 @@
-# Handoff: Autonomous Tasks whiteboard + kanban card details (IN PROGRESS)
+# Handoff: 🏢 Autonomous Tasks whiteboard + hidden notes/subtasks/pictures on every kanban
 
-Branch: `office/widget-8706` (worktree). Not committed, not pushed, no PR yet. Nothing has been typechecked, built or tested.
+Branch: `office/widget-8706` → PR into `personal`.
 
 ## Request
-1. Add another whiteboard called "Autonomous Tasks". It should look exactly like the To Do kanban and hold every task from the owner's Notion page "Autonomous Tasks" (data source `collection://204dbaf9-875f-83e0-b23f-87b58c018e65`, 86 rows).
-2. Every kanban (the To Do on the issues wall and the new board) gets notes, images and subtasks on each card. They stay hidden until you double-click the cork background, and a second double-click hides them again.
+1. **Autonomous Tasks board.** Add another whiteboard called "Autonomous Tasks". It should look exactly like the To Do kanban and carry every task from the owner's Notion page "Autonomous Tasks" (86 rows).
+2. **Card details on every kanban board.** This covers the To Do board on the issues wall, the new board and the 🎬 Content Kanban. Cards also take notes, images and subtasks. These stay hidden, so a board looks as it does today, until you double-click the board's background (the cork). Double-click again to hide them.
 
-## Done so far (uncommitted)
-- `src/shared/todos.ts`: `TodoBoardId` ('mine' | 'autonomous'), `TodoDetails` (notes, subtasks, images) and the `details` action. `add` also carries details, so Undo restores them. Validation and limits are in place.
-- `src/server/todos.ts`: the constructor takes a file name.
-- `src/server/todo-images.ts` (new): stores pictures in `.agent-office/todo-images/<sha>.<ext>`.
-- `src/server/server.ts`:
-  - A second `Todos` store in `autonomous.json`, owner `'office'`, shared by the whole office.
-  - The `todos` message (board `autonomous`) is sent on arrival.
-  - The `todo` handler branches on `msg.board`.
-  - New route `GET/POST /api/todo-image`.
-- `src/shared/protocol.ts`: an optional `board` on the `todo` and `todos` messages.
-- `src/client/state.ts`: `autonomous`, `autonomousPending` and the 'autonomous' topic.
+## Outcome
+### The whiteboard
+- A new rolling whiteboard stand called **🏢 Autonomous Tasks**:
+  - It stands south of the drawing whiteboard, between the south desks and the lounge, facing into the room. The position is `AUTONOMOUS_BOARD` in `shared/layout.ts` (x 5.4, z 5.4).
+  - Its face draws the list with the To Do wall's own texture: four columns, Active / Urgent / Not urgent / Completed.
+- Press **E** at it, or use ☰ → 🏢 Autonomous Tasks, to open a window with exactly the To Do board's kanban. It uses the same component, `mountTodoBoard(net, 'autonomous')`.
+- There is **one list for the whole office**. It is saved in the office's `.agent-office/autonomous.json` under the owner key `office`, and every connected window gets its changes live.
+
+### Card details on all three kanbans
+- Double-click the board around the cards (the cork, the gaps, the header strip) to reveal the details. Double-clicking a card still edits the card.
+- **Subtasks:** tick them off, double-click one to reword it, ✕ to remove it. A done/total count sits in the details header.
+- **Notes:** free text, line breaks kept, saved about 0.7 s after typing stops or when the box loses the cursor. The Content Kanban already shows its notes on the card, so its details panel has only subtasks and pictures.
+- **Pictures:** add them with 🖼 Add picture, by pasting, or by dropping files onto the card. Click a thumbnail to open it full size.
+  - Pictures over 1600 px or 1.5 MB are shrunk to JPEG in the browser first.
+  - They are stored in `.agent-office/todo-images/<sha256-32>.<ext>`.
+  - They are served at `GET /api/todo-image?id=` (sign-in required, sandboxed CSP) and uploaded with `POST /api/todo-image` (same-origin only). Only PNG, JPEG, GIF and WebP are accepted, checked by magic bytes; SVG is refused.
+- Each board remembers on its own whether details are revealed, while the page is open. The default is hidden.
+- While details are revealed, the wall texture adds a `☑ 2/5 · 📝 notes · 🖼 1` line under each card that has details. This applies to the To Do wall and the Autonomous stand; the Content Kanban's stand texture is unchanged.
+
+### The Notion import (data, not code: the repo is public)
+All 86 Notion tasks were written into the **live office's data folder**, `C:\Users\Owner\Documents\Development\Personal-Portfolio\.agent-office\autonomous.json`, plus 9 unique pictures in `todo-images/`. That folder is not a git repo. The running office ignores the file until it restarts on this branch's build.
+
+- **Columns:**
+
+  | Notion | Column | Cards |
+  |---|---|---|
+  | Priority, or Priority property High | Urgent | 15 |
+  | Important/Not Urgent, Not Urgent/Important, Other Important, no status | Not urgent | 53 |
+  | Archive | Completed | 18 |
+
+  Active is left empty for the owner to start things.
+- **Each card's notes** start with `Notion: <status> · Priority <p> · Due MM/DD/YYYY`. The Notion page body follows, when there is one (11 pages had one).
+- **Long titles:** titles over 280 characters are shortened on the card with "…", and the full text goes into the notes under "Full task:" (8 cards). Multi-line titles are also kept in full there.
+- **Blank titles:** the 2 blank Notion rows are "Untitled (blank in Notion)".
+- **Checklists and pictures:** Notion checkbox blocks became subtasks (2 cards). Page images became pictures; 10 files turned out to be 9 unique pictures.
+- **Ordering and dates:** cards are ordered within a column like Notion's board (latest due first, then newest). `at` is Notion's createdTime.
+- **Card ids** are the Notion page ids, so a later re-sync can match cards.
+- The import script and the raw export live only in the session scratchpad. They are not in the repo, because the task text is private and the repo is public.
+
+## Key files
+- `src/shared/todos.ts`:
+  - `TodoBoardId`, `TodoDetails` and `TodoSubtask`.
+  - The `details` action.
+  - `add` carries details, so Undo restores them.
+  - Validation and limits: notes 20k, 100 subtasks, 20 pictures.
+  - `cleanSubtasks` and `cleanImages` are exported.
+- `src/server/todos.ts`: the file name is now a parameter. `src/server/todo-images.ts` (new) is the picture store. `src/server/server.ts` has the second store, sends it on arrival, branches the `todo` message on `board`, and adds the `/api/todo-image` route.
+- `src/shared/content-kanban.ts`: `subtasks` and `images` on `ContentItem`, plus a `details` action.
+- `src/shared/protocol.ts`: optional `board` on `todo` and `todos`.
+- `src/client/state.ts`: `store.autonomous` and `autonomousPending`, plus the `autonomous` topic.
+- `src/client/ui/todo-details.ts` (new): the reusable details panel and the per-board revealed state.
 - `src/client/ui/todos.ts`:
-  - `mountTodoBoard(net, board)` is parameterised by board.
-  - Double-click on the board background toggles details.
-  - Focus and caret are kept across redraws.
-  - New `openAutonomousBoard(net)` and `activeAutonomous()`.
-- `src/client/ui/todo-details.ts` (new):
-  - Per-card panel with subtasks, notes (debounced saves) and pictures (upload, paste or drop; shrunk to 1600px).
-  - Holds the shown/hidden state for each board.
-- `src/client/ui/todos.css`: the details styles. The todo body padding moved inside `.todo-board`, so double-clicking the cork reaches the board.
+  - The board is parameterised by `TodoBoardId`.
+  - Double-click to reveal; focus, caret and drafts survive redraws.
+  - `openAutonomousBoard`.
+- `src/client/ui/content-kanban.ts`: the same reveal and the panel, with `notes: false`.
+- `src/client/world/kanban-stand.ts` (new): the stand. It is wired into `world/office.ts` (`office.autonomousBoard`, InteractKind `autonomous`) and `shared/nav.ts` (the dog keeps off it).
+- `src/client/world/todo-wall.ts`: a `title` parameter and detail badges.
+- `src/client/main.ts`: the stand texture, **E**, the hint, the ☰ entry and the `__office.autonomousBoard()` test hook.
+- `src/client/ui/todos.css`: the details styles. The To Do body padding moved inside `.todo-board`, so a double-click anywhere on the cork reaches it.
 
-## Still to do
-1. **The whiteboard stand in the 3D office.** Plan:
-   - A new rolling stand module, `src/client/world/kanban-stand.ts`, modelled on `world/whiteboard.ts`, so the upstream file stays untouched.
-   - Face 4 m × 2 m, bottom 0.6 m, at about x 5.4, z 5.4, facing +z. Add an `AUTONOMOUS_BOARD` const in `shared/layout.ts`.
-   - Add a collider, and a nav rect in `shared/nav.ts`.
-   - New InteractKind `'autonomous'` in `world/office.ts`, plus REACH and hint entries in `main.ts`.
-   - Pressing E calls `openAutonomousBoard(net)`.
-   - Texture: generalise `TodoWallTexture` in `world/todo-wall.ts` to take a title ("🏢 Autonomous Tasks") and to draw ☑/📝/🖼 badges while details are shown (`todoDetailsShown`).
-   - Optionally add a top-bar menu entry next to the 🔥 one (around `main.ts` line 2948).
-2. **Import the Notion tasks into the running office's data**, not into the repo, because the repo is PUBLIC.
-   - Target: `C:\Users\Owner\Documents\Development\Personal-Portfolio\.agent-office\autonomous.json`, shaped as `{ "office": [items] }`.
-   - The source is 86 JSON files plus 10 images, exported to this session's scratchpad `notion/` folder (1.json–86.json, `images/`). They are temporary; re-export with notion-fetch if they're gone.
-   - Planned column mapping (to confirm with the owner):
+## Checks run
+- `npx tsc -p tsconfig.client.json --noEmit` and `npx tsc -p tsconfig.server.json --noEmit`: clean.
+- `npm run build`: ok.
+- Unit tests: 118/118 pass. Command: `node --import tsx --test --test-force-exit tests/todo-details.test.ts tests/todos.test.ts tests/content-kanban.test.ts tests/nav.test.ts tests/hoop.test.ts tests/player.test.ts tests/seats.test.ts tests/building.test.ts tests/stations.test.ts tests/reception.test.ts tests/cabinet.test.ts tests/plans.test.ts tests/back-office.test.ts tests/docs.test.ts tests/emotes.test.ts tests/auth.test.ts tests/config.test.ts`. The new `tests/todo-details.test.ts` covers:
+  - details apply, clear and survive moves and Undo
+  - validation, including path-traversal picture names
+  - the separate autonomous.json
+  - the picture store (sniffing, SVG refused)
+  - Content Kanban details
+- `node tests/autonomous-ui.mjs` (new; headless Edge against a WebSocket fixture): passed 5 of 5 runs after the fixes. It covers:
+  - the stand face and E at the stand
+  - the same four columns
+  - plain by default, and a card double-click still editing
+  - the double-click reveal
+  - seeded notes, subtask and picture
+  - adding and ticking subtasks, typing notes (cursor kept across redraws), uploading a picture
+  - hiding again
+  - the To Do board's own separate reveal and list
+- `node tests/content-kanban-ui.mjs`, with a new section on reveal, adding a subtask and hiding: ok.
+- `node tests/todos-ui.mjs`: 5 of 6 runs passed. The one failure was a one-shot focus assertion under load; it passed on every re-run.
+- **End to end against a throwaway office** built from this branch (`cli.js` on :4711, scratch password and home, the real import in its data dir):
+  - All 86 cards loaded (15/53/18).
+  - A picture was served (200) and refused without sign-in (401).
+  - An upload was accepted, and refused from another origin (403).
+  - A details change came back over the socket and was saved to disk.
+  - Screenshots of the real data were taken; they are linked in the PR.
+- Not run: the full `npm test` (it hangs on Windows; see the memory notes), and remote CI (`release.yml` dispatch).
 
-     | Notion status | Column |
-     |---|---|
-     | Priority | Urgent |
-     | High priority | Urgent |
-     | Important/Not Urgent | Not urgent |
-     | Not Urgent/Important | Not urgent |
-     | Other Important | Not urgent |
-     | No status | Not urgent |
-     | Archive | Completed |
-
-   - Put Notion's status, priority and due date on the first line of the notes.
-   - A title over 500 characters, or with line breaks, is shortened; the full text goes into the notes.
-   - Blank titles become "Untitled".
-   - Copy the images into `todo-images/` with their sha names.
-   - Import only while the office is stopped, or before restarting it after the build.
-3. Update `tests/todos.test.ts` for the `details` action and add/Undo with details. Run `npm run typecheck` and `npm test` (the full suite hangs locally in pull-links, so run the todos tests only).
-4. Build per PERSONAL-WORKFLOW / the memory notes, open a PR to `personal`, and put this handoff in the PR description.
-
-## Risks
-- Pictures that are taken off a card stay on disk. Nothing cleans them up yet.
-- The Autonomous board is office-wide. Anyone signed into the office can see and edit it.
+## Remaining / next steps
+- Review and merge the PR into `personal`. Then, in `C:\Users\Owner\Documents\Development\Agent-Office\agent-office`: pull, run `npm run build`, and restart the office. A restart stops running workers, so pick a quiet moment. The Notion tasks are already in place and appear after the restart.
+- Pictures removed from a card stay in `todo-images/`. Nothing cleans up unused pictures yet.
+- The Autonomous board is office-wide: anyone signed in to the office can see and edit it. Today only the shared password is in use.
+- The Notion import is a one-time copy. Later Notion edits don't sync. The card ids are the Notion page ids, in case a sync is wanted later.
+- Optional: detail badges on the Content Kanban's stand texture.

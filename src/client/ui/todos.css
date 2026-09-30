@@ -113,10 +113,10 @@
 .todo-sub-text { word-break: break-word; }
 .todo-sub.done .todo-sub-text { color: var(--muted); text-decoration: line-through; }
 .todo-sub-x { padding: 0 6px; font-size: 10px; color: var(--muted); }
-.modal .todo-board input.todo-sub-add, .modal .todo-board input.todo-sub-edit { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 8px; font: 700 12px var(--font); color: var(--ink); background: #fff; border: 2px dashed rgba(43, 45, 66, .35); border-radius: 8px; }
-.modal .todo-board input.todo-sub-edit { flex: 1; border-style: solid; }
-.modal .todo-board textarea.todo-notes { box-sizing: border-box; width: 100%; min-height: 54px; resize: vertical; padding: 6px 8px; font: 600 13px/1.4 var(--font); color: var(--ink); background: #fff; border: 2px solid rgba(43, 45, 66, .35); border-radius: 8px; white-space: pre-wrap; }
-.modal .todo-board textarea.todo-notes:focus, .modal .todo-board input.todo-sub-add:focus { outline: none; border-color: var(--ink); border-style: solid; }
+.modal .todo-details input.todo-sub-add, .modal .todo-details input.todo-sub-edit { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 8px; font: 700 12px var(--font); color: var(--ink); background: #fff; border: 2px dashed rgba(43, 45, 66, .35); border-radius: 8px; }
+.modal .todo-details input.todo-sub-edit { flex: 1; border-style: solid; }
+.modal .todo-details textarea.todo-notes { box-sizing: border-box; width: 100%; min-height: 54px; resize: vertical; padding: 6px 8px; font: 600 13px/1.4 var(--font); color: var(--ink); background: #fff; border: 2px solid rgba(43, 45, 66, .35); border-radius: 8px; white-space: pre-wrap; }
+.modal .todo-details textarea.todo-notes:focus, .modal .todo-details input.todo-sub-add:focus { outline: none; border-color: var(--ink); border-style: solid; }
 .todo-pics { display: flex; flex-wrap: wrap; gap: 6px; }
 .todo-pics:empty { display: none; }
 .todo-pic { position: relative; display: block; width: 72px; height: 72px; border: 2px solid var(--ink); border-radius: 8px; overflow: hidden; background: #fff; }
