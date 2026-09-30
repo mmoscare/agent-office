@@ -233,7 +233,7 @@ console.log('> agent-office@0.1.0 build:server');
   mockState = (s) => { s.busy = busy; };
   mockRestart = { confirm: busy };
   await reopen();
-  await dialog.getByText(/These workers are busy right now\. Restarting stops them/).waitFor();
+  await dialog.getByText(/These workers are busy right now. Restarting interrupts them/).waitFor();
   await dialog.screenshot({ path: path.join(shots, '5-restart-busy-workers.png') });
   await dialog.getByRole('button', { name: /Restart now/ }).click();
   await dialog.getByText('Restart now and stop Byte and Pixel?').waitFor();

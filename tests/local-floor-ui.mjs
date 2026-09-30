@@ -74,6 +74,12 @@ try {
     dir: codeDir, branch: 'personal', ahead: 0, behind: 0, dirty: 0,
     startedAt: Date.now(), target: 'smoke-fixture', floors: [],
     needs: { pull: false, build: true, restart: false },
+  }, state: {
+    // The update bar reads the walkthrough's state (/api/git/office/update): a build still to do.
+    appDir: codeDir, target: 'smoke-fixture', admin: true, prs: [], otherCommits: 0, floors: [],
+    app: { behind: 0, ahead: 0, dirty: [], head: 'smoke-fixture' }, packages: { needed: false, runtime: false, changes: [], staged: false },
+    build: { state: 'idle' }, running: { startedAt: Date.now() }, restart: { available: true }, busy: [], outcomes: {},
+    steps: { floor: 'done', app: 'done', packages: 'skipped', build: 'todo', restart: 'todo' },
   } } }));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
