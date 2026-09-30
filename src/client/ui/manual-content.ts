@@ -266,7 +266,7 @@ export const MANUAL: ManualChapter[] = [
         steps: [
           'Check **Needs you** and the desks. Restart when workers are idle or waiting on you.',
           'Launcher: right-click the tray icon near the clock → **Restart Agent Office**. PowerShell: press Ctrl+C in its window, then start it again with the start command (see “Merging an agent-office PR, step by step”, step 8).',
-          'A build the walkthrough made switches in as the office stops. New packages need the launcher, or `npm ci` in the app folder while the office is stopped.',
+          'A build the walkthrough made switches in as the office stops. New packages need the launcher, or `npm ci` and then `npm run build` in the app folder while the office is stopped.',
           'Walk past each desk that was busy and say “continue”.',
         ],
       },

@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkerInfo, WorkerStatus } from '../src/shared/protocol.js';
 import { beforeStart, readJson, removeStaged, stagePaths, startFailed, type Applied, type StagedBuild } from '../src/server/app-swap.js';
-import { mergedPrs, OfficeUpdater, packageCheck, redact, routeOfficeUpdate, summarize } from '../src/server/office-update.js';
+import { mergedPrs, OfficeUpdater, packageCheck, redact, routeOfficeUpdate, startupSnapshot, summarize } from '../src/server/office-update.js';
+import { packagesByHand } from '../src/shared/office-update.js';
 import type { OfficeFloor } from '../src/server/git-board.js';
 
 // The guided office update against throwaway repositories: a bare "GitHub" repository, the app folder
@@ -425,4 +426,73 @@ test('the staging copy’s node_modules link is removed as a link', (t) => {
   removeStaged(p.stage, p.next);
   assert.equal(existsSync(p.next), false);
   assert.equal(readFileSync(path.join(app, 'node_modules', 'keep.txt'), 'utf8'), 'the running office’s packages');
+});
+
+/** Sets every file of a dist folder's build to this time (seconds), as a build then would have. */
+function touchDist(dist: string, seconds: number) {
+  for (const f of ['public/index.html', 'server/server/server.js']) utimesSync(path.join(dist, f), seconds, seconds);
+}
+
+test('a build by hand counts only when it is newer than the checkout’s last change, in a linked worktree too', (t) => {
+  const { root, app } = fixture(t);
+  // A linked worktree: its .git is a file, and HEAD's reflog lives in the main repository's .git/worktrees.
+  const wt = path.join(root, 'app-worktree');
+  git(app, 'worktree', 'add', '-q', '-b', 'worktree-app', wt);
+  execFileSync(process.execPath, ['build.mjs'], { cwd: wt });
+  const dist = path.join(wt, 'dist');
+  const head = git(wt, 'rev-parse', 'HEAD');
+  const now = Date.now() / 1000;
+  touchDist(dist, now + 3600);
+  assert.equal(startupSnapshot(wt, dist).running, head, 'built after the last change: of HEAD');
+  touchDist(dist, now - 3600);
+  assert.equal(startupSnapshot(wt, dist).running, undefined, 'built before the last change: not of HEAD');
+
+  // No reflog at all: it can't be told, so it isn't taken as built.
+  touchDist(path.join(app, 'dist'), now + 3600);
+  assert.equal(startupSnapshot(app, path.join(app, 'dist')).running, git(app, 'rev-parse', 'HEAD'));
+  rmSync(path.join(app, '.git', 'logs', 'HEAD'));
+  assert.equal(startupSnapshot(app, path.join(app, 'dist')).running, undefined);
+});
+
+test('the build step is not done when a build by hand can’t be shown to be of the checked-out commit', async (t) => {
+  const { app } = fixture(t);
+  const u = updater(app, { running: undefined });
+  touchDist(path.join(app, 'dist'), Date.now() / 1000 + 3600);
+  assert.equal((await u.state([], true))?.steps.build, 'done', 'a build newer than the checkout’s last change');
+  rmSync(path.join(app, '.git', 'logs', 'HEAD'));
+  const s = await u.state([], true);
+  assert.equal(s?.steps.build, 'todo');
+  assert.equal(s?.steps.restart, 'todo');
+});
+
+test('a missing or unreadable record of what’s installed means new packages are needed', (t) => {
+  const { app } = fixture(t);
+  const record = path.join(app, 'node_modules', '.package-lock.json');
+  assert.equal(packageCheck(app).needed, false);
+  rmSync(record);
+  const missing = packageCheck(app);
+  assert.equal(missing.needed, true);
+  assert.equal(missing.runtime, true);
+  assert.match(missing.changes[0], /node_modules\/\.package-lock\.json\) is missing or unreadable/);
+  writeFileSync(record, '{"packages": {"node_modules/vi');
+  assert.equal(packageCheck(app).needed, true);
+});
+
+test('new packages by hand: npm ci then the build, and a staged build already running is dropped', async (t) => {
+  const { app } = fixture(t);
+  // Without a launcher, the staged build can't switch its node_modules in: the steps install and build in place.
+  assert.equal(packagesByHand('/srv/agent-office'), 'cd "/srv/agent-office"\nnpm ci\nnpm run build');
+  const head = git(app, 'rev-parse', 'HEAD');
+  const p = stagePaths(app);
+  mkdirSync(p.stage, { recursive: true });
+  writeFileSync(p.ready, JSON.stringify({ commit: head, builtAt: Date.now(), packages: true }));
+  const before = await updater(app, { running: '0'.repeat(40) }).state([], true);
+  assert.equal(before?.restart.available, false);
+  assert.equal(before?.restart.needsPackagesByHand, true);
+  assert.equal(existsSync(p.ready), true, 'still waiting while the office runs an older build');
+  // Started again after npm ci and npm run build by hand: it runs that commit, so the staged copy
+  // mustn't be swapped over it at a later start.
+  updater(app, { running: head });
+  assert.equal(existsSync(p.ready), false);
+  assert.deepEqual(readdirSync(p.stage).filter((f) => f === 'ready.json'), []);
 });
