@@ -9,6 +9,7 @@ import { pullForBranch } from '../shared/pulls.js';
 import type { PullRequestRef } from '../shared/protocol.js';
 import { officeRoot } from './git-board.js';
 import { gh } from './github.js';
+import { missingCommits } from './unshipped.js';
 import { WORKSPACES_DIR, workspaceRepositories } from './workspaces.js';
 import { BRANCH_PREFIX, WORKTREES_DIR, gitError } from './worktrees.js';
 
@@ -16,8 +17,10 @@ import { BRANCH_PREFIX, WORKTREES_DIR, gitError } from './worktrees.js';
 // the floor, and in each only the office's own leftovers: office/* branches, worktrees under
 // .agent-office/worktrees (registered, or "stray" folders git no longer lists), multi-repository desks'
 // worktrees under .agent-office/workspaces, and worktrees registered from a Claude scratchpad in the
-// temp folder. Each gets a verdict on whether deleting it could lose anything. Nothing is deleted unless
-// it's named with --only, and each named row is looked at again, workers and all, right before it goes.
+// temp folder. Each gets a verdict on whether deleting it could lose anything, or take something an
+// agent still needs (the PR agent's and the VP's PRs, queued tasks, the PR board's unshipped work), and
+// a suggestion: delete it, look at it, or keep it. Nothing is deleted unless it's named with --only, and
+// each named row is looked at again, workers and all, right before it goes.
 // Upstream's plain `agent-office prune` (prune.ts) is left exactly as it was.
 
 /** A worktree or branch changed this recently counts as in use. */
@@ -38,14 +41,17 @@ const JUNK_FILE = /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$|\.(tsbuildinfo|py
 /** How many entries a recency walk looks at before giving up (and saying so). */
 const WALK_MAX = 60_000;
 const IGNORED_LISTED = 5;
+/** Holding work but untouched this long: suggested for a look (the person decides), never for deleting. */
+export const LOOK_MS = 7 * 24 * 60 * 60_000;
 
-export type Verdict = 'safe' | 'work' | 'open-pr' | 'worker' | 'recent' | 'new' | 'protected' | 'not-office' | 'unknown';
+export type Verdict = 'safe' | 'work' | 'open-pr' | 'needed' | 'worker' | 'recent' | 'new' | 'protected' | 'not-office' | 'unknown';
 
 /** What each verdict is called in the table. */
 export const VERDICT_LABEL: Record<Verdict, string> = {
   safe: 'safe to delete',
   work: 'holds work',
   'open-pr': 'open PR',
+  needed: 'still needed',
   worker: "live worker's",
   recent: 'recently active',
   new: 'just made',
@@ -68,11 +74,33 @@ export interface PullRef {
 /** The pull requests of a GitHub repository (owner/name), any state. */
 export type PullLister = (repo: string, cwd: string) => Promise<PullRef[]>;
 
-/** What the running office says, when this runs in one of its terminals (GET /office/cleanup). */
+/** What the running office says (GET /office/cleanbot?view=office, or CleanBot's own sweep in the office). */
 export interface OfficeView {
   floors: { name: string; dir: string }[];
   /** Folders a terminal of the office is working in right now. */
   busy: { path: string; what: string }[];
+}
+
+/**
+ * Something an agent still needs, found in what it's been asked: a live worker's request and task (the
+ * PR agent's and the VP's included), or a task waiting or running on the queue. A row whose branch,
+ * worktree folder or PR number it names is kept.
+ */
+export interface Need {
+  what: string;
+  text: string;
+  /** owner/name, when the task says which repository (a floor that's a folder of them). */
+  repo?: string;
+}
+
+/** What CleanBot suggests for a row: delete it (safe), look at it with the person (holds work, idle a while), or keep it. */
+export type Suggestion = 'delete' | 'look' | 'keep';
+
+export interface SuggestedRow {
+  n: number;
+  repo: string;
+  name: string;
+  why: string;
 }
 
 export interface PruneRow {
@@ -106,7 +134,8 @@ export interface PruneRow {
   verdict: Verdict;
   /** Why, said for a person. */
   why: string;
-  holds?: { uncommitted: number; unpushed: number; ignored: string[]; edits: number };
+  /** `unshipped`: commits on GitHub that no open or merged PR carries (the PR board's unshipped work). */
+  holds?: { uncommitted: number; unpushed: number; ignored: string[]; edits: number; unshipped?: number };
   /** What deleting the row takes: the worktree (git's), a stray folder, the local branch, origin's copy. */
   removes: ('worktree' | 'folder' | 'branch' | 'origin')[];
   /** Why origin's copy stays even with --remote, when it has one. */
@@ -114,6 +143,7 @@ export interface PruneRow {
   /** --discard can delete it anyway. */
   discardable: boolean;
   kept?: 'always' | 'this run';
+  suggest: Suggestion;
 }
 
 export interface RepoReport {
@@ -158,6 +188,13 @@ export interface FloorPruneReport {
   notes: string[];
   repos: RepoReport[];
   rows: PruneRow[];
+  /**
+   * CleanBot's suggestion. `delete`: the safe rows, nothing kept (deletes the local worktree and branch;
+   * origin's copy only with --remote). `remote`: safe rows only on GitHub, which need --remote. `look`:
+   * rows that hold work but have been idle LOOK_MS or more: for the person to decide, never suggested
+   * for deleting.
+   */
+  suggested: { delete: SuggestedRow[]; remote: SuggestedRow[]; look: SuggestedRow[] };
   run?: PruneRun;
 }
 
@@ -277,6 +314,11 @@ function readJson(file: string): unknown {
 interface SavedWorker {
   name?: unknown;
   deskId?: unknown;
+  sessionId?: unknown;
+  title?: unknown;
+  prompt?: unknown;
+  ask?: { first?: unknown; latest?: unknown };
+  task?: { name?: unknown; summary?: unknown };
   worktree?: { path?: unknown; branch?: unknown };
   workspace?: { path?: unknown; repositories?: { path?: unknown; branch?: unknown }[] };
 }
@@ -289,14 +331,28 @@ export interface Owners {
    */
   paths: { key: string; what: string; how: 'tree' | 'desk' | 'cwd' }[];
   branches: Map<string, string>;
+  /** Live workers' Claude sessions: a scratchpad worktree made in one of them is that worker's. */
+  sessions: Map<string, string>;
 }
 
-function ownerOf(owners: Owners, abs: string | undefined, branch: string | undefined): string | undefined {
+/** CleanBot's own desk: what he's asked (the names of rows to delete) is never a reason to keep them. */
+const CLEANBOT_DESK = 'station-cleanbot';
+
+/** The Claude session a scratchpad worktree was made in: <tmp>/claude/<project>/<session>/scratchpad/…. */
+function scratchpadSession(tmp: string, abs: string): string | undefined {
+  const rel = path.relative(tmp, abs).split(path.sep);
+  return rel[0] === 'claude' && rel.length > 3 && rel[3] === 'scratchpad' ? rel[2].toLowerCase() : undefined;
+}
+
+function ownerOf(owners: Owners, abs: string | undefined, branch: string | undefined, tmp?: string): string | undefined {
   if (abs) {
     const k = key(abs);
     for (const p of owners.paths) {
       if (p.how === 'tree' ? p.key === k : p.how === 'desk' ? inside(p.key, k) : inside(k, p.key)) return p.what;
     }
+    const session = tmp ? scratchpadSession(tmp, real(abs)) : undefined;
+    const who = session && owners.sessions.get(session);
+    if (who) return `a scratch copy ${who}'s Claude session made, which it may still be using: send ${who} home first`;
   }
   return branch ? owners.branches.get(branch) : undefined;
 }
@@ -307,17 +363,18 @@ function ownerOf(owners: Owners, abs: string | undefined, branch: string | undef
  * every floor it has and the folders its terminals are in.
  */
 export function readOwners(floorDirs: string[], view: OfficeView | undefined): Owners {
-  const owners: Owners = { paths: [], branches: new Map() };
-  const dirs = new Map<string, string>();
-  for (const d of [...floorDirs, ...(view?.floors.map((f) => f.dir) ?? [])]) if (d) dirs.set(key(d), d);
-  const many = dirs.size > 1;
-  for (const dir of dirs.values()) {
+  const owners: Owners = { paths: [], branches: new Map(), sessions: new Map() };
+  const dirs = floorsOf(floorDirs, view);
+  const many = dirs.length > 1;
+  for (const dir of dirs) {
     const on = many ? ` on the ${path.basename(dir)} floor` : '';
     const saved = readJson(path.join(dir, '.agent-office', 'workers.json'));
     for (const w of Array.isArray(saved) ? (saved as SavedWorker[]) : []) {
       if (!w || typeof w !== 'object') continue;
       const name = typeof w.name === 'string' ? w.name : 'a worker';
-      const what = `${name}'s${typeof w.deskId === 'string' ? ` (${w.deskId}${on})` : on}: send ${name} home from the office instead`;
+      const who = `${name}${typeof w.deskId === 'string' ? ` (${w.deskId}${on})` : on}`;
+      const what = `${who}'s: send ${name} home from the office instead`;
+      if (typeof w.sessionId === 'string' && w.sessionId) owners.sessions.set(w.sessionId.toLowerCase(), who);
       if (typeof w.worktree?.path === 'string') owners.paths.push({ key: key(path.resolve(dir, w.worktree.path)), what, how: 'tree' });
       if (typeof w.worktree?.branch === 'string') owners.branches.set(w.worktree.branch, what);
       // A desk's worktrees in every repository are its worker's, and so is anything in the desk's folder.
@@ -339,6 +396,68 @@ export function readOwners(floorDirs: string[], view: OfficeView | undefined): O
   return owners;
 }
 
+/** Each floor once: the ones given and the ones the office has. */
+function floorsOf(floorDirs: string[], view: OfficeView | undefined): string[] {
+  const dirs = new Map<string, string>();
+  for (const d of [...floorDirs, ...(view?.floors.map((f) => f.dir) ?? [])]) if (d) dirs.set(key(d), d);
+  return [...dirs.values()];
+}
+
+const text = (...parts: unknown[]) => parts.filter((p): p is string => typeof p === 'string' && !!p.trim()).join('\n');
+
+/**
+ * What the agents still need, read afresh from every floor's files: each live worker's request and
+ * task (the PR agent and the VP working a PR, a worker told to carry on someone's branch), and every
+ * task waiting or running on the queue (the fix tasks the PR agent and the VP queue for a PR among
+ * them). CleanBot's own request isn't one: it names the rows the person wants gone.
+ */
+export function readNeeds(floorDirs: string[], view: OfficeView | undefined): Need[] {
+  const needs: Need[] = [];
+  const dirs = floorsOf(floorDirs, view);
+  const many = dirs.length > 1;
+  for (const dir of dirs) {
+    const on = many ? ` on the ${path.basename(dir)} floor` : '';
+    const saved = readJson(path.join(dir, '.agent-office', 'workers.json'));
+    for (const w of Array.isArray(saved) ? (saved as SavedWorker[]) : []) {
+      if (!w || typeof w !== 'object' || w.deskId === CLEANBOT_DESK) continue;
+      const t = text(w.title, w.prompt, w.ask?.first, w.ask?.latest, w.task?.name, w.task?.summary);
+      if (!t) continue;
+      const name = typeof w.name === 'string' ? w.name : 'a worker';
+      const desk = typeof w.deskId === 'string' ? w.deskId : '';
+      const who = desk === 'station-pulls' ? `the PR agent${on}` : desk === 'station-vp' ? `the VP${on}` : `${name}${desk ? ` (${desk}${on})` : on}`;
+      needs.push({ what: `${who} is working on it: wait until it's done, or send ${desk.startsWith('station-') ? 'it' : name} home`, text: t });
+    }
+    const queue = readJson(path.join(dir, '.agent-office', 'queue.json')) as { tasks?: unknown } | undefined;
+    for (const t of Array.isArray(queue?.tasks) ? (queue.tasks as Record<string, unknown>[]) : []) {
+      if (!t || (t.status !== 'queued' && t.status !== 'running')) continue;
+      const body = text(t.title, t.prompt);
+      if (!body) continue;
+      const title = typeof t.title === 'string' ? t.title.slice(0, 60) : '';
+      const by = typeof t.addedBy === 'string' ? ` (queued by ${t.addedBy})` : '';
+      needs.push({ what: `task ${String(t.id)} "${title}"${by}${on} is ${t.status === 'running' ? 'running' : 'waiting'} and names it: let it finish, or take it off the queue`, text: body, ...(typeof t.repo === 'string' ? { repo: t.repo } : {}) });
+    }
+  }
+  return needs;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The need that names a row: its branch, its worktree's folder name, or its PR's number. */
+export function neededBy(needs: Need[], row: { branch?: string; worktree?: { path: string; kind: string }; pr?: { number: number } }, github?: string): Need | undefined {
+  const pats: RegExp[] = [];
+  if (row.branch) pats.push(new RegExp(`(^|[^\\w./-])${escapeRe(row.branch)}($|[^\\w./-]|\\.(?!\\w))`, 'i'));
+  // An office worktree's folder is its seat (nibble-c2af): "carry on in nibble-c2af" names it.
+  const seat = row.worktree && row.worktree.kind !== 'other' ? row.worktree.path.split('/').pop() : undefined;
+  if (seat && /^[\w-]{4,}$/.test(seat) && /\d/.test(seat)) pats.push(new RegExp(`(^|[^\\w-])${escapeRe(seat)}($|[^\\w-])`, 'i'));
+  const pr = row.pr ? new RegExp(`(#|\\bPR\\s*#?|\\bpull request\\s*#?|/pull/)${row.pr.number}(?!\\d)`, 'i') : undefined;
+  for (const n of needs) {
+    if (pats.some((p) => p.test(n.text))) return n;
+    // A task that says which repository it's for only names this one's PRs when that's this repository.
+    if (pr && pr.test(n.text) && (!n.repo || !github || n.repo.toLowerCase() === github.toLowerCase())) return n;
+  }
+  return undefined;
+}
+
 /** The floors the office keeps in floors.json, for when the office itself can't be asked. */
 function savedFloors(floor: string): string[] {
   const dirs: string[] = [];
@@ -355,7 +474,7 @@ export async function askOffice(env: NodeJS.ProcessEnv = process.env): Promise<O
   const { AGENT_OFFICE_HOOK_URL: url, AGENT_OFFICE_WORKER_ID: worker, AGENT_OFFICE_HOOK_TOKEN: token } = env;
   if (!url || !worker || !token) return undefined;
   try {
-    const res = await fetch(`${url.replace(/\/+$/, '')}/office/cleanup?worker=${encodeURIComponent(worker)}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`${url.replace(/\/+$/, '')}/office/cleanbot?view=office&worker=${encodeURIComponent(worker)}`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return undefined;
     const body = (await res.json()) as OfficeView;
     return Array.isArray(body?.floors) && Array.isArray(body?.busy) ? body : undefined;
@@ -706,6 +825,8 @@ interface Ctx {
   projects: string;
   /** Where this command runs, and the office's own code: never deleted from under them. */
   self: { key: string; what: string }[];
+  /** What the agents' requests and the queue's tasks name (readNeeds). */
+  needs: Need[];
 }
 
 /** Everything about one row: re-run from scratch right before it's deleted. */
@@ -725,6 +846,7 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
     why: '',
     removes: [],
     discardable: false,
+    suggest: 'keep',
   };
   if (wt) row.worktree = { path: shown(ctx.floor, wt.abs), kind: wt.kind, exists: wt.exists, ...(wt.stray ? { stray: true } : {}), ...(wt.detached ? { detached: true } : {}), ...(wt.locked ? { locked: true } : {}), ...(wt.desk ? { desk: wt.desk } : {}) };
   const pr = b ? pullForBranch(repo.pulls.map((p) => ({ number: p.number, url: p.url, state: p.state, headRefName: p.head })), b) : undefined;
@@ -761,15 +883,19 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
     return set('protected', `checked out at ${row.worktree!.path}, a folder the office didn't make`);
   }
 
-  // A live worker's, a meeting's, a terminal's, or where this very command runs.
-  const owner = ownerOf(ctx.owners, wt?.abs, b);
+  // A live worker's (its scratch copies too), a meeting's, a terminal's, or where this very command runs.
+  const owner = ownerOf(ctx.owners, wt?.abs, b, ctx.tmp);
   if (owner) return set('worker', owner);
   if (wt) {
     const k = key(wt.abs);
     const self = ctx.self.find((s) => inside(k, s.key));
     if (self) return set('protected', self.what);
   }
-  if (pr?.state === 'OPEN') return set('open-pr', `PR #${pr.number} is open`);
+  // What the PR agent and the VP work from: an open PR's branch, and whatever an agent's request or a
+  // queued task names (a PR being fixed, a branch to carry on).
+  if (pr?.state === 'OPEN') return set('open-pr', `PR #${pr.number} is open: the PR agent and the VP work from its branch`);
+  const need = neededBy(ctx.needs, row, report.github);
+  if (need) return set('needed', need.what);
   if (wt?.locked) return set('protected', 'locked with git worktree lock: unlock it first');
 
   // Just made: maybe a worker being hired this moment, whose workers.json entry isn't saved yet.
@@ -798,7 +924,7 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
   if (born && ctx.now - born < NEW_MS) return set('new', `made ${ago(ctx.now - born)}: it may be a worker being hired, so it's never deleted this young`);
 
   // What deleting it would lose.
-  const holds = { uncommitted: 0, unpushed: 0, ignored: [] as string[], edits: 0 };
+  const holds: NonNullable<PruneRow['holds']> = { uncommitted: 0, unpushed: 0, ignored: [], edits: 0 };
   const lost: string[] = [];
   const unknown: string[] = [];
   try {
@@ -820,12 +946,22 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
         if (local) unknown.push(`git fetch failed, so whether its ${plural(local, 'commit')} are still on GitHub is unknown`);
       }
     }
+    // Pushed, but in no open or merged PR (rewritten copies count, as the PR board counts them): the
+    // PR board's unshipped work, which it offers to carry into a PR. Deleting the branch takes it off.
+    const base = report.current ?? report.defaultBranch;
+    if (officeBranch && tip && (c.local || wt) && !holds.unpushed && base) {
+      let missing = await missingCommits(repo.dir, base, tip);
+      const remoteBase = `refs/remotes/origin/${base}`;
+      if (missing && repo.hasOrigin && (await gitMaybe(['rev-parse', '--verify', '--quiet', remoteBase], repo.dir))) missing = Math.min(missing, await missingCommits(repo.dir, remoteBase, tip).catch(() => missing));
+      if (missing) holds.unshipped = missing;
+    }
   } catch (err) {
     return set('unknown', `git couldn't say what it holds: ${(err as Error).message}`);
   }
   if (holds.uncommitted) lost.push(plural(holds.uncommitted, 'uncommitted change'));
   if (holds.edits) lost.push(`${plural(holds.edits, 'edited file')} git has nowhere else`);
   if (holds.unpushed) lost.push(plural(holds.unpushed, 'unpushed commit'));
+  if (holds.unshipped) lost.push(`${plural(holds.unshipped, 'commit')} no open or merged PR carries (unshipped work on the PR board)`);
   if (holds.ignored.length) lost.push(`ignored files: ${holds.ignored.slice(0, IGNORED_LISTED).join(', ')}${holds.ignored.length > IGNORED_LISTED ? ` and ${holds.ignored.length - IGNORED_LISTED} more` : ''}`);
   if (wt || c.local) row.holds = holds;
 
@@ -845,7 +981,7 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
       return set(stays.verdict, `only on GitHub, and it stays: ${stays.why}`);
     }
   }
-  if (remoteOnly) return set('safe', `only on GitHub (--remote deletes it there); PR #${pr!.number} ${pr!.state.toLowerCase()}`);
+  if (remoteOnly) return set('safe', `only on GitHub (--remote deletes it there); PR #${pr!.number} ${prState(pr)}`);
   if (report.prs === 'unknown' && officeBranch && (onOrigin || report.fetch !== 'ok')) unknown.push("GitHub couldn't be asked whether it has an open PR");
 
   // In use lately: a terminal, a dev server or a Claude session the office doesn't track.
@@ -867,7 +1003,22 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
   if (unknown.length) return set('unknown', unknown.join('; '));
   if (recent.length) return set('recent', `${recent[0].what} ${ago(ctx.now - recent[0].at)}: something may still be using it`);
   const what = row.removes.includes('folder') ? 'a stray folder with no edits git lacks' : wt ? (wt.exists ? 'clean' : 'its folder is already gone') : 'branch only, its worktree is gone';
-  return set('safe', `${what}, nothing unpushed${pr ? `; PR #${pr.number} ${pr.state.toLowerCase()}` : ''}`);
+  return set('safe', `${what}, nothing unpushed${pr ? `; PR #${pr.number} ${prState(pr)}` : ''}`);
+}
+
+const prState = (pr: PullRequestRef | undefined) => (pr?.state ?? 'unknown').toLowerCase();
+
+/**
+ * CleanBot's suggestion for a judged row: delete the safe ones nobody's pinned; a look (the person
+ * decides, seeing what it holds) for ones that hold work but have sat untouched LOOK_MS or more; keep
+ * everything else. Never "delete" for anything that isn't safe.
+ */
+export function suggestFor(row: Pick<PruneRow, 'verdict' | 'kept' | 'lastCommit' | 'changed'>, now: number): Suggestion {
+  if (row.kept) return 'keep';
+  if (row.verdict === 'safe') return 'delete';
+  if (row.verdict !== 'work' && row.verdict !== 'unknown') return 'keep';
+  const last = Math.max(Date.parse(row.lastCommit ?? '') || 0, Date.parse(row.changed ?? '') || 0);
+  return last && now - last >= LOOK_MS ? 'look' : 'keep';
 }
 
 // ---- Always keep ---------------------------------------------------------------------------------
@@ -963,7 +1114,7 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
   const tmp = real(opts.tmp ?? os.tmpdir());
   const notes: string[] = [];
   const view = await (opts.office ?? askOffice)();
-  const report: FloorPruneReport = { floor: slash(floor), at: new Date(now()).toISOString(), recentHours: (opts.recentMs ?? RECENT_MS) / 3_600_000, office: view ? 'asked' : 'not reachable', notes, repos: [], rows: [] };
+  const report: FloorPruneReport = { floor: slash(floor), at: new Date(now()).toISOString(), recentHours: (opts.recentMs ?? RECENT_MS) / 3_600_000, office: view ? 'asked' : 'not reachable', notes, repos: [], rows: [], suggested: { delete: [], remote: [], look: [] } };
   if (!view) notes.push("The running office couldn't be asked which terminals are open (this isn't an office terminal, or it's down): relied on every floor's workers.json and on recent activity");
 
   const found = await workspaceRepositories(floor);
@@ -987,6 +1138,7 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
       { key: key(process.cwd()), what: 'this command is running from inside it' },
       ...(officeRoot() ? [{ key: key(officeRoot()!), what: "the running office's own code is in it" }] : []),
     ],
+    needs: readNeeds(floorDirs, view),
   };
 
   const opened: { repo: Repo; cands: Candidate[] }[] = [];
@@ -1031,6 +1183,7 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
     }
     for (const rep of report.repos) rep.alwaysKeep = keepList(floor, rep.path);
   }
+  suggest(report, ctx.now);
 
   if (!opts.only?.length) return report;
 
@@ -1053,8 +1206,10 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
       continue;
     }
     const c = byRow.get(row)!;
-    // Workers hired since the table was made, and whatever changed in the row since.
-    ctx.owners = readOwners(floorDirs, await (opts.office ?? askOffice)());
+    // Workers hired and tasks queued since the table was made, and whatever changed in the row since.
+    const fresher = await (opts.office ?? askOffice)();
+    ctx.owners = readOwners(floorDirs, fresher);
+    ctx.needs = readNeeds(floorDirs, fresher);
     ctx.now = now();
     const fresh = await judge(c, ctx);
     const forced = matches(row, discard);
@@ -1076,6 +1231,17 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
   }
   if (!opts.dryRun && (runOut.removed.length || runOut.failed.length)) logRun(floor, report, opts.by);
   return report;
+}
+
+/** Each row's suggestion, and the lists CleanBot offers: delete (and on GitHub only, with --remote), and a look. */
+function suggest(report: FloorPruneReport, now: number) {
+  const s = report.suggested;
+  for (const r of report.rows) {
+    r.suggest = suggestFor(r, now);
+    const ref = { n: r.n, repo: r.repo, name: r.name, why: r.why };
+    if (r.suggest === 'look') s.look.push(ref);
+    else if (r.suggest === 'delete') (!r.local && !r.worktree ? s.remote : s.delete).push(ref);
+  }
 }
 
 /** One line per run in the floor's .agent-office/cleanup-log.jsonl, for the next run or a person. */
@@ -1112,8 +1278,11 @@ Usage:
 Lists the office's leftovers in each repository of the floor in [dir] (default: current directory):
 office/* branches, worktrees under .agent-office/worktrees (and stray folders git no longer lists),
 desks' worktrees under .agent-office/workspaces, and Claude scratchpad worktrees in the temp folder.
-Each gets a verdict. Nothing is deleted unless it's named with --only, and each named row is checked
-again right before it goes. Live workers', protected and just-made rows are never deleted.
+Each gets a verdict, and the table ends with the rows it suggests deleting (the safe ones) and the
+command that deletes them. Nothing is deleted unless it's named with --only, and each named row is
+checked again right before it goes. Never deleted: live workers' rows, protected and just-made ones,
+open PRs' branches, and anything a worker's request (the PR agent's and the VP's too) or a queued
+task names.
 
 Options:
   --json                 Print it all as JSON (what CleanBot reads)
@@ -1208,9 +1377,25 @@ export async function floorPruneCommand(argv: string[]): Promise<number> {
   return report.run && (report.run.failed.length || report.run.refused.length) ? 1 : 0;
 }
 
-/** The report as a person reads it: a numbered table per repository. */
-export function renderReport(report: FloorPruneReport, dryRun: boolean): string {
-  const lines: string[] = ['', `  agent-office prune --floor — ${report.floor}${dryRun ? ' (dry run)' : ''}`, ''];
+/** How the delete command is spelled: this CLI's, or CleanBot's office-cleanbot. */
+export type CommandStyle = 'prune' | 'cleanbot';
+
+/** The command that deletes `rows` (per repository on a floor of several: names can repeat across them). */
+export function deleteCommands(report: FloorPruneReport, rows: SuggestedRow[], style: CommandStyle, remote = false): string[] {
+  const byRepo = new Map<string, string[]>();
+  for (const r of rows) byRepo.set(r.repo, [...(byRepo.get(r.repo) ?? []), r.name]);
+  const several = report.repos.length > 1;
+  const quote = (s: string) => (/^[\w./@:+-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, '\\$1')}"`);
+  return [...byRepo].map(([repo, names]) => {
+    const repoArg = several ? ` --repo ${quote(repo)}` : '';
+    const list = quote(names.join(','));
+    return style === 'cleanbot' ? `office-cleanbot delete ${list}${repoArg}${remote ? ' --remote' : ''}` : `agent-office prune --floor${repoArg} --only ${list}${remote ? ' --remote' : ''}`;
+  });
+}
+
+/** The report as a person reads it: a numbered table per repository, then what to delete. */
+export function renderReport(report: FloorPruneReport, dryRun: boolean, style: CommandStyle = 'prune'): string {
+  const lines: string[] = ['', `  ${style === 'cleanbot' ? '🧹 CleanBot' : 'agent-office prune --floor'} — ${report.floor}${dryRun ? ' (dry run)' : ''}`, ''];
   const day = (iso?: string) => (iso ? iso.slice(0, 10) : '—');
   const since = (iso?: string) => (iso ? ago(Date.parse(report.at) - Date.parse(iso)) : '—');
   for (const repo of report.repos) {
@@ -1227,9 +1412,10 @@ export function renderReport(report: FloorPruneReport, dryRun: boolean): string 
       lines.push(`    ${'#'.padStart(3)}  ${'Branch or worktree'.padEnd(44)} ${'PR'.padEnd(12)} ${'Last commit'.padEnd(11)} ${'Changed'.padEnd(10)} Verdict`);
       for (const r of mine) {
         const extra = r.worktree?.stray ? ' (stray folder)' : r.worktree?.kind === 'scratchpad' ? ' (scratchpad)' : r.worktree?.desk ? ` (desk ${r.worktree.desk})` : !r.local && !r.worktree ? ' (GitHub only)' : '';
-        const pr = r.pr ? `#${r.pr.number} ${r.pr.state.toLowerCase()}` : '—';
+        const pr = r.pr ? `#${r.pr.number} ${prState(r.pr)}` : '—';
         const kept = r.kept === 'always' ? ' [always keep]' : r.kept ? ' [keep]' : '';
-        lines.push(`    ${String(r.n).padStart(3)}  ${(r.name + extra).padEnd(44)} ${pr.padEnd(12)} ${day(r.lastCommit).padEnd(11)} ${since(r.changed).padEnd(10)} ${VERDICT_LABEL[r.verdict]}${kept} — ${r.why}`);
+        const mark = r.suggest === 'delete' ? '🗑' : r.suggest === 'look' ? '👀' : '  ';
+        lines.push(`  ${mark}${String(r.n).padStart(3)}  ${(r.name + extra).padEnd(44)} ${pr.padEnd(12)} ${day(r.lastCommit).padEnd(11)} ${since(r.changed).padEnd(10)} ${VERDICT_LABEL[r.verdict]}${kept} — ${r.why}`);
       }
     } else if (!repo.error) lines.push("    nothing of the office's here: all clean");
     const others = rows.filter((r) => r.verdict === 'not-office');
@@ -1245,8 +1431,20 @@ export function renderReport(report: FloorPruneReport, dryRun: boolean): string 
     for (const r of run.refused) lines.push(`  kept          ${r.name}${r.repo && r.repo !== '.' ? ` (${r.repo})` : ''}: ${r.why}`);
     lines.push('', `  ${run.removed.length} ${run.dryRun ? 'to remove' : 'removed'}, ${run.failed.length} failed, ${run.refused.length} kept.`);
   } else {
-    const safe = report.rows.filter((r) => r.verdict === 'safe' && !r.kept).length;
-    lines.push('', `  ${report.rows.filter((r) => r.verdict !== 'not-office').length} of the office's, ${safe} safe to delete. Nothing was deleted: name rows with --only to delete them.`);
+    const s = report.suggested;
+    const mine = report.rows.filter((r) => r.verdict !== 'not-office').length;
+    const list = (rows: SuggestedRow[]) => rows.map((r) => `${r.n} ${r.name}${report.repos.length > 1 ? ` (${r.repo})` : ''}`).join(', ');
+    lines.push('', `  ${mine} of the office's. Nothing was deleted.`);
+    if (s.delete.length) {
+      lines.push(`  🗑 Suggested to delete (${s.delete.length}, safe: nothing would be lost and nothing needs them): ${list(s.delete)}`);
+      for (const cmd of deleteCommands(report, s.delete, style)) lines.push(`     ${cmd}`);
+    } else lines.push('  🗑 Nothing is safe to delete right now.');
+    if (s.remote.length) {
+      lines.push(`  ☁ Only on GitHub, their PRs merged or closed (${s.remote.length}), deleted there only with --remote: ${list(s.remote)}`);
+      for (const cmd of deleteCommands(report, s.remote, style, true)) lines.push(`     ${cmd}`);
+    }
+    if (s.look.length) lines.push(`  👀 Worth a look, the person decides (${s.look.length}: they hold work but nothing's touched them for ${Math.round(LOOK_MS / 86_400_000)} days or more): ${list(s.look)}`);
+    lines.push('  Everything else is kept: it holds work, or a worker, the PR agent, the VP or a queued task still needs it.');
   }
   lines.push('');
   return lines.join('\n');
