@@ -42,25 +42,31 @@ export function openPrompt(opts: PromptOptions) {
 
   const modal = openModal(form);
   cancel.addEventListener('click', () => modal.close());
-  const send = () => {
-    const text = ta.value.trim();
-    if (!text && !opts.allowEmpty) {
+  let sending = false;
+  const send = async () => {
+    if (sending) return;
+    if (!ta.value.trim() && !opts.allowEmpty) {
       ta.focus();
       return;
     }
     if (provider && !provider.valid()) return;
-    if (workspace && !workspace.valid()) return;
+    sending = true;
+    const ready = !workspace || await workspace.ready(submit);
+    sending = false;
+    // The dialog may have closed, or the prompt been cleared, while the repository list was on its way.
+    const text = ta.value.trim();
+    if (!ready || !form.isConnected || (!text && !opts.allowEmpty)) return;
     modal.close();
     opts.onSubmit(text, { ...(workspace?.value() ?? { worktree: false }), provider: provider?.value(), model: provider?.model(), effort: provider?.effort() });
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    send();
+    void send();
   });
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      send();
+      void send();
     }
   });
   setTimeout(() => {
