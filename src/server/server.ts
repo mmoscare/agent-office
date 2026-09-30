@@ -71,8 +71,10 @@ import { EMOTE_EVERY, EmoteBucket, isEmote } from '../shared/emotes.js';
 import { isThemePick } from '../shared/theme.js';
 import { PROMPTS, PROMPT_MAX, isPromptId } from '../shared/prompts.js';
 import { ROOF, isDrink } from '../shared/rooftop.js';
-import { BOTS, botDesk } from '../shared/bots.js';
+import { BOTS, botDesk, isBotKind } from '../shared/bots.js';
 import { handleVp } from './vp.js';
+import { handleCleanbot } from './cleanbot.js';
+import type { FloorPruneReport, OfficeView } from './prune-floor.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -345,6 +347,7 @@ export async function startServer(cfg: Config) {
     if (url.pathname === '/office/mail') return officeMail(req, res, url);
     if (url.pathname === '/office/ask') return officeAsk(req, res, url);
     if (url.pathname === '/office/vp') return officeVp(req, res, url);
+    if (url.pathname === '/office/cleanbot') return officeCleanbot(req, res, url);
     if (req.method !== 'POST' || !['/hooks/claude', '/hooks/opencode', '/hooks/codex'].includes(url.pathname)) return send(res, 404, { ok: false });
     let payload: unknown = {};
     try {
@@ -623,6 +626,46 @@ export async function startServer(cfg: Config) {
     const admin = !!asked && asker?.name === asked && asker.admin;
     const r = await handleVp(floor.vp, { method: req.method ?? 'GET', query: url.searchParams, body, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name, admin });
     if (req.method === 'POST' && r.status === 200 && body?.action === 'duty') toastFloor(floor, body.on === true ? `👔 The ${agent.name} is on duty: he sweeps the PRs by himself` : `👔 The ${agent.name} is off duty`);
+    return send(res, r.status, r.body);
+  };
+  /** Every floor, and the folders the office's ⌨ terminals are in: what CleanBot must not delete from under anyone. */
+  const officeView = async (): Promise<OfficeView> => ({
+    floors: [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })),
+    busy: consoles.folders().map((dir) => ({ path: dir, what: 'a ⌨ terminal in the office' })),
+  });
+  /**
+   * CleanBot, and only him (office-cleanbot): GET ?view=list[&repo=&recent=&fetch=0], POST {"action":
+   * "delete" | "keep" | "forget", …}. The sweep and its safety checks are in cleanbot.ts and
+   * prune-floor.ts. GET ?view=office (every floor and the open terminals) is for any worker, so
+   * `agent-office prune --floor` run in an office terminal knows them too.
+   */
+  const officeCleanbot = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL) => {
+    if (req.method === 'GET' && url.searchParams.get('view') === 'office') {
+      const workerId = url.searchParams.get('worker') ?? '';
+      const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (!workerFloor(workerId)?.workers.authenticate(workerId, token)) return send(res, 401, { error: 'Send your own AGENT_OFFICE_WORKER_ID as ?worker= and AGENT_OFFICE_HOOK_TOKEN as the bearer token' });
+      return send(res, 200, await officeView());
+    }
+    const who = boardAgent(req, res, url, 'office-cleanbot');
+    if (!who) return;
+    const { floor, agent } = who;
+    if (DESK_BY_ID.get(agent.deskId)?.station !== 'cleanbot') return send(res, 403, { error: 'Only CleanBot can use office-cleanbot' });
+    let body: Record<string, unknown> | undefined;
+    if (req.method === 'POST') {
+      try {
+        body = JSON.parse((await readBody(req, 256 * 1024)) || '{}');
+      } catch {
+        return send(res, 400, { error: 'Send JSON: {"action": "delete", "only": ["office/x"]}' });
+      }
+    }
+    const me = floor.workers.get(agent.id);
+    const asked = me?.lastInput?.by ?? me?.createdBy;
+    const r = await handleCleanbot({ method: req.method ?? 'GET', query: url.searchParams, body, floorDir: floor.dir, by: asked && asked !== agent.name ? `${agent.name}, asked by ${asked}` : agent.name, office: officeView });
+    if (req.method === 'POST' && r.status === 200 && body?.action === 'delete' && body.dryRun !== true) {
+      const removed = ((r.body as { report?: FloorPruneReport }).report?.run?.removed ?? []).filter((s) => s.what !== 'origin');
+      const rows = new Set(removed.map((s) => `${s.repo}:${s.name}`)).size;
+      if (rows) toastFloor(floor, `🧹 CleanBot deleted ${rows} leftover${rows === 1 ? '' : 's'} on this floor`);
+    }
     return send(res, r.status, r.body);
   };
   /**
@@ -2504,6 +2547,23 @@ export async function startServer(cfg: Config) {
         else {
           noteAsker(r.info.id, c, who);
           toastFloor(floor, `👔 ${who} deployed the ${BOTS.vp.name} on this floor`);
+        }
+        break;
+      }
+      case 'bot.deploy': {
+        // Any deployable bot (shared/bots.ts): hired at its kiosk with its brief and its first request.
+        const floor = here();
+        if (!floor || !isBotKind(msg.kind)) break;
+        const bot = BOTS[msg.kind];
+        if (floor.workers.list().some((w) => w.deskId === botDesk(msg.kind))) {
+          warn(c, `${bot.name} is already on this floor: walk up to the kiosk to ask something`);
+          break;
+        }
+        const r = floor.workers.station(botDesk(msg.kind), who, bot.deployPrompt);
+        if (typeof r === 'string') warn(c, r);
+        else {
+          noteAsker(r.info.id, c, who);
+          toastFloor(floor, `${bot.icon} ${who} deployed ${bot.name} on this floor`);
         }
         break;
       }

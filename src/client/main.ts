@@ -3196,7 +3196,7 @@ store.on('inbox', () => office.setInTray(store.inbox.items.length));
 
 // Until her email is set up, the Receptionist pops up now and then to say so (see ui/mail.ts).
 mountMailNag({ desktop: () => settings.notify });
-mountCalendarNag({ desktop: () => settings.notify });
+mountCalendarNag({ desktop: () => settings.notify, deployCleanbot: () => net.send({ t: 'bot.deploy', kind: 'cleanbot' }) });
 
 // Whether you're really here: a tab in the background for a while means "needs you" alerts go by email.
 const sayPresence = () => net.send({ t: 'presence', away: document.hidden });
@@ -3582,6 +3582,13 @@ $('project').addEventListener('click', () => {
     vp: {
       deploy: () => net.send({ t: 'vp.deploy' }),
       duty: (on) => net.send({ t: 'vp.duty', on }),
+      open: (workerId) => {
+        closeFloorMenu();
+        openWorkerTerminal(workerId);
+      },
+    },
+    cleanbot: {
+      deploy: () => net.send({ t: 'bot.deploy', kind: 'cleanbot' }),
       open: (workerId) => {
         closeFloorMenu();
         openWorkerTerminal(workerId);
