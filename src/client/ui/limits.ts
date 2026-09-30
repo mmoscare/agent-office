@@ -9,6 +9,8 @@ const STALE_MS = 10 * 60_000;
 /** The budget days already warned about in this browser (see budgetDayKey). */
 const WARNED_KEY = 'agent-office.limits.budget-warned';
 const WARNED_KEEP = 32;
+/** How long the tab that gives a warning keeps the other tabs from giving it too, while storage catches up. */
+const CLAIM_HOLD_MS = 60_000;
 
 /** "in 12m", "in 2h 5m", or "Tue 5:00 AM" once it is more than a day out. */
 export function fmtReset(at: number, now = Date.now()): string {
@@ -122,18 +124,44 @@ function saveWarned(keys: string[]) {
  * it: keep going at that rate and it runs out before it starts over. Whether or not the meter is shown.
  */
 export function watchLimitBudget(desktop: (title: string, body: string) => void) {
-  // Read again every time, so another tab of the office that already warned counts; kept here too, for when storage is blocked.
+  // Storage is read again every time, so a warning another tab gave counts; kept here too, for when storage is blocked.
   let seen: string[] = [];
   store.on('limits', () => {
-    const warned = [...new Set([...seen, ...loadWarned()])];
-    const due = budgetWarnings(store.limits.windows, new Set(warned));
+    const due = budgetWarnings(store.limits.windows, new Set([...seen, ...loadWarned()]));
     if (!due.length) return;
-    warned.push(...due.map((d) => d.key));
-    seen = warned.slice(-WARNED_KEEP);
-    saveWarned(seen);
-    const title = "⏳ Today's Claude budget is used up";
-    const body = due.map((d) => warningLine(d.window, d.budget)).join(' ');
-    toast(`${title}. ${body}`, 'warn', 15_000);
-    desktop(title, body);
+    seen = [...seen, ...due.map((d) => d.key)].slice(-WARNED_KEEP);
+    // Every open tab gets the same update at once: only the one that claims a warning gives it.
+    void Promise.all(due.map((d) => claimWarning(d.key))).then((won) => {
+      const stored = loadWarned();
+      const mine = due.filter((d, i) => won[i] && !stored.includes(d.key));
+      if (!mine.length) return;
+      saveWarned([...stored, ...mine.map((d) => d.key)].slice(-WARNED_KEEP));
+      const title = "⏳ Today's Claude budget is used up";
+      const body = mine.map((d) => warningLine(d.window, d.budget)).join(' ');
+      toast(`${title}. ${body}`, 'warn', 15_000);
+      desktop(title, body);
+    });
+  });
+}
+
+/**
+ * Whether this tab gets to give the warning for `key`: the browser grants its lock to one tab at a
+ * time, and the winner holds it long enough for the others to see the warning in storage. Without
+ * Web Locks (the office over plain http), every tab that hasn't seen it in storage gives it.
+ */
+function claimWarning(key: string): Promise<boolean> {
+  const locks: LockManager | undefined = navigator.locks;
+  if (!locks) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    try {
+      locks
+        .request(`${WARNED_KEY}:${key}`, { ifAvailable: true }, (lock) => {
+          resolve(lock !== null);
+          return lock ? new Promise<void>((done) => setTimeout(done, CLAIM_HOLD_MS)) : undefined;
+        })
+        .catch(() => resolve(true));
+    } catch {
+      resolve(true);
+    }
   });
 }

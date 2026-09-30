@@ -50,14 +50,16 @@ let browser;
 let page;
 try {
   browser = await chromium.launch({ executablePath: process.env.AGENT_OFFICE_TEST_BROWSER || 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  // One context, so a second tab shares this one's storage and Web Locks.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  page = await context.newPage();
   page.setDefaultTimeout(30_000);
   await page.route('**/api/**', (route) => {
     const target = new URL(route.request().url());
     const data = target.pathname === '/api/balances' ? { providers: [], at: 0 } : { me: { admin: false } };
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) });
   });
-  await page.addInitScript(() => {
+  const init = () => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Test', color: '#ff8a5b', look: { skin: 0, hair: 0, style: 0 } }));
     localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true, hud: { limits: true } }));
     // Desktop notifications, allowed and recorded, as if the office were in another tab.
@@ -69,11 +71,14 @@ try {
       close() {}
     };
     Document.prototype.hasFocus = () => false;
-  });
+  };
+  await page.addInitScript(init);
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const panel = page.locator('#limits');
-  const warnings = page.locator('.toast', { hasText: "Today's Claude budget is used up" });
+  const warningsIn = (p) => p.locator('.toast', { hasText: "Today's Claude budget is used up" });
+  const warnings = warningsIn(page);
+  const notesIn = (p) => p.evaluate(() => window.__notes.filter((n) => n.tag === 'limit-budget'));
 
   await page.goto(url);
   await panel.locator('.budget-day').first().waitFor();
@@ -107,15 +112,30 @@ try {
   assert.equal(await warnings.count(), 0);
   assert.equal(await page.evaluate(() => window.__notes.filter((n) => n.tag === 'limit-budget').length), 0);
 
-  // The Fable week then goes past today's share too: that one is new, so it warns.
+  // A second tab of the office in the same browser, which the week's warning also counts for.
+  const page2 = await context.newPage();
+  await page2.addInitScript(init);
+  page2.on('pageerror', (e) => errors.push(e.message));
+  await page2.goto(url);
+  await page2.locator('#limits .budget-day').first().waitFor();
+  await page2.waitForTimeout(1500);
+  assert.equal(await warningsIn(page2).count(), 0);
+
+  // The Fable week then goes past today's share too. That one is new, and both tabs get the update
+  // at once: exactly one of them warns.
   limits = { ...limits, at: Date.now(), windows: limits.windows.map((w) => (w.label === 'Fable week' ? { ...w, pct: 31 } : w)) };
   publish();
-  await warnings.waitFor();
-  assert.match(await warnings.innerText(), /the Fable week is at 31%, past today's budget of 29%/);
-  assert.doesNotMatch(await warnings.innerText(), /the week \(all models\)/);
-  notes = await page.evaluate(() => window.__notes.filter((n) => n.tag === 'limit-budget'));
+  const tabs = [page, page2];
+  await Promise.any(tabs.map((p) => warningsIn(p).waitFor()));
+  await Promise.all(tabs.map((p) => p.locator('#limits .budget-day').nth(1).filter({ hasText: '2% over' }).waitFor()));
+  await page.waitForTimeout(2000);
+  const shown = await Promise.all(tabs.map((p) => warningsIn(p).count()));
+  assert.deepEqual([...shown].sort(), [0, 1], `warnings per tab: ${shown}`);
+  const winner = tabs[shown.indexOf(1)];
+  assert.match(await warningsIn(winner).innerText(), /the Fable week is at 31%, past today's budget of 29%/);
+  assert.doesNotMatch(await warningsIn(winner).innerText(), /the week \(all models\)/);
+  notes = [...(await notesIn(page)), ...(await notesIn(page2))];
   assert.equal(notes.length, 1);
-  assert.match(await panel.locator('.budget-day').nth(1).innerText(), /Today\s*2% over/);
 
   assert.deepEqual(errors, []);
   console.log(`limit budget UI ok; screenshots in ${screenshotDir}`);
