@@ -126,8 +126,11 @@ try {
   limits = { ...limits, at: Date.now(), windows: limits.windows.map((w) => (w.label === 'Fable week' ? { ...w, pct: 31 } : w)) };
   publish();
   const tabs = [page, page2];
-  await Promise.any(tabs.map((p) => warningsIn(p).waitFor()));
-  await Promise.all(tabs.map((p) => p.locator('#limits .budget-day').nth(1).filter({ hasText: '2% over' }).waitFor()));
+  // Polled on a timer, not on animation frames, which a tab in the background may not get.
+  const warned = () => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes("Today's Claude budget is used up"));
+  const updated = () => document.querySelectorAll('#limits .budget-day')[1]?.textContent.includes('2% over');
+  await Promise.any(tabs.map((p) => p.waitForFunction(warned, null, { polling: 250, timeout: 60_000 })));
+  await Promise.all(tabs.map((p) => p.waitForFunction(updated, null, { polling: 250, timeout: 60_000 })));
   await page.waitForTimeout(2000);
   const shown = await Promise.all(tabs.map((p) => warningsIn(p).count()));
   assert.deepEqual([...shown].sort(), [0, 1], `warnings per tab: ${shown}`);
