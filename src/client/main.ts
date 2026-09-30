@@ -58,6 +58,8 @@ import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
 import { activeAutonomous, activeTodos, issuesWallMode, onIssuesWallMode, openAutonomousBoard, setIssuesWallMode } from './ui/todos';
 import { onTodoDetails, todoDetailsShown } from './ui/todo-details';
+import { linksToWatch } from './ui/notes';
+import { onNoteDrafts, unsavedNotes, watchNoteDrafts } from './ui/note-drafts';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { StickyWall } from './world/stickies';
 import { openNewSticky, openSticky } from './ui/stickies';
@@ -3596,6 +3598,24 @@ const hud = mountHud(
       },
       run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
     },
+    // Your own notes pad, the To Do board's other side: up on the top bar next to it, with how many links there are to watch.
+    {
+      id: 'notes',
+      icon: '🗒️',
+      label: 'Notes',
+      section: 'Open',
+      status: () => true,
+      chip: () => (unsavedNotes() ? '⚠️ Notes' : 'Notes'),
+      count: () => linksToWatch(),
+      // Red while typing in a note waits for the office (it's kept in this browser meanwhile).
+      tone: () => (unsavedNotes() ? 'danger' : undefined),
+      title: () => {
+        const n = linksToWatch();
+        const unsaved = unsavedNotes();
+        return `${unsaved ? `⚠️ ${unsaved} note${unsaved === 1 ? '' : 's'} not saved yet: kept in this browser until the office is back · ` : ''}Your own notes pad: notes, pictures and links, the same on every floor${n ? ` · ${n} link${n === 1 ? '' : 's'} to watch` : ''}`;
+      },
+      run: () => openBoard('issues', net, boardActions(), { view: 'notes' }),
+    },
     {
       id: 'autonomous',
       icon: '🏢',
@@ -3704,6 +3724,9 @@ const hud = mountHud(
   () => saveSettings(settings),
 );
 onAuthorUpdates(() => hud.refresh());
+// Typing in a note the office hasn't got yet goes when it's back, even after a reload, without opening the pad.
+watchNoteDrafts(net);
+onNoteDrafts(() => hud.refresh());
 onCalendarChores(() => hud.refresh());
 /** The queue agent on this floor: the one who's been hired, or the one waiting at the kiosk. */
 function queueAgent(): Worker | undefined {
