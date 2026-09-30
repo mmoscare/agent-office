@@ -37,7 +37,7 @@ const PANELS: { id: HudPanel; icon: string; label: string; what: string }[] = [
   { id: 'spend', icon: '💸', label: 'Spend', what: 'Today, the budget, all time' },
   { id: 'limits', icon: '⏳', label: 'Claude limits', what: 'The plan’s 5-hour and week' },
   { id: 'balances', icon: '💳', label: 'API balances', what: 'Anthropic, OpenAI and xAI pay-as-you-go' },
-  { id: 'chat', icon: '💬', label: 'Chat', what: 'T opens it either way' },
+  { id: 'chat', icon: '💬', label: 'Chat', what: 'Enter opens it either way' },
   { id: 'floor', icon: '🏢', label: 'Floor details', what: 'Branch, folder, default agent' },
 ];
 
