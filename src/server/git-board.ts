@@ -7,6 +7,7 @@ import { normalizeRepo } from '../shared/floors.js';
 import type { GitBranchInfo, GitCommitLine, GitDiff, GitDiffMode, GitFileChange, GitFileStatus, GitRepoDetail, GitRepoList, GitRepoSummary, OfficeStatus } from '../shared/git-board.js';
 import type { PullRequestRef } from '../shared/protocol.js';
 import { findBranchPr, gh } from './github.js';
+import { createPull } from './github-rest.js';
 import { floorRepository, workspaceRepositories } from './workspaces.js';
 
 // The Git board (the PR board's other side): every repository on the floor, its branches, and what
@@ -530,7 +531,7 @@ export function gitOpenPr(floorDir: string, rel: string, title: string, body: st
     const existing = await findBranchPr(branch, dir);
     if (existing?.state === 'OPEN') return { url: existing.url };
     const repo = await githubOf(dir);
-    const out = await gh(['pr', 'create', ...(repo ? ['--repo', repo] : []), '--head', branch, '--base', base, '--title', title.trim(), '--body', body], dir, 120_000);
+    const out = await createPull(gh, dir, { repository: repo, head: branch, base, title: title.trim(), body }, 120_000);
     const url = out.trim().split('\n').pop() ?? '';
     if (!/^https?:\/\//.test(url)) throw new GitError(url || 'gh pr create failed');
     return { url };

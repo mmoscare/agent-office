@@ -4,6 +4,8 @@ import { store } from '../state';
 import { h, openModal, timeAgo, STATUS_LABEL } from './dom';
 import { confirmDialog } from './prompt';
 import { providerPicker, providerLabel, providerUsageState, resolvedProvider, modelBadge } from './provider';
+import { modelBrand } from '../../shared/model-brand';
+import { modelLogoEl } from '../world/model-logos';
 import { officeFull } from '../world/machine';
 import { restartText, stoppedByRestart, taskStatus, unshippedText } from '../../shared/task-status';
 
@@ -54,7 +56,7 @@ export function openQueue(net: Net, actions: QueueActions) {
   );
 
   const ta = h('textarea', { rows: 2, placeholder: 'Describe a task for the next free worker…', 'aria-label': 'New task' }) as HTMLTextAreaElement;
-  const provider = providerPicker(store.project, 'queue-provider', 'Provider', 'queue');
+  const provider = providerPicker(store.project, 'queue-provider');
   const addBtn = h('button.btn.primary', { type: 'submit' }, 'Add to queue');
   const form = h('form.queue-add', {}, ta, provider.element, addBtn) as HTMLFormElement;
   form.noValidate = true;
@@ -137,10 +139,12 @@ export function openQueue(net: Net, actions: QueueActions) {
       buttons.push(h('button.btn', { type: 'button', title: 'Put it back on the queue', onclick: () => net.send({ t: 'queue.retry', taskId: t.id }) }, '↻ Requeue'));
       buttons.push(h('button.btn', { type: 'button', title: 'Forget it', 'aria-label': 'Remove', onclick: () => net.send({ t: 'queue.remove', taskId: t.id }) }, '✕'));
     }
+    const brand = modelBrand(t.model ?? w?.model, t.provider ?? w?.provider);
     return h(
       'li',
       { class: t.status },
       pos ? h('span.pos', {}, pos) : null,
+      brand ? modelLogoEl(brand, t.model ?? w?.model) : null,
       h('div.queue-main', {}, taskTitle(t), warning, h('div.queue-meta', {}, meta.join(' · '))),
       h('div.queue-actions', {}, ...buttons),
     );
@@ -167,8 +171,8 @@ export function openQueue(net: Net, actions: QueueActions) {
         ' on an issue. Whenever a desk is free and fewer than ',
         h('b', {}, q.maxWorkers === 0 ? '0' : String(q.maxWorkers)),
         store.project?.branch
-          ? ' workers are busy, the next task gets a fresh worker in its own git worktree. Issues are assigned on GitHub when they start, and the pull request is linked when it shows up.'
-          : ' workers are busy, the next task gets a fresh worker in this shared folder. For separate worktrees across repositories, hire from an empty desk and select those repositories instead.',
+          ? " of its tasks are running, the next task gets a fresh worker in its own git worktree (workers you hire yourself don't count). Issues are assigned on GitHub when they start, and the pull request is linked when it shows up."
+          : " of its tasks are running, the next task gets a fresh worker in this shared folder (workers you hire yourself don't count). For separate worktrees across repositories, hire from an empty desk and select those repositories instead.",
       ),
       queued.length && officeFull(m)
         ? h('p.note', {}, `⏸ The office is at its limit of ${m.limit} worker${m.limit === 1 ? '' : 's'}, so the next task waits until one goes home. A queue worker that's finished goes home by itself to make room.`)

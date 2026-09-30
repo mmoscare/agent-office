@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { GitHub, MergeWatch, findCheckouts } from '../src/server/github.js';
+import { GitHub, MergeWatch, findBranchPr, findCheckouts } from '../src/server/github.js';
 import type { GhPull } from '../src/shared/protocol.js';
 
 const pull = (number: number, state: string): GhPull => ({
@@ -109,4 +109,25 @@ test('folder boards keep failed repositories, throttle background reads, and rec
   failed = '';
   await github.refresh();
   assert.equal(github.pulls.error, undefined);
+});
+
+test("a branch's PR is found over REST in origin's repository, an open one before newer closed ones", async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'office-branch-pr-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/mmoscare/agent-office.git'], { cwd: dir });
+  execFileSync('git', ['remote', 'add', 'upstream', 'https://github.com/AgentSystemLabs/agent-office.git'], { cwd: dir });
+  const pr = (number: number, state: string, merged_at: string | null) => ({ number, state, merged_at, html_url: `https://github.com/mmoscare/agent-office/pull/${number}`, head: { ref: 'office/fizz-6d06', sha: 'abc' } });
+  const calls: string[][] = [];
+  let answer = [pr(52, 'closed', null), pr(41, 'open', null)];
+  const query = async (args: string[]) => (calls.push(args), `HTTP/2.0 200 OK
+X-Ratelimit-Remaining: 4975
+
+${JSON.stringify(answer)}`);
+  assert.deepEqual(await findBranchPr('office/fizz-6d06', dir, query), { number: 41, url: 'https://github.com/mmoscare/agent-office/pull/41', state: 'OPEN' });
+  assert.deepEqual(calls, [['api', '-i', 'repos/mmoscare/agent-office/pulls?state=all&head=mmoscare:office%2Ffizz-6d06&per_page=100']]);
+  answer = [pr(41, 'closed', '2026-09-28T21:54:54Z'), pr(12, 'closed', null)];
+  assert.deepEqual(await findBranchPr('office/fizz-6d06', dir, query), { number: 41, url: 'https://github.com/mmoscare/agent-office/pull/41', state: 'MERGED' });
+  answer = [];
+  assert.equal(await findBranchPr('office/fizz-6d06', dir, query), undefined);
 });

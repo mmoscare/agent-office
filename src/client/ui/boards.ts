@@ -1,11 +1,11 @@
 import { DESK_BY_ID } from '../../shared/layout';
-import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
+import { ghKey, ghRef, type AgentEffort, type AgentProvider, type GhIssue, type GhLabel, type GhPull, type GhWhere, type UnshippedItem, type WorkerInfo, type PullWork } from '../../shared/protocol';
 import { pullWorkers } from '../../shared/pull-work';
 import { recoveryTitle } from '../../shared/task-status';
 import type { Net } from '../net';
 import { store, workerForPull } from '../state';
 import { h, openModal, timeAgo } from './dom';
-import { labelChip, openIssue, openPull } from './pull';
+import { labelChip, openIssue, openLabels, openPull } from './pull';
 import { providerLabel } from './provider';
 import { pullWorkIndicators } from './pull-work';
 import type { MeetingPreset } from './meeting';
@@ -13,6 +13,7 @@ import { ghTrouble, groupByRepo, pullSections, pullStatus, showsRepo } from './p
 import { diffStat, emptyRow, pill, repoHeading, row, section, skeletonRows, submitterChip } from './pr-board-parts';
 import { unshippedSection } from './unshipped-list';
 import { mountTodoBoard, type TodoBoard } from './todos';
+import { officePrompt } from './prompts';
 
 export interface BoardActions {
   /** Start a worker on a ready-made prompt (shown for editing first). */
@@ -41,32 +42,78 @@ export function checkoutNote(it: GhWhere): string {
   return it.repo ? `It's in ${it.repo}, which is checked out in the \`${it.repoDir ?? '.'}\` folder here: cd into it and do the work there.\n\n` : '';
 }
 
-/** The task a worker gets for an issue, from the board, a carried card or the queue. */
-export function issuePrompt(it: Pick<GhIssue, 'number' | 'title' | 'repo' | 'repoDir'>): string {
-  return `Work on GitHub issue ${it.repo ? `${it.repo}` : ''}#${it.number}: "${it.title}".\n\n${checkoutNote(it)}Read it first with \`gh issue view ${it.number} --comments${repoFlag(it)}\`. Create a new branch, implement the change, verify it, then open a pull request that closes #${it.number}.`;
+/** The task a worker gets for an issue, from the board, a carried card or the queue (the 'issue.work' prompt). On a folder floor the worker is also told which checkout. */
+export function issuePrompt(it: Pick<GhIssue, 'number' | 'title'> & Partial<Pick<GhIssue, 'url' | 'repo' | 'repoDir'>>): string {
+  const prompt = officePrompt('issue.work', issueVars(it));
+  return it.repo ? `${checkoutNote(it)}Add \`${repoFlag(it).trim()}\` to every \`gh\` command.\n\n${prompt}` : prompt;
+}
+
+/** What an issue's prompts fill in. A carried card has no URL, but the board usually knows it. */
+export function issueVars(it: Pick<GhIssue, 'number' | 'title'> & { url?: string; repo?: string }) {
+  return { number: it.number, title: it.title, url: it.url ?? store.issues.items.find((i) => i.number === it.number && (!it.repo || i.repo === it.repo))?.url ?? '' };
 }
 
 const TILTS = ['-1.2deg', '0.8deg', '-0.4deg', '1.4deg', '0deg', '-0.9deg'];
 const NOTE_COLORS = ['#fff7b0', '#ffd6e0', '#caffbf', '#bde0fe', '#ffe5b4'];
 
 interface Column<T> {
+  /** Names the column in your saved label filters. */
+  key: string;
   title: string;
   items: T[];
+  /** Shows at most this many (after the label filter). */
+  max?: number;
 }
+
+const byUpdated = (a: { updatedAt: string }, b: { updatedAt: string }) => b.updatedAt.localeCompare(a.updatedAt);
 
 function issueColumns(items: GhIssue[]): Column<GhIssue>[] {
   const open = items.filter((i) => i.state === 'OPEN');
   const inProgress = open.filter((i) => i.assignees.length > 0 || i.labels.some((l) => /progress|doing|wip|started/i.test(l.name)) || store.taskForIssue(i.number, i.repo)?.status === 'running');
   const todo = open.filter((i) => !inProgress.includes(i));
-  const closed = items.filter((i) => i.state !== 'OPEN').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 40);
   return [
-    { title: '📥 Open', items: todo },
-    { title: '🚧 In progress', items: inProgress },
-    { title: '✅ Closed', items: closed },
+    { key: 'open', title: '📥 Open', items: todo },
+    { key: 'progress', title: '🚧 In progress', items: inProgress },
+    { key: 'closed', title: '✅ Closed', items: items.filter((i) => i.state !== 'OPEN').sort(byUpdated), max: 40 },
   ];
 }
 
-function labelChips(labels: { name: string; color: string }[]) {
+/** The labels each column is filtered to (column key → label names), per floor and board, kept in this browser. */
+type LabelFilters = Record<string, string[]>;
+
+function filtersKey(kind: 'issues' | 'pulls'): string {
+  return `agent-office.board-labels.${store.floor ?? store.project?.dir ?? ''}.${kind}`;
+}
+
+function loadFilters(kind: 'issues' | 'pulls'): LabelFilters {
+  const out: LabelFilters = {};
+  try {
+    const saved = JSON.parse(localStorage.getItem(filtersKey(kind)) ?? 'null');
+    if (saved && typeof saved === 'object') {
+      for (const [k, v] of Object.entries(saved)) if (Array.isArray(v) && v.length) out[k] = v.filter((x): x is string => typeof x === 'string');
+    }
+  } catch {
+    // storage blocked or garbled
+  }
+  return out;
+}
+
+function saveFilters(kind: 'issues' | 'pulls', filters: LabelFilters) {
+  try {
+    localStorage.setItem(filtersKey(kind), JSON.stringify(filters));
+  } catch {
+    // storage blocked
+  }
+}
+
+/** Every label on the board's cards, by name, for the column filters. */
+function boardLabels(items: { labels: { name: string; color: string }[] }[]): Map<string, string> {
+  const all = new Map<string, string>();
+  for (const it of items) for (const l of it.labels) if (!all.has(l.name)) all.set(l.name, l.color);
+  return all;
+}
+
+function labelChips(labels: GhLabel[]) {
   return labels.slice(0, 4).map(labelChip);
 }
 
@@ -162,6 +209,7 @@ function pullRow(p: GhPull, showRepo: boolean, net: Net, actions: BoardActions):
       checks,
       diffStat(p.additions, p.deletions),
     ],
+    action: h('button.btn.prb-tool', { type: 'button', title: 'Change the labels', 'aria-label': `Change the labels on ${ghRef(p)}`, onclick: () => openLabels('pull', p, net) }, '🏷️'),
     onOpen: () => openPull(p, net, actions),
   });
 }
@@ -178,31 +226,71 @@ interface PullsView {
   doneAll: boolean;
 }
 
+/** Click-to-filter state shared with the issues columns and the PR board. */
+interface LabelUi {
+  filters: LabelFilters;
+  picking: string | null;
+  toggle(key: string): void;
+  setFilter(key: string, labels: string[]): void;
+  picker(col: Column<GhPull>, all: Map<string, string>, picked: string[]): HTMLElement;
+}
+
 /**
  * The Pull Requests board, top to bottom: a tally of what's where, then what needs you (PRs to
  * merge, review or fix, and work not yet in a PR), what's under way, and what's finished. On a wide
  * window the urgent sections sit on the left and the rest on the right; on a narrow one they stack.
+ * The labels chip filters every section, the same way a column header does on the issues board.
  */
-function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net: Net, actions: BoardActions, rerender: () => void) {
+function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net: Net, actions: BoardActions, rerender: () => void, labels: LabelUi) {
   const st = store.pulls;
   const loading = !st.fetchedAt && !st.error;
   const unavailable = !!st.error && !st.items.length;
-  const showRepo = showsRepo(st.items.map((p) => p.repo));
-  const s = pullSections(st.items, view.doneAll ? Infinity : 10);
+  const picked = labels.filters.pulls ?? [];
+  const items = picked.length ? st.items.filter((p) => p.labels.some((l) => picked.includes(l.name))) : st.items;
+  const showRepo = showsRepo(items.map((p) => p.repo));
+  const s = pullSections(items, view.doneAll ? Infinity : 10);
   const trouble = st.error ? troubleText(st.error, st.items.length > 0) : undefined;
+  const all = boardLabels(st.items);
 
   const jump = (id: string, icon: string, n: number | string, what: string, tone: string) =>
     h('button.prb-chip', { type: 'button', class: `tone-${tone}`, 'data-focus': `tally-${id}`, title: `Go to ${what}`, onclick: () => body.querySelector(`#${id}`)?.scrollIntoView({ block: 'start' }) }, h('span', { 'aria-hidden': 'true' }, icon), h('b', {}, String(n)), what);
   const pending = loading ? '…' : unavailable ? '?' : undefined;
+  const labelChipBtn = h(
+    'button.prb-chip',
+    {
+      type: 'button',
+      class: picked.length ? 'tone-needs' : '',
+      'data-focus': 'tally-labels',
+      'aria-expanded': String(labels.picking === 'pulls'),
+      title: picked.length ? `Only pull requests labelled ${picked.join(' or ')}. Click to change.` : 'Filter by label',
+      onclick: () => labels.toggle('pulls'),
+    },
+    h('span', { 'aria-hidden': 'true' }, '🏷️'),
+    h('b', {}, picked.length ? String(picked.length) : 'all'),
+    'labels',
+  );
   tally.replaceChildren(
     jump('prb-needs', '🙋', pending ?? s.needsYou.length, s.needsYou.length === 1 ? 'needs you' : 'need you', 'needs'),
     jump('prb-unshipped', '🧳', store.unshipped.scannedAt ? store.unshipped.items.length : '…', 'unshipped', 'unshipped'),
     jump('prb-progress', '🚧', pending ?? s.inProgress.length, 'in progress', 'progress'),
     jump('prb-done', '🎉', pending ?? s.doneTotal, 'done', 'done'),
+    labelChipBtn,
     trouble ? h('div.prb-banner', { role: 'status', title: st.error }, h('span.big', { 'aria-hidden': 'true' }, trouble.icon), h('div', {}, h('b', {}, trouble.text), h('small', {}, trouble.sub))) : '',
   );
+  if (labels.picking === 'pulls') tally.append(labels.picker({ key: 'pulls', title: '🔀 Pull requests', items: st.items }, all, picked));
+  else if (picked.length) {
+    tally.append(
+      h(
+        'div.col-active',
+        {},
+        ...picked.map((name) => labelChip({ name, color: all.get(name) ?? '#dddddd' })),
+        h('button.col-clear', { type: 'button', 'aria-label': 'Clear label filter', title: 'Show every pull request', 'data-focus': 'clear-pulls', onclick: () => labels.setFilter('pulls', []) }, '✕'),
+      ),
+    );
+  }
 
-  const blank = (icon: string, text: string, sub?: string): Node[] => (loading ? skeletonRows(2) : unavailable ? [emptyRow(trouble!.icon, 'GitHub unavailable', 'Pull requests show up here once it answers.')] : [emptyRow(icon, text, sub)]);
+  const blank = (icon: string, text: string, sub?: string): Node[] =>
+    loading ? skeletonRows(2) : unavailable ? [emptyRow(trouble!.icon, 'GitHub unavailable', 'Pull requests show up here once it answers.')] : picked.length ? [emptyRow('🏷️', 'Nothing with those labels')] : [emptyRow(icon, text, sub)];
   const needs = section({ id: 'prb-needs', tone: 'needs', icon: '🙋', title: 'Needs you', count: s.needsYou.length, hint: 'merge, review or fix', rows: s.needsYou.length ? pullRows(s.needsYou, showRepo, net, actions) : blank('☕', 'Nothing waiting on you', 'Pull requests to review or merge land here.') });
   const progress = section({ id: 'prb-progress', tone: 'progress', icon: '🚧', title: 'In progress', count: s.inProgress.length, hint: 'drafts, running checks, changes asked', rows: s.inProgress.length ? pullRows(s.inProgress, showRepo, net, actions) : blank('🌱', 'Nothing in flight') });
 
@@ -219,12 +307,18 @@ function renderPulls(body: HTMLElement, tally: HTMLElement, view: PullsView, net
   body.replaceChildren(h('div.prb-main', {}, needs, progress), h('div.prb-side', {}, unshipped(net, actions), done));
 }
 
-function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick: () => void) {
+function card(it: GhIssue | GhPull, meta: (Node | string)[], i: number, onclick: () => void, onLabels: () => void) {
   const n = it.number;
   const title = it.title;
   return h(
     'li.card',
-    { style: `--tilt:${TILTS[n % TILTS.length]};background:${NOTE_COLORS[n % NOTE_COLORS.length]};--pin:${['#ef476f', '#118ab2', '#06d6a0', '#ffd166'][i % 4]}`, tabindex: 0, onclick, onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && onclick()) as EventListener },
+    {
+      style: `--tilt:${TILTS[n % TILTS.length]};background:${NOTE_COLORS[n % NOTE_COLORS.length]};--pin:${['#ef476f', '#118ab2', '#06d6a0', '#ffd166'][i % 4]}`,
+      tabindex: 0,
+      onclick,
+      onkeydown: ((e: KeyboardEvent) => e.key === 'Enter' && e.target === e.currentTarget && onclick()) as EventListener,
+    },
+    h('button.card-labels', { type: 'button', title: 'Change the labels', 'aria-label': `Change the labels on ${ghRef(it)}`, onclick: ((e: Event) => (e.stopPropagation(), onLabels())) as EventListener }, '🏷️'),
     h('div.num', {}, ghRef(it)),
     h('div.ttl', {}, title),
     h('div.meta', {}, ...meta.filter((m) => m !== '').map((m) => (typeof m === 'string' ? h('span', {}, m) : m))),
@@ -267,6 +361,78 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
     if (to === 'todo' && was !== 'todo') todo?.focus();
   };
 
+  const filters = loadFilters(kind);
+  /** The column whose label picker is open, if any. */
+  let picking: string | null = null;
+  const setFilter = (key: string, labels: string[]) => {
+    if (labels.length) filters[key] = labels;
+    else delete filters[key];
+    saveFilters(kind, filters);
+    render();
+  };
+
+  /** Toggles for every label on the board; the column shows cards with any of the ones picked. */
+  const labelPicker = <T extends GhIssue | GhPull>(col: Column<T>, all: Map<string, string>, picked: string[]) => {
+    const names = [...new Set([...all.keys(), ...picked])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    const list = h('div.col-labels');
+    for (const name of names) {
+      const on = picked.includes(name);
+      const n = col.items.filter((it) => it.labels.some((l) => l.name === name)).length;
+      list.append(
+        h(
+          'button.label-pick',
+          { type: 'button', 'aria-pressed': String(on), 'data-focus': `${col.key}:${name}`, title: `${n} in ${col.title.replace(/^\S+ /, '')}`, onclick: () => setFilter(col.key, on ? picked.filter((x) => x !== name) : [...picked, name]) },
+          labelChip({ name, color: all.get(name) ?? '#dddddd' }),
+          h('small', {}, String(n)),
+        ),
+      );
+    }
+    if (!names.length) list.append(h('small', {}, 'No labels on this board yet.'));
+    const hint = picked.length ? 'Showing cards with any of these labels' : 'Pick labels to show only their cards';
+    return h('div.col-filter', {}, list, h('div.col-filter-foot', {}, h('small', {}, hint), picked.length ? h('button.btn.small', { type: 'button', onclick: () => setFilter(col.key, []) }, 'Clear') : null));
+  };
+
+  /** A column of cards. Click its header to filter it by label. */
+  const column = <T extends GhIssue | GhPull>(col: Column<T>, all: Map<string, string>, cardOf: (it: T, i: number) => HTMLElement) => {
+    const picked = filters[col.key] ?? [];
+    const matching = picked.length ? col.items.filter((it) => it.labels.some((l) => picked.includes(l.name))) : col.items;
+    const shown = matching.slice(0, col.max);
+    const ul = h('ul');
+    shown.forEach((it, i) => ul.append(cardOf(it, i)));
+    if (!shown.length) ul.append(h('li.empty', {}, picked.length ? 'Nothing here with those labels' : 'Nothing here'));
+    const open = picking === col.key;
+    const count = picked.length ? `${shown.length} / ${col.items.slice(0, col.max).length}` : String(shown.length);
+    const head = h(
+      'button.col-head',
+      {
+        type: 'button',
+        'aria-expanded': String(open),
+        'data-focus': col.key,
+        title: picked.length ? `Only cards labelled ${picked.join(' or ')}. Click to change.` : 'Filter by label',
+        onclick: () => {
+          picking = open ? null : col.key;
+          render();
+        },
+      },
+      h('span', {}, col.title),
+      h('span.col-count', {}, count, h('span.col-caret', { 'aria-hidden': 'true' }, open ? '▴' : '▾')),
+    );
+    const sectionEl = h('section.column', { class: picked.length ? 'filtered' : '' }, h('h4', {}, head));
+    if (open) sectionEl.append(labelPicker(col, all, picked));
+    else if (picked.length) {
+      sectionEl.append(
+        h(
+          'div.col-active',
+          {},
+          ...picked.map((name) => labelChip({ name, color: all.get(name) ?? '#dddddd' })),
+          h('button.col-clear', { type: 'button', 'aria-label': 'Clear label filter', title: 'Show every card', onclick: () => setFilter(col.key, []) }, '✕'),
+        ),
+      );
+    }
+    sectionEl.append(ul);
+    return sectionEl;
+  };
+
   const render = () => {
     if (view === 'todo') {
       todo ??= mountTodoBoard(net);
@@ -301,37 +467,39 @@ export function openBoard(kind: 'issues' | 'pulls', net: Net, actions: BoardActi
       const focusButton = focusRow && focused !== focusRow ? [...focusRow.querySelectorAll<HTMLElement>('button')].indexOf(focused!) : -1;
       const focusSection = focused?.closest('section')?.id;
       const { scrollTop } = body;
-      renderPulls(body, tally, pullsView, net, actions, render);
+      renderPulls(body, tally, pullsView, net, actions, render, { filters, picking, toggle: (key) => { picking = picking === key ? null : key; render(); }, setFilter, picker: labelPicker });
       body.scrollTop = scrollTop;
       if (focused) {
         const same = focusId ? el.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focusId)}"]`) : null;
-        const row = focusKey ? body.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`) : null;
-        const inRow = row && focusButton >= 0 ? row.querySelectorAll<HTMLElement>('button')[focusButton] ?? row : row;
+        const rowEl = focusKey ? body.querySelector<HTMLElement>(`[data-key="${CSS.escape(focusKey)}"]`) : null;
+        const inRow = rowEl && focusButton >= 0 ? rowEl.querySelectorAll<HTMLElement>('button')[focusButton] ?? rowEl : rowEl;
         const target = same ?? inRow ?? (focusSection ? body.querySelector<HTMLElement>(`#${focusSection} h3 button:last-child`) : null);
         target?.focus({ preventScroll: true });
       }
       return;
     }
-    // Every refresh rebuilds the columns, so note how far each was scrolled and put it back afterwards.
+    // Every refresh rebuilds the columns, so note how far each was scrolled and put it back afterwards,
+    // and keep focus on the header or label toggle it was on.
     const scrolled = [...body.querySelectorAll('.column > ul')].map((ul) => ul.scrollTop);
     const { scrollLeft, scrollTop } = body;
+    const active = document.activeElement;
+    const focused = active && body.contains(active) ? active.getAttribute('data-focus') : null;
     body.replaceChildren();
     warning.hidden = !st.error;
     if (st.error) warning.textContent = `${st.items.length ? 'Some GitHub data may be out of date' : "Couldn't load from GitHub"}: ${st.error}`;
     if (st.error && !st.items.length) return;
+    const all = boardLabels(st.items);
     for (const col of issueColumns(store.issues.items)) {
-      const ul = h('ul');
-      col.items.forEach((it, i) =>
-        ul.append(
-          card(it, [repoChip(it), ...labelChips(it.labels), queueChip(it), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions)),
+      body.append(
+        column(col, all, (it, i) =>
+          card(it, [repoChip(it), ...labelChips(it.labels), queueChip(it), it.assignees.length ? `👤 ${it.assignees.join(', ')}` : `by ${it.author}`, it.comments ? `💬 ${it.comments}` : '', timeAgo(it.updatedAt)], i, () => openIssue(it, net, actions), () => openLabels('issue', it, net)),
         ),
       );
-      if (!col.items.length) ul.append(h('li.empty', {}, 'Nothing here'));
-      body.append(h('section.column', {}, h('h4', {}, col.title, h('span', {}, String(col.items.length))), ul));
     }
     body.querySelectorAll('.column > ul').forEach((ul, i) => (ul.scrollTop = scrolled[i] ?? 0));
     body.scrollLeft = scrollLeft;
     body.scrollTop = scrollTop;
+    if (focused !== null) [...body.querySelectorAll<HTMLElement>('[data-focus]')].find((b) => b.dataset.focus === focused)?.focus();
   };
 
   const unsubs = [store.on(kind, render), store.on('queue', render)];
