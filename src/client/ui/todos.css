@@ -1,5 +1,7 @@
 /* Your own 🔥 To Do board (ui/todos.ts), on the issues board's To Do side. */
-.modal.board .body.todo-body { flex-direction: column; min-height: 0; overflow: hidden; }
+/* The board fills the cork edge to edge, so a double-click anywhere around the cards reaches it. */
+.modal.board .body.todo-body { flex-direction: column; min-height: 0; overflow: hidden; padding: 0; }
+.modal.board .body.todo-body > .todo-board { padding: 12px; }
 .board-tabs { display: inline-flex; gap: 6px; }
 /* The issues board's own Refresh and status, put away while it shows To Do. */
 .modal.board header [hidden] { display: none; }
@@ -96,6 +98,34 @@
   .todo-cols, .todo-cols:has(.todo-done.folded) { grid-template-columns: minmax(0, 1fr); }
   .todo-col { min-height: 0; }
 }
+/* A card's notes, subtasks and pictures (ui/todo-details.ts): only while the board shows them. */
+.todo-reveal-hint { align-self: center; font-size: 11px; font-weight: 800; color: rgba(43, 45, 66, .7); user-select: none; }
+.todo-details { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; padding: 7px 8px 8px; background: #fffaf0; border: 2px dashed rgba(43, 45, 66, .3); border-radius: 8px; cursor: default; }
+.todo-details.todo-drop-pic { border-color: #118ab2; background: #e6f4fa; }
+.todo-details-head { display: flex; gap: 6px; align-items: center; font-size: 11px; font-weight: 900; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.todo-details-head > span:first-child { flex: 1; }
+.todo-sub-count { padding: 0 7px; border: 2px solid var(--ink); border-radius: 999px; background: #fff; color: var(--ink); text-transform: none; }
+.todo-sub-count.all { background: #06d6a0; }
+.todo-subs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.todo-sub { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; font-weight: 700; }
+.todo-sub label { flex: 1; display: flex; gap: 6px; align-items: flex-start; cursor: pointer; min-width: 0; }
+.todo-sub input[type=checkbox] { margin: 2px 0 0; accent-color: #06d6a0; flex: none; }
+.todo-sub-text { word-break: break-word; }
+.todo-sub.done .todo-sub-text { color: var(--muted); text-decoration: line-through; }
+.todo-sub-x { padding: 0 6px; font-size: 10px; color: var(--muted); }
+.modal .todo-details input.todo-sub-add, .modal .todo-details input.todo-sub-edit { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 8px; font: 700 12px var(--font); color: var(--ink); background: #fff; border: 2px dashed rgba(43, 45, 66, .35); border-radius: 8px; }
+.modal .todo-details input.todo-sub-edit { flex: 1; border-style: solid; }
+.modal .todo-details textarea.todo-notes { box-sizing: border-box; width: 100%; min-height: 54px; resize: vertical; padding: 6px 8px; font: 600 13px/1.4 var(--font); color: var(--ink); background: #fff; border: 2px solid rgba(43, 45, 66, .35); border-radius: 8px; white-space: pre-wrap; }
+.modal .todo-details textarea.todo-notes:focus, .modal .todo-details input.todo-sub-add:focus { outline: none; border-color: var(--ink); border-style: solid; }
+.todo-pics { display: flex; flex-wrap: wrap; gap: 6px; }
+.todo-pics:empty { display: none; }
+.todo-pic { position: relative; display: block; width: 72px; height: 72px; border: 2px solid var(--ink); border-radius: 8px; overflow: hidden; background: #fff; }
+.todo-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.todo-pic-x { position: absolute; top: 2px; right: 2px; padding: 0 5px; font-size: 10px; opacity: 0; }
+.todo-pic:hover .todo-pic-x, .todo-pic:focus-within .todo-pic-x { opacity: 1; }
+.todo-pic-busy { align-self: center; font-size: 12px; font-weight: 800; color: var(--muted); }
+.todo-pic-add { padding: 1px 7px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+
 @media (prefers-reduced-motion: reduce) {
   .todo-col.todo-busy h3, .todo-fold.todo-flash { animation: none; }
   .todo-card, .todo-card:hover { transition: none; transform: none; }

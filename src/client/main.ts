@@ -56,7 +56,8 @@ import { openChanges, openChangesFor, routeChangesMessage } from './ui/changes';
 import { openPrompt, confirmDialog, sendHomeDialog, routeWorktreeMessage } from './ui/prompt';
 import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
-import { activeTodos, issuesWallMode, onIssuesWallMode, setIssuesWallMode } from './ui/todos';
+import { activeAutonomous, activeTodos, issuesWallMode, onIssuesWallMode, openAutonomousBoard, setIssuesWallMode } from './ui/todos';
+import { onTodoDetails, todoDetailsShown } from './ui/todo-details';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { gitRepos, loadGitRepos, onGitRepos, onPullsWallMode, openGitBoard, pullsWallMode, setPullsWallMode } from './ui/git-board';
 import { GitBoardTexture, PullsWallSwitch } from './world/git-board';
@@ -247,8 +248,21 @@ store.on('peers', () => {
 // The issues board's other side, and the one that faces the room unless you flip it: your own To Do
 // board, drawn from your list (so everyone sees their own), with a switch above it (ui/todos.ts).
 const todoTex = new TodoWallTexture();
-store.on('todos', () => todoTex.render(store.todos));
-todoTex.render(store.todos);
+const renderTodoWall = () => todoTex.render(store.todos, todoDetailsShown('mine'));
+store.on('todos', renderTodoWall);
+onTodoDetails('mine', renderTodoWall);
+renderTodoWall();
+// The 🏢 Autonomous Tasks whiteboard, south of the drawing one: the office's list, drawn like the To Do.
+const autonomousTex = new TodoWallTexture('🏢 Autonomous Tasks');
+{
+  const face = office.autonomousBoard.face.material;
+  face.map = autonomousTex.texture;
+  face.needsUpdate = true;
+}
+const renderAutonomous = () => autonomousTex.render(store.autonomous, todoDetailsShown('autonomous'));
+store.on('autonomous', renderAutonomous);
+onTodoDetails('autonomous', renderAutonomous);
+renderAutonomous();
 const issuesSwitch = new IssuesWallSwitch();
 {
   const b = BOARDS.issues;
@@ -2083,6 +2097,7 @@ function interact(target: Interactable | null, key: DeskKey, note = aimedNote) {
     if (store.content) openContentKanban(net);
     else openWhiteboard(net);
   }
+  else if (target.kind === 'autonomous') openAutonomousBoard(net);
   else if (target.kind === 'cabinet') cabinet.play();
   else if (target.kind === 'ladder') grabLadder();
   else if (target.kind === 'pole' && target.pole !== undefined) usePole(target.pole);
@@ -2812,6 +2827,11 @@ function hintFor(it: Interactable): Hint {
       const names = [...store.peers.values()].filter((p) => p.reading && p.id !== store.you && store.onMyFloor(p)).map((p) => p.name).join(', ');
       return { k: names, parts: [title('📚 Bookshelf'), aside(names ? `📖 ${clip(names, 40)} reading` : "the project's docs"), key('E', 'Read the docs')] };
     }
+    case 'autonomous': {
+      const now = activeAutonomous();
+      const open = store.autonomous.filter((t) => t.column !== 'done').length;
+      return { k: `autonomous:${now.length}:${open}`, parts: [title('🏢 Autonomous Tasks'), aside(now.length ? `${now.length} active · ${open} open` : `${open} open`), key('E', 'Open')] };
+    }
     case 'whiteboard': {
       if (store.content) {
         const glance = contentGlance(store.content);
@@ -3373,7 +3393,7 @@ document.addEventListener('pointerlockchange', () => {
 const raycaster = new THREE.Raycaster();
 const CROSSHAIR = new THREE.Vector2(0, 0);
 /** How close (meters from your eyes) you must be to use each kind of thing. */
-const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5 };
+const REACH: Record<InteractKind, number> = { desk: 4.5, station: 4.5, coffee: 3, issues: 9, pulls: 9, gitToggle: 9, todoToggle: 9, authorUpdates: 9, manual: 4, calendar: 5, services: 9, queue: 9, tv: 10, decor: 9, smoke: 3, elevator: 4.5, gong: 3.5, dog: 3.2, jukebox: 4, seat: 3, whiteboard: 7, autonomous: 7, plans: 4, timecard: 4, cabinet: 4, ladder: 3, pole: 4, meeting: 7, bar: 3.5, dj: 6, ledger: 3.5, golf: 3.5, ball: 3.2, bookshelf: 4, clipboard: 4.5 };
 const eye = new THREE.Vector3();
 
 /** What the ray through `ndc` lands on first, whether it is within reach (plus `slack` meters), and where it hit. */
@@ -3555,6 +3575,18 @@ const hud = mountHud(
         return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'Your own to-do list, the same on every floor';
       },
       run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
+    },
+    {
+      id: 'autonomous',
+      icon: '🏢',
+      label: 'Autonomous Tasks',
+      section: 'Open',
+      count: () => activeAutonomous().length,
+      title: () => {
+        const active = activeAutonomous();
+        return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'The office’s Autonomous Tasks kanban, on its own whiteboard';
+      },
+      run: () => openAutonomousBoard(net),
     },
     { id: 'issues', icon: '📌', label: 'Issues', section: 'Open', count: () => store.issues.items.filter((i) => i.state === 'OPEN').length, run: () => openBoard('issues', net, boardActions(), { view: 'issues' }) },
     { id: 'pulls', icon: '🔀', label: 'Pull requests', section: 'Open', count: () => store.pulls.items.filter((p) => p.state === 'OPEN').length, run: () => openBoard('pulls', net, boardActions()) },
@@ -3999,7 +4031,7 @@ void whoami().then(() => {
 });
 
 // Debug handle for quick checks from the console / headless screenshots.
-(window as any).__office = { contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball, staffer };
+(window as any).__office = { autonomousBoard: () => ({ canvas: autonomousTex.texture.image as HTMLCanvasElement, face: office.autonomousBoard.face }), contentKanban: () => ({ on: !!store.content, canvas: contentTex.image }), issuesWall:() => ({ mode: issuesWallMode(), map: (office.boardMeshes.issues.material as THREE.MeshBasicMaterial).map === todoTex.texture ? 'todo' : 'issues', canvas: todoTex.texture.image as HTMLCanvasElement }), flipIssuesWall, roof: () => roof, booze, dj: () => djFrame(djAt()), store, player, caffeine, camera, arcade, cabinet, workerViews, departures, arrivals, scene, net, renderer, hands, me, remotes, settings, gallery, hanger, office, ride, switchFloor, climber, golf, balls, elevatorPanelOpen, confetti, dog, sky, holiday, carried: () => carrying, emoteWheel, emote, ball, staffer };
 (window as any).__voice = voice;
 (window as any).__sound = sound;
 (window as any).__notify = notifier;
