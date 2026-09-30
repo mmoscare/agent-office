@@ -162,21 +162,28 @@ async function knownHeads(heads: string[], cwd: string): Promise<string[]> {
 /**
  * What `c` holds: uncommitted files, and commits no remote has, on whatever its folder has checked out
  * and on its own branch. `landed` are merged pull requests' heads: what they delivered doesn't count,
- * even once GitHub has deleted the branch.
+ * even once GitHub has deleted the branch. `own` also counts its commits since it was cut.
  */
-export async function checkoutWork(c: WorkerCheckout, landed: string[] = []): Promise<CheckoutWork> {
+export async function checkoutWork(c: WorkerCheckout, landed: string[] = [], own = false): Promise<CheckoutWork> {
   const work: CheckoutWork = { dirty: 0, unpushed: 0 };
   try {
     const here = existsSync(c.dir);
     const cwd = here ? c.dir : c.repo;
-    const tips = here ? ['HEAD'] : [];
-    if (c.branch && (await ok(git(['rev-parse', '--verify', '--quiet', branchRef(c.branch)], cwd)))) tips.push(branchRef(c.branch));
+    const [branch, status, delivered] = await Promise.all([
+      c.branch ? ok(git(['rev-parse', '--verify', '--quiet', branchRef(c.branch)], cwd)) : false,
+      here ? git(['status', '--porcelain'], cwd) : '',
+      knownHeads(landed, cwd),
+    ]);
+    const tips = [...(here ? ['HEAD'] : []), ...(branch ? [branchRef(c.branch!)] : [])];
     // Folder and branch both gone: nothing left to lose.
     if (!tips.length) return work;
-    if (here) work.dirty = (await git(['status', '--porcelain'], cwd)).split('\n').filter(Boolean).length;
-    work.unpushed = Number(await git(['rev-list', '--count', ...tips, '--not', '--remotes', ...(await knownHeads(landed, cwd))], cwd));
-    const own = c.start ? await git(['rev-list', '--count', ...tips, '--not', c.start], cwd).catch(() => undefined) : undefined;
-    if (own !== undefined) work.commits = Number(own);
+    work.dirty = status.split('\n').filter(Boolean).length;
+    const [unpushed, commits] = await Promise.all([
+      git(['rev-list', '--count', ...tips, '--not', '--remotes', ...delivered], cwd),
+      own && c.start ? git(['rev-list', '--count', ...tips, '--not', c.start], cwd).catch(() => undefined) : undefined,
+    ]);
+    work.unpushed = Number(unpushed);
+    if (commits !== undefined) work.commits = Number(commits);
   } catch (err) {
     work.error = gitError(err);
   }
@@ -210,14 +217,16 @@ async function unmerged(c: WorkerCheckout, heads: string[]): Promise<string | un
   if (!c.branch) return 'it has no branch of its own';
   const cwd = existsSync(c.repo) ? c.repo : c.dir;
   const ref = branchRef(c.branch);
-  if (!(await ok(git(['rev-parse', '--verify', '--quiet', ref], cwd)))) return undefined;
+  const bases = c.base ? [branchRef(c.base), `refs/remotes/origin/${c.base}`] : [];
+  const [exists, delivered, ...known] = await Promise.all([ok(git(['rev-parse', '--verify', '--quiet', ref], cwd)), knownHeads(heads, cwd), ...bases.map((b) => ok(git(['rev-parse', '--verify', '--quiet', b], cwd)))]);
+  if (!exists) return undefined;
   // Its pull request merged, and the branch has nothing past what it delivered (a squash merge included).
-  for (const head of await knownHeads(heads, cwd)) if (Number(await git(['rev-list', '--count', ref, '--not', head], cwd)) === 0) return undefined;
+  for (const head of delivered) if (Number(await git(['rev-list', '--count', ref, '--not', head], cwd)) === 0) return undefined;
   if (!c.base) return `the office can't tell which branch ${c.branch} merges into`;
   let missing: number | undefined;
   // The local base may be behind GitHub's: a merge there counts too, as far as this checkout last fetched.
-  for (const base of [branchRef(c.base), `refs/remotes/origin/${c.base}`]) {
-    if (!(await ok(git(['rev-parse', '--verify', '--quiet', base], cwd)))) continue;
+  for (const [i, base] of bases.entries()) {
+    if (!known[i]) continue;
     const n = await missingCommits(cwd, base, ref).catch(() => undefined);
     if (n === 0) return undefined;
     if (n !== undefined) missing = Math.min(missing ?? n, n);
@@ -305,7 +314,7 @@ export async function listWorkers(floor: WorkersFloor): Promise<WorkerRow[]> {
       // Board agents, shells and the meeting table never go this way: their checkouts are nobody's to weigh up.
       if (!board && w.kind === 'agent' && !w.meeting) {
         const checkouts = workerCheckouts(floor.dir, w, floor.branch);
-        const works = await Promise.all(checkouts.map((c) => checkoutWork(c, mergedHeads(pulls, checkouts))));
+        const works = await Promise.all(checkouts.map((c) => checkoutWork(c, mergedHeads(pulls, checkouts), true)));
         const sum = (k: 'dirty' | 'unpushed' | 'commits') => works.reduce((n, s) => n + (s[k] ?? 0), 0);
         const errors = works.map((s, i) => (s.error ? `${checkouts[i].rel}: ${s.error}` : '')).filter(Boolean);
         work = {
