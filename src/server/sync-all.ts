@@ -175,6 +175,11 @@ async function tracking(dir: string, name: string): Promise<Tracking> {
   return t;
 }
 
+/** The branch's GitHub copy was deleted there: pulling from the stale copy and uploading would bring it back. */
+function gone(name: string, branch: string, upstream: string): string {
+  return `${upstream} is gone from GitHub (it was deleted there), so nothing was saved, pulled or uploaded in ${name}: uploading would bring it back. If you meant to keep the branch ${branch}, publish it again with ⬆️ Push on the Git board.`;
+}
+
 interface Dirty {
   path: string;
   from?: string;
@@ -304,7 +309,8 @@ async function look(place: Place, fetch: boolean): Promise<Reviewed> {
     const t = await tracking(place.dir, place.name);
     Object.assign(repo, { branch: t.branch, problem: t.problem, noPush: t.noPush });
     if (t.upstreamRef) repo.upstream = t.upstreamRef.replace(/^refs\/remotes\//, '');
-    if (!t.problem && fetch && t.remote) await git(['fetch', '--quiet', t.remote], place.dir, 30_000).catch(() => undefined);
+    // Pruned, so a branch deleted on GitHub shows as gone rather than as a stale copy to pull from.
+    if (!t.problem && fetch && t.remote) await git(['fetch', '--quiet', '--prune', t.remote], place.dir, 30_000).catch(() => undefined);
     const up = !t.problem && t.upstreamRef;
     // Coming in, counted along GitHub's own line of history: a merged pull request is one change.
     const [dirty, lr, incoming] = await Promise.all([
@@ -317,6 +323,7 @@ async function look(place: Place, fetch: boolean): Promise<Reviewed> {
     repo.more = more;
     repo.suggested = suggestMessage(files.filter((f) => !f.blocked && !f.risky));
     for (const f of files) if (!f.blocked) paths.set(f.path, f.from);
+    if (up && lr === undefined) repo.problem = gone(place.name, t.branch!, repo.upstream!);
     repo.ahead = counts(lr).ahead;
     repo.behind = Number(incoming) || 0;
     if (repo.ahead) repo.outgoing = ((await gitOut(['log', '-5', '--format=%s', `${t.upstreamRef}..HEAD`], place.dir)) ?? '').split('\n').filter(Boolean);
@@ -380,9 +387,20 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
     const t = await tracking(dir, repo.name);
     if (t.problem) return outcome(repo, { state: 'skipped', message: t.problem });
     if (t.branch !== repo.branch) return outcome(repo, { state: 'skipped', message: `${repo.name} is on a different branch now (${t.branch}), so nothing was done. Press Sync again to check it.` });
+    // The review showed what's uploaded as of this commit: one made since (a worker's, a terminal's) was never reviewed.
+    if (t.head !== reviewed.head) return outcome(repo, { state: 'skipped', message: `New commits were made in ${repo.name} since you looked, so nothing was saved, pulled or uploaded there. Press Sync again to review them.` });
+    const start = t.head!;
     const lines: string[] = [];
 
-    // 1. Save: only files that were on the review, ticked, and still unsaved.
+    // 1. GitHub first, pruned: a branch deleted there is gone here too, rather than pulled from a stale
+    // copy and brought back by the upload. Nothing is saved until it's known the sync can go through.
+    const f = await git(['fetch', '--quiet', '--prune', t.remote!], dir, FETCH_MS);
+    lines.push(log(`fetch --prune ${t.remote}`, f));
+    if (f.code !== 0) return outcome(repo, { state: 'failed', message: `Couldn’t reach GitHub, so nothing was saved, pulled or uploaded in ${repo.name}. Check the internet connection and sync again.`, details: lines.join('\n') });
+    const target = await gitOut(['rev-parse', '--verify', '--quiet', t.upstreamRef!], dir);
+    if (!target) return outcome(repo, { state: 'skipped', message: gone(repo.name, t.branch!, repo.upstream ?? t.upstreamRef!), details: lines.join('\n') });
+
+    // 2. Save: only files that were on the review, ticked, and still unsaved.
     const wanted = (choice?.files ?? []).filter((p) => reviewed.paths.has(p));
     const now = new Map((await dirtyFiles(dir)).map((d) => [d.path, d]));
     const saving = wanted.filter((p) => now.has(p) && !blockedReason(p));
@@ -416,16 +434,14 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
     }
     const skipped = wanted.length - saving.length;
 
-    // 2. Pull: GitHub's changes merged on top of the saved work.
-    const f = await git(['fetch', '--quiet', t.remote!], dir, FETCH_MS);
-    lines.push(log(`fetch ${t.remote}`, f));
-    const [heads, lr] = await Promise.all([gitOut(['rev-parse', 'HEAD', t.upstreamRef!], dir), gitOut(['rev-list', '--left-right', '--count', `HEAD...${t.upstreamRef}`], dir)]);
-    const [before, target] = (heads ?? '').split('\n');
+    // 3. Pull: GitHub's changes merged on top of the saved work.
+    const [before, lr] = await Promise.all([gitOut(['rev-parse', 'HEAD'], dir), gitOut(['rev-list', '--left-right', '--count', `HEAD...${target}`], dir)]);
+    if (!before) return outcome(repo, { state: 'failed', saved, message: `Couldn’t read ${repo.name} after saving, so nothing was pulled or uploaded.`, details: lines.join('\n') });
     if (saved) commit = before.slice(0, 7);
     const savedText = saved ? `Saved ${plural(saved, 'file')}${commit ? ` (${commit})` : ''}` : 'Nothing to save';
-    if (f.code !== 0 || !target) {
-      return outcome(repo, { state: 'failed', saved, commit, message: `${savedText}${saved ? ' here' : ''}, but couldn’t reach GitHub, so nothing was pulled or uploaded. Check the internet connection and sync again.`, details: lines.join('\n') });
-    }
+    // Someone else's commit made meanwhile (outside the Git board's lock) would ride along unreviewed.
+    const meanwhile = () => outcome(repo, { state: 'skipped', saved, commit, message: `${saved ? `Your ${plural(saved, 'file')} ${saved === 1 ? 'is' : 'are'} saved in a commit here, but n` : 'N'}ew commits were made in ${repo.name} while it synced, so nothing was pulled or uploaded. Press Sync again to review them.`, details: lines.join('\n') });
+    if ((saved ? await gitOut(['rev-parse', `${before}^`], dir) : before) !== start) return meanwhile();
     const incoming = counts(lr).behind;
     const news = incoming ? await mergedPrs(dir, before, target) : { prs: [], other: 0 };
     // Said along GitHub's own line of history: a merged pull request is one change, not two commits.
@@ -458,16 +474,23 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
         });
       }
     }
-    const [after, aheadOut] = incoming ? await Promise.all([gitOut(['rev-parse', 'HEAD'], dir), gitOut(['rev-list', '--count', `${t.upstreamRef}..HEAD`], dir)]) : [before, String(counts(lr).ahead)];
+    const after = incoming ? await gitOut(['rev-parse', 'HEAD'], dir) : before;
+    if (!after) return outcome(repo, { state: 'failed', saved, commit, message: `Couldn’t read ${repo.name} after the pull, so nothing was uploaded.`, details: lines.join('\n') });
+    if (incoming && after !== target) {
+      // The pull's own merge: this sync's commit and GitHub's, nothing else.
+      const parents = ((await gitOut(['rev-list', '--parents', '-n1', after], dir)) ?? '').split(/\s+/).slice(1);
+      if (parents.length !== 2 || parents[0] !== before || parents[1] !== target) return meanwhile();
+    }
 
-    // 3. Upload what GitHub doesn't have: never forced.
-    const ahead = Number(aheadOut) || 0;
+    // 4. Upload exactly what was reviewed plus what this sync made (`after`), never whatever the branch
+    // points at by now, and never forced.
+    const ahead = Number(await gitOut(['rev-list', '--count', `${target}..${after}`], dir)) || 0;
     let pushed = 0;
     let pushText = '';
     if (ahead && t.noPush) pushText = `not uploaded: ${t.noPush.replace(/^It /, 'it ')}`;
     else if (ahead) {
-      const p = await git(['push', '--quiet', t.remote!, `refs/heads/${t.branch}:${t.remoteRef}`], dir, 180_000);
-      lines.push(log(`push ${t.remote} ${t.branch}:${t.remoteRef}`, p));
+      const p = await git(['push', '--quiet', t.remote!, `${after}:${t.remoteRef}`], dir, 180_000);
+      lines.push(log(`push ${t.remote} ${after.slice(0, 7)}:${t.remoteRef}`, p));
       if (p.code !== 0) {
         const rejected = /rejected|non-fast-forward|fetch first/i.test(p.err);
         return outcome(repo, {
@@ -475,6 +498,7 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
           saved,
           commit,
           pulled,
+          start,
           before,
           after,
           prs: news.prs,
@@ -488,7 +512,7 @@ async function syncOne(reviewed: Reviewed, choice: SyncChoice | undefined): Prom
     }
     const parts = [savedText, pushText || (saved ? '' : 'nothing to upload'), pulled ? `pulled ${plural(pulled, 'new change')}` : 'already had the latest'].filter(Boolean);
     const note = skipped ? ` ${plural(skipped, 'ticked file')} had no changes left to save.` : '';
-    return outcome(repo, { state: 'done', saved, commit, pulled, pushed, before, after, prs: news.prs, otherCommits: news.other, message: `${parts.join(', ')}.${note}`, details: lines.join('\n') });
+    return outcome(repo, { state: 'done', saved, commit, pulled, pushed, start, before, after, prs: news.prs, otherCommits: news.other, message: `${parts.join(', ')}.${note}`, details: lines.join('\n') });
   });
   return typeof done === 'string' ? outcome(repo, { state: 'failed', message: /Hold on/.test(done) ? `${done} in ${repo.name}: sync again in a moment.` : `Couldn’t sync ${repo.name}: ${done}` }) : done;
 }
@@ -504,13 +528,15 @@ function canRestart(): boolean {
   return typeof l?.restart === 'function';
 }
 
-/** What the app folder's new commits need: from the paths they change, before → after. */
+/** What the app folder's new code needs: from the paths changed since before the sync (the files it saved and what it pulled). */
 export async function nextSteps(app: SyncRepoResult | undefined, appDir: string | undefined, floors: OfficeFloor[], restartable = canRestart()): Promise<NextSteps> {
   const busy = busyWorkers(floors);
-  if (!app || !appDir || !app.before || !app.after || app.before === app.after) {
+  // From before anything was saved: the running office was built before the files just saved, too.
+  const from = app?.start ?? app?.before;
+  if (!app || !appDir || !from || !app.after || from === app.after) {
     return { areas: [], steps: [], news: [], busy, changed: false, appDir };
   }
-  const diff = await gitOut(['diff', '--name-only', '--no-renames', `${app.before}..${app.after}`], appDir);
+  const diff = await gitOut(['diff', '--name-only', '--no-renames', `${from}..${app.after}`], appDir);
   const areas = changeAreas((diff ?? '').split('\n').filter(Boolean));
   return { areas, steps: planNextSteps(areas, appDir, { busy: busy.length, canRestart: restartable }), news: app.news, busy, changed: true, appDir };
 }

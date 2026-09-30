@@ -83,7 +83,9 @@ export interface SyncRepoResult {
   clashes?: string[];
   /** Git's own words, for "Show details". */
   details?: string;
-  /** The commit before and after, when it moved. */
+  /** The commit before anything was saved (what the next steps are measured from). */
+  start?: string;
+  /** The commit before the pull (after saving) and after it. */
   before?: string;
   after?: string;
   /** Pull requests (and other changes) the pull brought in. */

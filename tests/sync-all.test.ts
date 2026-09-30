@@ -310,6 +310,67 @@ test('a clash with GitHub stops cleanly: the work is saved in a commit here, not
   assert.throws(() => git(fx.floor, 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD'));
 });
 
+// Codex on #92 (P1): the running office was built before the files the sync just saved, too.
+test('saving work in the app folder with nothing new on GitHub still says build and restart', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(path.join(fx.app, 'src/server/server.ts'), 'export const a = 3;\n');
+  const { result } = await run(fx);
+  const app = byKind(result, 'office');
+  assert.equal(app.state, 'done', app.message);
+  assert.deepEqual([app.saved, app.pulled, app.pushed], [1, 0, 1]);
+  assert.notEqual(app.start, app.after);
+  assert.equal(result.next.changed, true);
+  assert.deepEqual(result.next.areas, ['server']);
+  assert.deepEqual(result.next.steps.map((s) => s.kind), ['build', 'restart']);
+});
+
+// Codex on #92 (P2): what's uploaded is what was reviewed, plus what the sync itself made.
+test('a commit made after the review is never uploaded: Go asks for a fresh review', async (t) => {
+  const fx = fixture(t);
+  writeFileSync(path.join(fx.floor, 'app.txt'), 'reviewed edit\n');
+  const plan = await syncPlan(fx.floor, true, { app: fx.app });
+  const github = git(fx.floorOrigin, 'rev-parse', 'personal');
+  // Someone commits in the folder while the review is open.
+  writeFileSync(path.join(fx.floor, 'unreviewed.txt'), 'never seen\n');
+  git(fx.floor, 'add', 'unreviewed.txt');
+  git(fx.floor, 'commit', '-qm', 'Unreviewed');
+  const head = git(fx.floor, 'rev-parse', 'HEAD');
+  const result = (await syncRun(fx.floor, plan.token, defaults(plan), [], { restartable: true })) as SyncResult;
+  const floor = byKind(result, 'floor');
+  assert.equal(floor.state, 'skipped');
+  assert.match(floor.message, /New commits were made in floor since you looked, so nothing was saved, pulled or uploaded there/);
+  assert.equal(git(fx.floorOrigin, 'rev-parse', 'personal'), github, 'nothing reached GitHub');
+  assert.equal(git(fx.floor, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(fx.floor, 'status', '--porcelain'), 'M app.txt');
+  // A fresh look shows the commit, so it's reviewed before it goes up.
+  const again = (await syncPlan(fx.floor, true, { app: fx.app })).repos.find((r) => r.kind === 'floor')!;
+  assert.equal(again.ahead, 1);
+  assert.deepEqual(again.outgoing, ['Unreviewed']);
+});
+
+// Codex on #92 (P2): fetch --prune, so a deleted branch isn't merged from a stale copy and recreated.
+test('a branch deleted on GitHub after the review is not pulled from a stale copy or brought back', async (t) => {
+  const fx = fixture(t);
+  git(fx.floor, 'checkout', '-q', '-b', 'feature');
+  git(fx.floor, 'push', '-q', '-u', 'origin', 'feature');
+  writeFileSync(path.join(fx.floor, 'app.txt'), 'feature work\n');
+  const plan = await syncPlan(fx.floor, true, { app: fx.app });
+  assert.equal(plan.repos.find((r) => r.kind === 'floor')!.problem, undefined);
+  // Merged and cleaned up on GitHub while the review is open.
+  git(fx.floorOrigin, 'branch', '-D', 'feature');
+  const head = git(fx.floor, 'rev-parse', 'HEAD');
+  const result = (await syncRun(fx.floor, plan.token, defaults(plan), [], { restartable: true })) as SyncResult;
+  const floor = byKind(result, 'floor');
+  assert.equal(floor.state, 'skipped', floor.message);
+  assert.match(floor.message, /^origin\/feature is gone from GitHub \(it was deleted there\), so nothing was saved, pulled or uploaded/);
+  assert.equal(git(fx.floorOrigin, 'branch', '--list', 'feature'), '', 'not brought back');
+  assert.equal(git(fx.floor, 'rev-parse', 'HEAD'), head);
+  assert.equal(git(fx.floor, 'status', '--porcelain'), 'M app.txt');
+  // The next look says so up front.
+  const again = (await syncPlan(fx.floor, true, { app: fx.app })).repos.find((r) => r.kind === 'floor')!;
+  assert.match(again.problem!, /origin\/feature is gone from GitHub/);
+});
+
 test('the checklist follows what the app folder’s new commits change', async (t) => {
   const fx = fixture(t);
   const floors: OfficeFloor[] = [{ name: 'agent-office', dir: fx.floor, workers: () => [worker('w1', 'Byte', 'working'), worker('w2', 'Pixel', 'idle'), worker('w3', 'Dot', 'needs_input')] }];
