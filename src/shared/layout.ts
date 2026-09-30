@@ -2,6 +2,8 @@
 // Units are meters; +y is up. The office floor spans FLOOR.minX..maxX / minZ..maxZ at y = 0,
 // upstairs over a garage whose floor is level with the street (STREET_Y).
 
+import { BOTS, BOT_KINDS, botDesk, type BotKind } from './bots.js';
+
 export const FLOOR = { minX: -18, maxX: 18, minZ: -13, maxZ: 13 } as const;
 /** How high the ceiling is: a meter over the loft's roof (LOFT.y + LOFT.height), all the way across the room. */
 export const WALL_HEIGHT = 6.8;
@@ -81,8 +83,8 @@ export const BEANBAGS: DeskDef[] = (
 /** Everywhere a worker can sit: the desks, then the bean bags. */
 export const SEATS: DeskDef[] = [...DESKS, ...BEANBAGS];
 
-/** The boards with an agent standing by: the Issues board, the PR board, the task queue and the 📥 in-tray. */
-export type StationKind = 'issues' | 'pulls' | 'queue' | 'inbox';
+/** The boards with an agent standing by: the Issues board, the PR board, the task queue and the 📥 in-tray, and the deployable bots (shared/bots.ts). */
+export type StationKind = 'issues' | 'pulls' | 'queue' | 'inbox' | BotKind;
 
 /**
  * The board agents: a worker standing behind a little kiosk just west of each of those boards (see
@@ -101,6 +103,8 @@ export const STATIONS: DeskDef[] = [
   // elevator's doors (ELEVATOR), facing them (rotY 0: she stands on the room side), so she's the
   // first thing you see stepping out onto a floor. The in-tray is on her counter.
   { id: 'station-inbox', station: 'inbox', x: 8.5, z: -5.4, rotY: 0, label: 'In-tray', freestanding: true },
+  // The deployable bots' kiosks (the VP's is out in the lounge by the meeting room).
+  ...BOT_KINDS.map((kind): DeskDef => ({ id: botDesk(kind), station: kind, ...BOTS[kind].spot })),
 ];
 /** A board agent's kiosk: its top, and how far behind its middle (toward the wall) the agent stands. */
 export const KIOSK = { width: 0.8, depth: 0.5, height: 0.55, stand: 0.55 } as const;
@@ -110,6 +114,7 @@ export const STATION_AGENT: Record<StationKind, { name: string; color: string; l
   pulls: { name: 'PR agent', color: '#118ab2' },
   queue: { name: 'Queue agent', color: '#06d6a0', label: 'staffer/queue agent' },
   inbox: { name: 'Receptionist', color: '#ffd166' },
+  ...(Object.fromEntries(BOT_KINDS.map((k) => [k, { name: BOTS[k].name, color: BOTS[k].color }])) as Record<BotKind, { name: string; color: string }>),
 };
 
 /** What floats over a board agent's head. The queue agent's name stays "Queue agent"; the label does not. */

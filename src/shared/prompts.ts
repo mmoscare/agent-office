@@ -5,6 +5,11 @@
 // A {{name}} in one is filled in by the office when it's sent.
 
 import { STATION_AGENT, type StationKind } from './layout.js';
+import { BOTS, type BotKind } from './bots.js';
+import { VP_BRIEF } from './vp-brief.js';
+
+/** The board agents that stand by a board, not the deployable bots (which bring their own brief). */
+type BoardKind = Exclude<StationKind, BotKind>;
 
 export type PromptGroup = 'issues' | 'pulls' | 'queue' | 'stations' | 'meetings' | 'office';
 
@@ -35,14 +40,14 @@ export interface PromptDef {
 
 // --- Board agents ---------------------------------------------------------------------------------
 
-const BOARD: Record<StationKind, string> = {
+const BOARD: Record<BoardKind, string> = {
   issues: 'the 📌 Issues board',
   pulls: 'the 🔀 Pull Requests board',
   queue: 'the 📋 task queue',
   inbox: 'the 📥 in-tray',
 };
 
-const JOB: Record<StationKind, string> = {
+const JOB: Record<BoardKind, string> = {
   issues: `You look after this repository's GitHub issues with the gh CLI: file new ones (a clear title, what's wrong or wanted, and how to reproduce it when that applies), find and sum them up, triage, label, comment on, close and reopen them. To get an issue worked on, put it on the task queue with its number.`,
   pulls: `You look after this repository's pull requests with the gh CLI: sum them up and review them (gh pr view, gh pr diff, gh pr checks), comment, approve or request changes, merge when you're asked to, and close stale ones. Read a PR's code with gh pr diff rather than checking its branch out here. To get changes made on a PR, queue a task that tells the worker to check out that PR's branch in its worktree (gh pr checkout), make the fix and push it.`,
   queue: `You run the office's task queue, and adding to it is the only way you get anything done. Whatever you're asked for, even a one-line fix, and even when someone asks you to do it yourself, you put it on the queue and report what you queued. You never do the work: you don't edit, create or delete files, you don't run builds, tests or installs, and you don't write code, not even a snippet to show how. Read the code and gh issue list only as far as it takes to write a good task. Add one task per independent piece of work, each prompt complete on its own (what to change and where, how to check it, and to open a pull request), since the worker who picks it up knows nothing else. Link a task to its GitHub issue when it's for one. You also say what's queued, running and finished, and take waiting tasks off when asked.`,
@@ -59,7 +64,7 @@ const QUEUE_API = `The task queue gives each task a fresh worker in its own git 
 - Take a waiting task off: office-queue remove <id>`;
 
 /** What a board agent is told ahead of the first request typed to it. */
-function stationDefault(kind: StationKind): string {
+function stationDefault(kind: BoardKind): string {
   const queue = kind === 'queue';
   const inbox = kind === 'inbox';
   const wrapUp = queue
@@ -77,12 +82,21 @@ function stationDefault(kind: StationKind): string {
   ].join('\n\n');
 }
 
-const station = (kind: StationKind): PromptDef => ({
+const station = (kind: BoardKind): PromptDef => ({
   group: 'stations',
   label: `${STATION_AGENT[kind].name}'s brief`,
   used: `Told to the ${STATION_AGENT[kind].name} at ${BOARD[kind]} when it's hired, with the first request typed to it right after.`,
   vars: {},
   text: stationDefault(kind),
+});
+
+/** A deployable bot's brief (see shared/bots.ts). */
+const bot = (kind: BotKind, text: string): PromptDef => ({
+  group: 'stations',
+  label: `${BOTS[kind].icon} ${BOTS[kind].name}'s brief`,
+  used: `Told to the ${BOTS[kind].name} when it's deployed (floor menu) or first asked something at its kiosk, with that first request right after.`,
+  vars: {},
+  text,
 });
 
 // --- Placeholders several prompts share -----------------------------------------------------------
@@ -191,6 +205,7 @@ const DEFS = {
   'station.pulls': station('pulls'),
   'station.queue': station('queue'),
   'station.inbox': station('inbox'),
+  'station.vp': bot('vp', VP_BRIEF),
 
   // --- 🤝 Meeting room ---
   'meeting.brief': {

@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OutlineEffect } from 'three/examples/jsm/effects/OutlineEffect.js';
 import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, GOLF_HOLE, LADDER, LOFT, OFFICE_SPOT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, stationLabel, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
+import { BOTS, BOT_KINDS, type BotKind } from '../shared/bots';
 import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
 import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
@@ -58,6 +59,8 @@ import { worktreePref } from './ui/workspace-picker';
 import { issuePrompt, openBoard } from './ui/boards';
 import { activeAutonomous, activeTodos, issuesWallMode, onIssuesWallMode, openAutonomousBoard, setIssuesWallMode } from './ui/todos';
 import { onTodoDetails, todoDetailsShown } from './ui/todo-details';
+import { linksToWatch } from './ui/notes';
+import { onNoteDrafts, unsavedNotes, watchNoteDrafts } from './ui/note-drafts';
 import { IssuesWallSwitch, TodoWallTexture } from './world/todo-wall';
 import { StickyWall } from './world/stickies';
 import { openNewSticky, openSticky } from './ui/stickies';
@@ -69,6 +72,7 @@ import { mountCalendarWall } from './world/calendar';
 import { choresPending, mountCalendarNag, onCalendarChores, openCalendar } from './ui/calendar';
 import { openManual } from './ui/manual';
 import { mergedJustNow, mountUpdateBar } from './ui/update-bar';
+import { mountOfficeUpdate } from './ui/office-update';
 import { openIssue, openPull, routePullMessage } from './ui/pull';
 import { openAsk } from './ui/ask';
 import { openTeam, routeTeamMessage } from './ui/team';
@@ -84,7 +88,7 @@ import { openSettings } from './ui/settings';
 import { hiringPaused, renderUsage, usageLabel, usageTitle } from './ui/usage';
 import { openModelUsage } from './ui/model-usage';
 import { elevatorPanelOpen, openElevator, routeElevatorMessage } from './ui/elevator';
-import { toggleFloorMenu } from './ui/floormenu';
+import { closeFloorMenu, toggleFloorMenu } from './ui/floormenu';
 import { providerLabel, rememberedChoice, officeChoice, resolvedProvider, modelBadge } from './ui/provider';
 import { openPlans } from './ui/plans';
 import { openTimeCard, todayText } from './ui/timecard';
@@ -96,7 +100,7 @@ import { planPrompt, planTitle, type Plan } from '../shared/plans';
 import { mirrorWhiteboard, openWhiteboard, routeWhiteboardMessage } from './ui/whiteboard';
 import { contentGlance, openContentKanban } from './ui/content-kanban';
 import { ContentKanbanTexture } from './world/content-kanban';
-import { renderLimits } from './ui/limits';
+import { renderLimits, watchLimitBudget } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
@@ -178,6 +182,7 @@ const STATION_INFO: Record<StationKind, { icon: string; offer: string; does: str
   pulls: { icon: '🔀', offer: 'Ask me about PRs', does: 'I sum up, review, comment on and merge them', example: 'Review the newest PR and tell me if it’s ready to merge' },
   queue: { icon: '📋', offer: 'Ask me to queue work', does: 'I turn it into tasks for fresh workers', example: 'Queue every open bug issue, most important first' },
   inbox: { icon: '💁‍♀️', offer: 'Email me work, or ask me', does: 'I hand out what comes in, and write back', example: 'Go through the in-tray and hand everything out' },
+  ...(Object.fromEntries(BOT_KINDS.map((k) => [k, { icon: BOTS[k].icon, offer: BOTS[k].offer, does: BOTS[k].does, example: BOTS[k].example }])) as Record<BotKind, { icon: string; offer: string; does: string; example: string }>),
 };
 /** What the Receptionist says over her head while she waits: until her email works, a reminder to set it up. */
 function receptionistCard(): { name: string; summary: string } {
@@ -358,7 +363,7 @@ const gallery = new Gallery();
 office.group.add(gallery.group);
 store.on('decor', () => gallery.sync(store.decor));
 
-// The bar across the top after Agent Office's own code changes on GitHub: the steps to run it (ui/update-bar.ts).
+// The bar across the top after Agent Office's own code changes on GitHub: how far its update has got (ui/update-bar.ts).
 mountUpdateBar();
 
 // The whiteboard shows what everyone's drawn on it.
@@ -446,6 +451,8 @@ const drunkVision = new DrunkVision(renderer);
 // ---- Networking & state -------------------------------------------------------------------------
 const net = new Net(() => store.profile);
 const voice = new Voice(net);
+// The step-by-step office update, reopened after a restart it asked for (ui/office-update.ts).
+mountOfficeUpdate(net);
 
 const me = new Person(store.profile.name, store.profile.color, store.profile.look);
 me.showLabel(false);
@@ -1537,6 +1544,8 @@ store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
 setInterval(renderLimits, 30_000);
 $('limits').addEventListener('click', () => net.send({ t: 'limits.refresh' }));
+// Today's equal share of the week used up: a warning in the office and on the desktop, once a day.
+watchLimitBudget((title, body) => notifier.notice(title, body, 'limit-budget'));
 // Pay-as-you-go API balances, read over HTTP rather than the socket: they're slow, cached and optional.
 mountBalances();
 
@@ -3566,7 +3575,19 @@ $('hud').addEventListener('click', (e) => {
 // The project in the corner is the floor you're on; click it for the list of floors to go to.
 $('project').addEventListener('click', () => {
   if (!store.floor) return showElevator();
-  toggleFloorMenu($('project'), { go: switchFloor, elevator: showElevator, roof: () => ride(ROOF) });
+  toggleFloorMenu($('project'), {
+    go: switchFloor,
+    elevator: showElevator,
+    roof: () => ride(ROOF),
+    vp: {
+      deploy: () => net.send({ t: 'vp.deploy' }),
+      duty: (on) => net.send({ t: 'vp.duty', on }),
+      open: (workerId) => {
+        closeFloorMenu();
+        openWorkerTerminal(workerId);
+      },
+    },
+  });
 });
 
 // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu ----------------------------
@@ -3593,6 +3614,24 @@ const hud = mountHud(
         return active.length ? `Active now: ${active.map((t) => t.text).join(' · ')}` : 'Your own to-do list, the same on every floor';
       },
       run: () => openBoard('issues', net, boardActions(), { view: 'todo' }),
+    },
+    // Your own notes pad, the To Do board's other side: up on the top bar next to it, with how many links there are to watch.
+    {
+      id: 'notes',
+      icon: '🗒️',
+      label: 'Notes',
+      section: 'Open',
+      status: () => true,
+      chip: () => (unsavedNotes() ? '⚠️ Notes' : 'Notes'),
+      count: () => linksToWatch(),
+      // Red while typing in a note waits for the office (it's kept in this browser meanwhile).
+      tone: () => (unsavedNotes() ? 'danger' : undefined),
+      title: () => {
+        const n = linksToWatch();
+        const unsaved = unsavedNotes();
+        return `${unsaved ? `⚠️ ${unsaved} note${unsaved === 1 ? '' : 's'} not saved yet: kept in this browser until the office is back · ` : ''}Your own notes pad: notes, pictures and links, the same on every floor${n ? ` · ${n} link${n === 1 ? '' : 's'} to watch` : ''}`;
+      },
+      run: () => openBoard('issues', net, boardActions(), { view: 'notes' }),
     },
     {
       id: 'autonomous',
@@ -3702,6 +3741,9 @@ const hud = mountHud(
   () => saveSettings(settings),
 );
 onAuthorUpdates(() => hud.refresh());
+// Typing in a note the office hasn't got yet goes when it's back, even after a reload, without opening the pad.
+watchNoteDrafts(net);
+onNoteDrafts(() => hud.refresh());
 onCalendarChores(() => hud.refresh());
 /** The queue agent on this floor: the one who's been hired, or the one waiting at the kiosk. */
 function queueAgent(): Worker | undefined {

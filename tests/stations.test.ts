@@ -45,6 +45,19 @@ test('the issues and PR agents keep their jobs, and may still be asked for somet
   }
 });
 
+test('the PR agent clocks out a merged PR\'s worker with office-workers, by id, and names unshipped work instead', () => {
+  const pulls = stationBrief('pulls');
+  assert.match(pulls, /office-workers list/);
+  assert.match(pulls, /office-workers home <id> --remove-worktree, by id, never by name \(names are reused\)/);
+  assert.match(pulls, /When you've merged a pull request/);
+  assert.match(pulls, /done or idle with a clean worktree and nothing unpushed, and say so in the merge record/);
+  assert.match(pulls, /only answered a question and have been done for a while/);
+  assert.match(pulls, /Never clock out a worker with unshipped work: name it for the owner instead/);
+  assert.doesNotMatch(pulls, /\/office\/workers/);
+  assert.ok(pulls.endsWith('The request:'));
+  for (const kind of ['issues', 'queue', 'inbox'] as StationKind[]) assert.doesNotMatch(stationBrief(kind), /office-workers/, kind);
+});
+
 test('the queue agent is launched without the file-editing tools', () => {
   assert.deepEqual(QUEUE_AGENT_DISALLOWED_TOOLS, ['Edit', 'Write', 'NotebookEdit']);
 });
