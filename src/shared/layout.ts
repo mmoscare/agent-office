@@ -125,7 +125,7 @@ export function stationLabel(kind: StationKind): string {
 /** The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks. */
 export const LOFT = { minX: 9, maxX: FLOOR.maxX, minZ: 8, maxZ: FLOOR.maxZ, y: 3, height: 2.8 } as const;
 /**
- * Where O stands you, and where T's circle of waiting seats ends: in the boss's office, clear of the
+ * Where J stands you, and where T's circle of waiting seats ends: in the boss's office, clear of the
  * desk, the telescope and the glass, looking west over the floor. `facing` is the player's heading.
  */
 export const OFFICE_SPOT = { x: 11.2, y: LOFT.y, z: 9.4, facing: -Math.PI / 2, pitch: -0.28 } as const;
@@ -266,9 +266,10 @@ export const PLANTS: readonly (readonly [x: number, z: number, scale: number])[]
 export const WHITEBOARD = { x: 5.4, z: -5.4, width: 4, height: 2.2, bottom: 0.5 } as const;
 /**
  * The 🏢 Autonomous Tasks whiteboard: another on wheels, south of the drawing one, between the desks
- * and the lounge, facing into the room (+z, rotY 0). Its face is 2:1, like the To Do board's texture.
+ * and the lounge, turned round to face it (-z, rotY PI), so it and the 🎬 Content Kanban on the
+ * Autonomous floor face each other. Its face is 2:1, like the To Do board's texture.
  */
-export const AUTONOMOUS_BOARD = { x: 5.4, z: 5.4, width: 4, height: 2, bottom: 0.6, rotY: 0, label: '🏢 Autonomous Tasks' } as const;
+export const AUTONOMOUS_BOARD = { x: 5.4, z: 5.4, width: 4, height: 2, bottom: 0.6, rotY: Math.PI, label: '🏢 Autonomous Tasks' } as const;
 
 /**
  * The bottom floor of the building is its second storey: the street, and the open garage under the
