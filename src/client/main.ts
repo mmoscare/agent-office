@@ -5,7 +5,7 @@ import { sameLook } from '../shared/avatar';
 import { BALCONY, BOARDS, DESK_BY_ID, DESKS, ELEVATOR, ELEVATOR_CAR, ELEVATOR_FRONT, FLOOR, GOLF_HOLE, LADDER, LOFT, OFFICE_SPOT, POLE, POLES, SEATING_BY_ID, SLAB, STATIONS, STATION_AGENT, STOREY, WALL_HEIGHT, beanbagsOut, deskSeat, inElevator, nextFreeSeat, roofDrop, seatAt, seatPlace, stationLabel, streetBelow, vacantSeats, type DeskDef, type SeatDef, type SeatPlace, type StationKind } from '../shared/layout';
 import { BOTS, BOT_KINDS, type BotKind } from '../shared/bots';
 import { backOfficeFloors, floorNumber, floorPalette, mainFloors } from '../shared/floors';
-import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
+import type { AgentEffort, AgentProvider, CarriedIssue, FloorInfo, GhIssue, GongWhy, PeerInfo, PhoneCall, WorkerInfo, WorkerTask, PullWork } from '../shared/protocol';
 import { MEETING_PATTERNS } from '../shared/meetings';
 import { pullBoardKey } from '../shared/pull-work';
 import { modelTag } from '../shared/model';
@@ -104,6 +104,7 @@ import { ContentKanbanTexture } from './world/content-kanban';
 import { renderLimits, watchLimitBudget } from './ui/limits';
 import { mountBalances } from './ui/balances';
 import { mountAttention } from './ui/attention';
+import { mountPhone } from './ui/phone-panel';
 import { MachineTexture, officeFull, pressureNote } from './world/machine';
 import { CpuAppsTexture } from './world/cpu-apps';
 import { mountHud } from './ui/menu';
@@ -826,6 +827,7 @@ net.onMessage((msg) => {
     }
     case 'floor.enter': {
       const workerId = trip?.floor === store.floor ? trip.workerId : undefined;
+      const behind = trip?.floor === store.floor ? arriveBehind : null;
       // T's circle went around the floor you left: the next press starts from the nearest seat on this one.
       seatTour.reset();
       // Not a trip of yours: the floor you were on was taken off the building, and the elevator took you away.
@@ -845,7 +847,9 @@ net.onMessage((msg) => {
       if (holdingBall()) toast('🏀 The ball stayed behind, back under the other floor’s hoop');
       ballNews(false);
       arrive();
-      if (workerId) {
+      arriveBehind = null;
+      if (behind) standBehind(behind.workerId, behind.deskId, behind.name);
+      else if (workerId) {
         if (store.workers.has(workerId)) openWorkerTerminal(workerId);
         else toast('That worker has already left this floor.');
       }
@@ -1030,6 +1034,8 @@ function fade(on: boolean, quick = false) {
 type TripKind = 'elevator' | 'switch' | Grip;
 /** A trip under way: the lights are down (and by elevator the doors are shut) until the next floor arrives. */
 let trip: { floor: string; how: TripKind; timer: number; workerId?: string } | null = null;
+/** After this trip, stand behind a worker who called, instead of opening a terminal. */
+let arriveBehind: { workerId: string; deskId: string; name: string } | null = null;
 
 function showElevator() {
   openElevator({ net, ride });
@@ -1113,6 +1119,7 @@ function tripFailed() {
   const t = trip;
   if (!t) return;
   trip = null;
+  arriveBehind = null;
   fade(false);
   if (t.how === 'elevator') lift().setOpen(!!store.floor);
   if (t.how === 'ladder' || t.how === 'pole') climber.abort();
@@ -1511,6 +1518,7 @@ mountAttention((floorId, workerId) => {
   if (floorId === store.floor) openWorkerTerminal(workerId);
   else ride(floorId, workerId);
 }, ride);
+mountPhone(goBehind);
 // A worker at the meeting table shows its role and round over its head (see meetingCard).
 store.on('meeting', syncWorkers);
 // A worker's bubble shows whether it has a pull request open (green) or merged (purple: send it home).
@@ -1544,7 +1552,11 @@ store.on('usage', renderUsage);
 store.on('limits', renderLimits);
 // The reset countdowns tick down between reads.
 setInterval(renderLimits, 30_000);
-$('limits').addEventListener('click', () => net.send({ t: 'limits.refresh' }));
+$('limits').addEventListener('click', (e) => {
+  // Opening spend, or its Usage & cost button, is not a request to read the meters again.
+  if ((e.target as HTMLElement).closest('#limits-spend')) return;
+  net.send({ t: 'limits.refresh' });
+});
 // Today's equal share of the week used up: a warning in the office and on the desktop, once a day.
 watchLimitBudget((title, body) => notifier.notice(title, body, 'limit-budget'));
 // Pay-as-you-go API balances, read over HTTP rather than the socket: they're slow, cached and optional.
@@ -1727,6 +1739,37 @@ function pullRequestFor(w: WorkerInfo) {
   if (!prReady(w)) return toast(`${w.name} is still ${STATUS_LABEL[w.status]} — wait until it's done`, 'warn');
   toast(`Pushing ${w.worktree.branch} and opening a pull request…`);
   net.send({ t: 'worker.pr', workerId: w.id });
+}
+
+/** Behind the worker who called, at the desk they're at now (or the one they called from, if they've left). */
+function standBehind(workerId: string, deskId: string, name: string) {
+  const w = store.workers.get(workerId);
+  const desk = DESK_BY_ID.get(w?.deskId ?? deskId);
+  if (!desk) {
+    toast(`${name} has left, and that desk is gone`, 'warn');
+    return;
+  }
+  standAt(desk);
+  toast(w ? `You're behind ${w.name}` : `${name} has left. You're at their desk.`);
+}
+
+/** A phone-log click: show up right behind that worker. Another floor is a blink, then the desk. */
+function goBehind(call: PhoneCall) {
+  if (trip) return;
+  if (!call.floor || call.floor === store.floor) {
+    closeAllModals();
+    standBehind(call.workerId, call.deskId, call.worker);
+    return;
+  }
+  const floor = store.floors.find((f) => f.id === call.floor);
+  if (!floor || floor.cloning) {
+    toast(floor?.cloning ? `${call.name} is still cloning` : 'That floor is gone', 'warn');
+    return;
+  }
+  arriveBehind = { workerId: call.workerId, deskId: call.deskId, name: call.worker };
+  if (upTop) ride(call.floor);
+  else switchFloor(call.floor);
+  if (!trip) arriveBehind = null;
 }
 
 /** Puts you in front of a desk, looking at it: the PR board's "Go to desk". */
