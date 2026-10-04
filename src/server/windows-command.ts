@@ -32,13 +32,28 @@ export function resolveWindowsCommand(command: string): string | null {
   return null;
 }
 
+/** A node shebang script has no Windows extension, so CreateProcess cannot run it. Launch it with node. */
+function nodeShebang(file: string): boolean {
+  if (/\.(exe|com|cmd|bat)$/i.test(file)) return false;
+  let head = '';
+  try {
+    head = readFileSync(file).subarray(0, 120).toString('utf8');
+  } catch {
+    return false;
+  }
+  const line = head.split(/\r?\n/, 1)[0] ?? '';
+  return /^#!/.test(line) && /\bnode\b/.test(line);
+}
+
 /**
  * Unwrap npm's standard Node and native shims. This preserves the real CLI entrypoint
  * without sending agent prompts through cmd.exe, where quotes, %, & and other text are executable.
+ * An extensionless node shebang (the test agents, and some CLIs) is run with this process's node.
  */
 export function commandLaunch(command: string, args: string[]): { file: string; args: string[] } {
   if (process.platform !== 'win32') return { file: command, args };
   const file = resolveWindowsCommand(command) ?? command;
+  if (nodeShebang(file)) return { file: process.execPath, args: [file, ...args] };
   if (!/\.(cmd|bat)$/i.test(file)) return { file, args };
 
   let shim: string;
