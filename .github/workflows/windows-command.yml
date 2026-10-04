@@ -1,0 +1,20 @@
+name: Windows command regression
+on:
+  push:
+    branches: [continue/mac-20261004/windows-node-shebang]
+  pull_request:
+    paths: ['src/server/windows-command.ts', 'tests/windows-command.test.ts', '.github/workflows/windows-command.yml']
+permissions:
+  contents: read
+jobs:
+  windows-command:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node --import tsx --test tests/windows-command.test.ts
