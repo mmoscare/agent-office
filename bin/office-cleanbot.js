@@ -14,8 +14,11 @@ const USAGE = `Usage:
       each, and what CleanBot suggests deleting (the safe ones), with the command that deletes them
   office-cleanbot delete <names> [--repo <path>] [--dry-run] [--remote] [--discard <names>]
       delete the rows named (branches, or worktree paths as the list shows them; comma-separated),
-      each checked again first. --remote also deletes GitHub's copy of branches whose PR merged or
-      closed. --discard deletes named rows that hold work or were recently active anyway, losing that.
+      each checked again first. On a floor of several repositories, repo:name (app:office/foo) or
+      --repo says which when a name is in more than one; a bare name that is, is refused, and so are
+      row numbers. --remote also deletes GitHub's copy of branches whose PR merged or closed.
+      --discard deletes named rows that hold work or were recently active anyway, losing that; it's
+      named the same way and applies to that row in that repository only.
   office-cleanbot keep <names> [--repo <path>]     always keep them (remembered for this floor)
   office-cleanbot forget <names> [--repo <path>]   take them off the always-keep list
   --json prints the office's answer. list and delete can take several minutes.`;

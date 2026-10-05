@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { floorPrune, neededBy, renderReport, suggestFor, LOOK_MS, type FloorPruneOptions, type FloorPruneReport, type PruneRow, type PullRef } from '../src/server/prune-floor.js';
+import { floorPrune, neededBy, renderReport, selectRows, suggestFor, LOOK_MS, type FloorPruneOptions, type FloorPruneReport, type PruneRow, type PullRef } from '../src/server/prune-floor.js';
 import { Worktrees } from '../src/server/worktrees.js';
 
 // CleanBot's sweep (`agent-office prune --floor`, and office-cleanbot through the office) on fixture
@@ -146,7 +146,18 @@ test("every verdict, and what the PR agent, the VP, the queue and live workers s
   const s13 = f.merged('stray-13');
   f.pr(13, s13.branch, 'MERGED');
   writeFileSync(path.join(s13.abs, 'app.txt'), 'an edit nobody committed\n');
-  for (const slug of ['stray-11', 'stray-13']) {
+  // A third whose changes happen to match blobs git already has: an edit that makes app.txt a copy of a
+  // committed file, and an untracked empty file (the empty blob is committed too). Neither is kept at
+  // that path by any ref, so both are work.
+  const s14 = f.hire('stray-14');
+  commit(s14.abs, 'empty.txt', '', 'an empty file, so the empty blob exists');
+  git(s14.abs, 'push', '-q', 'origin', s14.branch);
+  git(f.root, 'merge', '-q', '--no-ff', '-m', 'Merge stray-14', s14.branch);
+  git(f.root, 'push', '-q', 'origin', 'personal');
+  f.pr(14, s14.branch, 'MERGED');
+  writeFileSync(path.join(s14.abs, 'app.txt'), 'stray-13\n');
+  writeFileSync(path.join(s14.abs, 'notes.txt'), '');
+  for (const slug of ['stray-11', 'stray-13', 'stray-14']) {
     rmSync(path.join(f.root, '.git', 'worktrees', slug), { recursive: true, force: true });
     git(f.root, 'worktree', 'prune');
   }
@@ -197,7 +208,9 @@ test("every verdict, and what the PR agent, the VP, the queue and live workers s
   assert.equal(v('office/stray-11'), 'safe');
   assert.deepEqual(row(report, 'office/stray-11').removes, ['folder', 'branch', 'origin']);
   assert.equal(v('office/stray-13'), 'work');
-  assert.match(row(report, 'office/stray-13').why, /1 edited file git has nowhere else/);
+  assert.match(row(report, 'office/stray-13').why, /1 changed or new file not on its branch/);
+  assert.equal(v('office/stray-14'), 'work', 'content that matches some old blob is still this folder\'s work');
+  assert.match(row(report, 'office/stray-14').why, /2 changed or new files not on its branch/);
 
   // The suggestion: delete exactly the safe rows, and a command that deletes just those.
   const want = ['office/done-10', 'office/merged-1', 'office/stray-11', pads.find((r) => r.name.includes('sess-gone'))!.name].sort();
@@ -296,6 +309,120 @@ test('deleting: only the rows named, each checked again right before it goes, an
   assert.deepEqual(dryRun.run!.removed.map((s) => s.what), ['worktree', 'branch']);
   assert.ok(existsSync(dry.abs), 'a dry run deletes nothing');
   assert.equal(readFileSync(path.join(f.root, '.agent-office', 'cleanup-log.jsonl'), 'utf8').trim().split('\n').length, 2, 'dry runs are not logged');
+});
+
+test('a folder an open ⌨ terminal is in is kept, wherever on the floor the terminal started', { timeout: 600_000 }, async (t) => {
+  const f = fixture(t);
+  const m = f.merged('merged-1');
+  f.pr(1, m.branch, 'MERGED');
+  const other = f.merged('other-2');
+  f.pr(2, other.branch, 'MERGED');
+  // A terminal that started at the floor root and moved into merged-1's worktree: the office reports both.
+  let busy = [{ path: f.root, what: 'a ⌨ terminal in the office' }, { path: path.join(m.abs, 'src'), what: 'a ⌨ terminal in the office' }];
+  const office = async () => ({ floors: [{ name: 'Test floor', dir: f.root }], busy });
+  const report = await f.run({ office, only: [m.branch, other.branch] });
+  assert.equal(row(report, m.branch).verdict, 'worker');
+  assert.match(row(report, m.branch).why, /a ⌨ terminal in the office is working in it: close it/);
+  assert.equal(row(report, other.branch).verdict, 'safe', 'the floor root itself is no worktree: it protects nothing');
+  assert.match(report.run!.refused.find((r) => r.name === m.branch)?.why ?? '', /terminal/);
+  assert.ok(existsSync(m.abs), 'the worktree under the open terminal stays');
+  assert.ok(!existsSync(other.abs));
+  // The terminal moved on (or closed): the row is deletable again.
+  busy = [{ path: f.root, what: 'a ⌨ terminal in the office' }];
+  const later = await f.run({ office, only: [m.branch], fetch: false });
+  assert.deepEqual(later.run!.removed.map((s) => s.what), ['worktree', 'branch']);
+  assert.ok(!existsSync(m.abs));
+});
+
+test('on a floor of several repositories, --only and --discard name one repository\'s row: bare names in several are refused', { timeout: 600_000 }, async (t) => {
+  const top = realpathSync(mkdtempSync(path.join(tmpdir(), 'cleanbot-multi-')));
+  t.after(() => rmSync(top, { recursive: true, force: true, maxRetries: 3 }));
+  const home = process.env.AGENT_OFFICE_HOME;
+  process.env.AGENT_OFFICE_HOME = path.join(top, 'home');
+  t.after(() => (home === undefined ? delete process.env.AGENT_OFFICE_HOME : (process.env.AGENT_OFFICE_HOME = home)));
+  // The floor is a folder of two repositories, app and lib, each with its own GitHub origin (a local bare one behind insteadOf).
+  const floor = path.join(top, 'floor');
+  mkdirSync(floor);
+  const prs = new Map<string, PullRef[]>();
+  const repo = (name: string) => {
+    const dir = path.join(floor, name);
+    const origin = path.join(top, `${name}.git`).split(path.sep).join('/');
+    mkdirSync(dir);
+    git(dir, 'init', '-q', '-b', 'personal');
+    writeFileSync(path.join(dir, 'app.txt'), 'one\n');
+    writeFileSync(path.join(dir, '.gitignore'), '.agent-office/\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-q', '-m', 'Initial');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'personal', origin], { stdio: 'ignore' });
+    git(dir, 'remote', 'add', 'origin', `https://github.com/test/${name}.git`);
+    git(dir, 'config', `url.${origin}.insteadOf`, `https://github.com/test/${name}.git`);
+    git(dir, 'push', '-q', '-u', 'origin', 'personal');
+    git(dir, 'remote', 'set-head', 'origin', 'personal');
+    prs.set(`test/${name}`, []);
+    return dir;
+  };
+  const app = repo('app');
+  const lib = repo('lib');
+  // The same branch name in both, each a merged PR whose worktree holds an uncommitted edit (so only --discard deletes it).
+  const same = (dir: string, github: string, n: number) => {
+    const w = new Worktrees(dir).create('same-1') as { path: string; branch: string };
+    assert.equal(w.branch, 'office/same-1');
+    const abs = path.join(dir, w.path);
+    commit(abs, 'w.txt', `${github}\n`, 'work');
+    git(abs, 'push', '-q', 'origin', w.branch);
+    git(dir, 'merge', '-q', '--no-ff', '-m', 'Merge', w.branch);
+    git(dir, 'push', '-q', 'origin', 'personal');
+    prs.get(github)!.push({ number: n, head: w.branch, state: 'MERGED', url: `https://github.com/${github}/pull/${n}` });
+    writeFileSync(path.join(abs, 'app.txt'), 'unsaved\n');
+    return abs;
+  };
+  const appTree = same(app, 'test/app', 1);
+  const libTree = same(lib, 'test/lib', 1);
+  const run = (extra: Partial<FloorPruneOptions> = {}) =>
+    floorPrune({ floor, pulls: async (github) => prs.get(github) ?? [], office: async () => ({ floors: [{ name: 'Multi', dir: floor }], busy: [] }), tmp: path.join(top, 'tmp'), claudeProjects: path.join(top, 'projects'), by: 'test', now: () => Date.now() + 3 * DAY, ...extra });
+
+  const list = await run();
+  assert.deepEqual(list.repos.map((r) => r.path), ['app', 'lib']);
+  const rows = list.rows.filter((r) => r.branch === 'office/same-1');
+  assert.deepEqual(rows.map((r) => [r.repo, r.verdict]), [['app', 'work'], ['lib', 'work']]);
+  // The table's own delete command names the repository.
+  assert.match(renderReport({ ...list, suggested: { delete: rows.map((r) => ({ n: r.n, repo: r.repo, name: r.name, why: r.why })), remote: [], look: [] } }, false, 'cleanbot'), /office-cleanbot delete office\/same-1 --repo app\n\s+office-cleanbot delete office\/same-1 --repo lib/);
+
+  // A bare name that's in both: refused for --only and --discard, and nothing goes.
+  const bare = await run({ only: ['office/same-1'], discard: ['office/same-1'], fetch: false });
+  assert.deepEqual(bare.run!.removed, []);
+  assert.match(bare.run!.refused.find((r) => r.name === 'office/same-1' && !r.why.startsWith('--discard'))?.why ?? '', /is in 2 repositories \(app, lib\): say which, as app:office\/same-1, or pass --repo app/);
+  assert.match(bare.run!.refused.find((r) => r.why.startsWith('--discard'))?.why ?? '', /--discard: office\/same-1 is in 2 repositories/);
+  assert.ok(existsSync(appTree) && existsSync(libTree));
+  // Row numbers aren't names.
+  const numbered = await run({ only: [String(rows[0].n)], fetch: false });
+  assert.match(numbered.run!.refused[0].why, /row numbers aren't taken/);
+  assert.ok(existsSync(appTree) && existsSync(libTree));
+  // --discard said of app's row doesn't reach lib's same-named row, even when --only names both by repository.
+  const scoped = await run({ only: ['app:office/same-1', 'lib:office/same-1'], discard: ['app:office/same-1'], fetch: false });
+  assert.deepEqual(scoped.run!.removed.map((s) => [s.repo, s.what]), [['app', 'worktree'], ['app', 'branch']]);
+  assert.match(scoped.run!.refused.find((r) => r.repo === 'lib')?.why ?? '', /holds work.*--discard deletes it anyway/);
+  assert.ok(!existsSync(appTree));
+  assert.ok(existsSync(libTree), "lib's work is untouched");
+  // --repo scopes a bare name to one repository.
+  const viaRepo = await run({ repo: 'lib', only: ['office/same-1'], discard: ['office/same-1'], fetch: false });
+  assert.deepEqual(viaRepo.run!.removed.map((s) => [s.repo, s.what]), [['lib', 'worktree'], ['lib', 'branch']]);
+  assert.ok(!existsSync(libTree));
+});
+
+test('selecting rows: bare names, repo:name, and what --keep does with a name in several repositories', () => {
+  const mk = (n: number, repo: string, name: string, extra: Partial<PruneRow> = {}): PruneRow => ({ n, repo, name, branch: name, local: true, origin: false, verdict: 'safe', why: '', removes: [], discardable: false, suggest: 'keep', ...extra });
+  const rows = [mk(1, 'app', 'office/a'), mk(2, 'app', 'office/b'), mk(3, 'lib', 'office/a'), mk(4, 'lib', '.agent-office/worktrees/c', { branch: undefined, worktree: { path: '.agent-office/worktrees/c', kind: 'office', exists: true } })];
+  const names = (sel: { rows: Set<PruneRow> }) => [...sel.rows].map((r) => `${r.repo}:${r.name}`).sort();
+  assert.deepEqual(names(selectRows(rows, ['office/b'], true)), ['app:office/b'], 'a name in one repository needs no prefix');
+  assert.deepEqual(names(selectRows(rows, ['lib:office/a', 'lib:.agent-office/worktrees/c/'], true)), ['lib:.agent-office/worktrees/c', 'lib:office/a']);
+  const ambiguous = selectRows(rows, ['office/a'], true);
+  assert.deepEqual(names(ambiguous), []);
+  assert.match(ambiguous.refused[0].why, /office\/a is in 2 repositories \(app, lib\)/);
+  assert.deepEqual(names(selectRows(rows, ['office/a'], false)), ['app:office/a', 'lib:office/a'], '--keep keeps each of them');
+  assert.match(selectRows(rows, ['office/zzz'], true).refused[0].why, /no such row.*repo:name says which/);
+  assert.match(selectRows(rows, ['nope:office/a'], true).refused[0].why, /no such row/);
+  assert.match(selectRows(rows, ['#3'], true).refused[0].why, /row numbers aren't taken/);
 });
 
 test('what names a row: its branch, its seat, or its PR (in its own repository)', () => {

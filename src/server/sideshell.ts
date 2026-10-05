@@ -63,6 +63,11 @@ export class SideShells {
     this.shells.get(workerId)?.proc.write(data);
   }
 
+  /** The shell's process id while it runs (console-shell.ts reads where it is now from it). */
+  pid(workerId: string): number | undefined {
+    return this.shells.get(workerId)?.proc.pid;
+  }
+
   resize(workerId: string, cols: number, rows: number) {
     const s = this.shells.get(workerId);
     if (!s) return;

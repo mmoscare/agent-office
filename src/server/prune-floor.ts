@@ -718,33 +718,29 @@ async function worktreeFiles(abs: string): Promise<{ uncommitted: number; ignore
 /**
  * What a half-deleted worktree folder holds, read without touching any real index: a throwaway index
  * (GIT_INDEX_FILE) gets `branch`'s tree (or nothing when there's no branch), and `git status` compares
- * the folder with it. Only a second column of M (or T) and ?? rows count: " D" is a file the half-delete
- * already took. Each counted file is hashed (git hash-object) and looked up (git cat-file -e, batched):
- * `edits` are the ones whose content git has nowhere, which deleting the folder would lose.
+ * the folder with it. `edits` are every path status reports as changed (a second column of M, T or A)
+ * or untracked (??): a file whose content, at that path, the branch doesn't have, which deleting the
+ * folder would lose. " D" is a file the half-delete already took. Whether a file's content happens to
+ * match some blob elsewhere in the object database is no reason to drop it: that keeps neither the path
+ * nor the fact that it was this worktree's, so it isn't looked at.
  */
 export async function strayEdits(repoDir: string, folder: string, branch?: string): Promise<{ edits: string[]; ignored: string[] }> {
   const gitDir = await git(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoDir);
   const tmp = path.join(os.tmpdir(), `agent-office-prune-${process.pid}-${randomBytes(6).toString('hex')}`);
   const index = `${tmp}.index`;
   const excludes = `${tmp}.exclude`;
-  const inFolder = (args: string[], input?: string) =>
-    gitRaw(['--git-dir', gitDir, '--work-tree', '.', '-c', 'core.longpaths=true', '-c', `core.excludesFile=${slash(excludes)}`, ...args], folder, { env: { GIT_INDEX_FILE: index }, input, timeout: 180_000 });
+  const inFolder = (args: string[]) =>
+    gitRaw(['--git-dir', gitDir, '--work-tree', '.', '-c', 'core.longpaths=true', '-c', `core.excludesFile=${slash(excludes)}`, ...args], folder, { env: { GIT_INDEX_FILE: index }, timeout: 180_000 });
   try {
     // Its own .gitignore may be one of the files the half-delete took: use the branch's, and never count build output.
     const ignore = branch ? await run(['show', `refs/heads/${branch}:.gitignore`], repoDir) : undefined;
     await writeFile(excludes, `${ignore?.code === 0 ? ignore.out : ''}\n${[...BUILD_DIRS].map((d) => `${d}/`).join('\n')}\n`);
     await inFolder(branch ? ['read-tree', `refs/heads/${branch}`] : ['read-tree', '--empty']);
     const recs = statusRecords(await inFolder(['status', '--porcelain=v1', '-z', '-uall', '--ignored=matching']));
-    const counted = recs.filter(([xy]) => xy === '??' || (xy[1] !== ' ' && xy[1] !== 'D' && xy[1] !== '?' && xy[1] !== '!')).map(([, p]) => p);
+    // Everything status reports as changed or untracked against the branch's tree is work: nothing is
+    // dropped for having content that some other blob in the repository happens to share.
+    const edits = recs.filter(([xy]) => xy === '??' || (xy[1] !== ' ' && xy[1] !== 'D' && xy[1] !== '?' && xy[1] !== '!')).map(([, p]) => p);
     const ignored = workIgnored(recs.filter(([xy]) => xy === '!!').map(([, p]) => p));
-    const edits: string[] = [];
-    if (counted.length) {
-      const hashes = (await inFolder(['hash-object', '--stdin-paths'], `${counted.join('\n')}\n`)).trim().split('\n');
-      const found = (await git(['cat-file', '--batch-check'], repoDir, { input: `${hashes.join('\n')}\n` })).split('\n');
-      counted.forEach((p, i) => {
-        if (!found[i] || / missing$/.test(found[i])) edits.push(p);
-      });
-    }
     return { edits, ignored };
   } finally {
     await unlink(index).catch(() => undefined);
@@ -964,7 +960,7 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
     return set('unknown', `git couldn't say what it holds: ${(err as Error).message}`);
   }
   if (holds.uncommitted) lost.push(plural(holds.uncommitted, 'uncommitted change'));
-  if (holds.edits) lost.push(`${plural(holds.edits, 'edited file')} git has nowhere else`);
+  if (holds.edits) lost.push(`${plural(holds.edits, 'changed or new file')} not on its branch`);
   if (holds.unpushed) lost.push(plural(holds.unpushed, 'unpushed commit'));
   if (holds.unshipped) lost.push(`${plural(holds.unshipped, 'commit')} no open or merged PR carries (unshipped work on the PR board)`);
   if (holds.ignored.length) lost.push(`ignored files: ${holds.ignored.slice(0, IGNORED_LISTED).join(', ')}${holds.ignored.length > IGNORED_LISTED ? ` and ${holds.ignored.length - IGNORED_LISTED} more` : ''}`);
@@ -1007,7 +1003,7 @@ async function judge(c: Candidate, ctx: Ctx): Promise<Omit<PruneRow, 'n'>> {
   if (lost.length) return set('work', `holds ${lost.join(', ')}${recent.length ? `; ${recent[0].what} ${ago(ctx.now - recent[0].at)}` : ''}`);
   if (unknown.length) return set('unknown', unknown.join('; '));
   if (recent.length) return set('recent', `${recent[0].what} ${ago(ctx.now - recent[0].at)}: something may still be using it`);
-  const what = row.removes.includes('folder') ? 'a stray folder with no edits git lacks' : wt ? (wt.exists ? 'clean' : 'its folder is already gone') : 'branch only, its worktree is gone';
+  const what = row.removes.includes('folder') ? 'a stray folder with nothing changed or new against its branch' : wt ? (wt.exists ? 'clean' : 'its folder is already gone') : 'branch only, its worktree is gone';
   return set('safe', `${what}, nothing unpushed${pr ? `; PR #${pr.number} ${prState(pr)}` : ''}`);
 }
 
@@ -1069,11 +1065,63 @@ export async function pinRows(floorDir: string, names: string[], opts: { repo?: 
   });
 }
 
+/** A name as the command line and the table compare it: forward slashes, no trailing one, and case-insensitive on Windows. */
+const norm = (s: string) => (process.platform === 'win32' ? slash(s).toLowerCase() : slash(s)).replace(/\/+$/, '');
+
 /** A name given on the command line matches a row by its name, its branch or its worktree's path. */
 function matches(row: Pick<PruneRow, 'name' | 'branch' | 'worktree'>, names: Set<string>): boolean {
-  const norm = (s: string) => (process.platform === 'win32' ? slash(s).toLowerCase() : slash(s)).replace(/\/+$/, '');
   const want = new Set([...names].map(norm));
   return [row.name, row.branch, row.worktree?.path].some((n) => n !== undefined && want.has(norm(n)));
+}
+
+export interface Selection {
+  rows: Set<PruneRow>;
+  refused: { name: string; why: string }[];
+}
+
+/**
+ * The rows the command line names (--only, --discard, --keep). A name is a branch, or a worktree's path
+ * as the table shows it. On a floor of several repositories the same branch name can be in more than
+ * one, so `repo:name` (app:office/foo) says which, or --repo scopes the whole run to one. A bare name
+ * that's in several repositories is refused when `one` is set (--only and --discard: a yes to losing
+ * the work in one numbered row is not a yes to the same-named row elsewhere), and applies to each of
+ * them when it isn't (--keep: keeping more is the safe way round). Row numbers aren't taken: a row's
+ * number can change between the list a person saw and the run that deletes.
+ */
+export function selectRows(rows: PruneRow[], names: string[], one: boolean): Selection {
+  const sel: Selection = { rows: new Set(), refused: [] };
+  const repos = [...new Set(rows.map((r) => r.repo))];
+  const several = repos.length > 1;
+  for (const name of names) {
+    let hits = rows.filter((r) => matches(r, new Set([name])));
+    if (!hits.length) {
+      const scoped = repoScoped(name, repos);
+      if (scoped) hits = rows.filter((r) => r.repo === scoped.repo && matches(r, new Set([scoped.name])));
+    }
+    if (!hits.length) {
+      const why = /^#?\d+$/.test(name)
+        ? "row numbers aren't taken, since a row's number can change between runs: name the row as the table shows it"
+        : `no such row on this floor (names are branches, or worktree paths as the table shows them${several ? '; on a floor of several repositories, repo:name says which' : ''})`;
+      sel.refused.push({ name, why });
+      continue;
+    }
+    const inRepos = [...new Set(hits.map((r) => r.repo))];
+    if (one && inRepos.length > 1) {
+      sel.refused.push({ name, why: `${name} is in ${inRepos.length} repositories (${inRepos.join(', ')}): say which, as ${inRepos[0]}:${name}, or pass --repo ${inRepos[0]}` });
+      continue;
+    }
+    for (const r of hits) sel.rows.add(r);
+  }
+  return sel;
+}
+
+/** `repo:name`, when `repo` is a repository of the floor (the longest such path wins: apps/web before apps). */
+function repoScoped(name: string, repos: string[]): { repo: string; name: string } | undefined {
+  for (const repo of [...repos].sort((a, b) => b.length - a.length)) {
+    const prefix = `${repo}:`;
+    if (name.length > prefix.length && norm(name.slice(0, prefix.length)) === norm(prefix)) return { repo, name: name.slice(prefix.length) };
+  }
+  return undefined;
 }
 
 // ---- Deleting ------------------------------------------------------------------------------------
@@ -1188,15 +1236,15 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
     // The office's rows first, by name; then what isn't the office's.
     const order = judged.map((row, i) => ({ row, c: cands[i] })).sort((a, b) => Number(a.row.verdict === 'not-office') - Number(b.row.verdict === 'not-office') || a.row.name.localeCompare(b.row.name));
     const always = new Set(repo.report.alwaysKeep);
-    const keep = new Set(opts.keep ?? []);
     for (const { row, c } of order) {
       const r: PruneRow = { n: report.rows.length + 1, ...row };
       if (matches(r, always)) r.kept = 'always';
-      else if (matches(r, keep)) r.kept = 'this run';
       report.rows.push(r);
       byRow.set(r, c);
     }
   }
+  // --keep: a bare name in several repositories keeps each of them (the safe way round).
+  for (const r of selectRows(report.rows, opts.keep ?? [], false).rows) if (!r.kept) r.kept = 'this run';
   // Pinning a name no row of a several-repository floor has, without --repo: say where it went.
   if (opts.alwaysKeep?.length && opts.repo === undefined && repos.length > 1) {
     for (const n of opts.alwaysKeep) {
@@ -1214,12 +1262,14 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
   // Deleting: each named row, looked at again right before it goes.
   const runOut: PruneRun = { dryRun: !!opts.dryRun, remote: !!opts.remote, removed: [], failed: [], refused: [] };
   report.run = runOut;
-  const only = new Set(opts.only);
-  const discard = new Set(opts.discard ?? []);
-  for (const n of only) if (!report.rows.some((r) => matches(r, new Set([n])))) runOut.refused.push({ name: n, why: 'no such row on this floor (names are branches, or worktree paths as the table shows them)' });
-  for (const n of discard) if (!report.rows.some((r) => matches(r, new Set([n])) && matches(r, only))) runOut.refused.push({ name: n, why: '--discard only applies to rows also named in --only' });
+  // Each name picks rows in one repository: a bare name that's in several is refused, not applied to all.
+  const only = selectRows(report.rows, opts.only, true);
+  const discard = selectRows(report.rows, opts.discard ?? [], true);
+  runOut.refused.push(...only.refused);
+  for (const r of discard.refused) runOut.refused.push({ name: r.name, why: `--discard: ${r.why}` });
+  for (const row of discard.rows) if (!only.rows.has(row)) runOut.refused.push({ repo: row.repo, name: row.name, why: '--discard only applies to rows also named in --only' });
   for (const row of report.rows) {
-    if (!matches(row, only)) continue;
+    if (!only.rows.has(row)) continue;
     const refuse = (why: string) => runOut.refused.push({ repo: row.repo, name: row.name, why });
     if (row.kept === 'always') {
       refuse('on the always-keep list (office-cleanbot forget, or --forget-keep, takes it off)');
@@ -1236,7 +1286,8 @@ export async function floorPrune(opts: FloorPruneOptions): Promise<FloorPruneRep
     ctx.needs = readNeeds(floorDirs, fresher);
     ctx.now = now();
     const fresh = await judge(c, ctx);
-    const forced = matches(row, discard);
+    // --discard was said of this row, in this repository: never of a same-named row elsewhere on the floor.
+    const forced = discard.rows.has(row);
     if (fresh.verdict !== 'safe' && !(forced && fresh.discardable)) {
       refuse(`${VERDICT_LABEL[fresh.verdict]}: ${fresh.why}${fresh.discardable ? ' (--discard deletes it anyway, losing that)' : ''}`);
       continue;
@@ -1311,10 +1362,14 @@ task names.
 Options:
   --json                 Print it all as JSON (what CleanBot reads)
   --repo <path>          Only this repository of the floor
-  --only <names>         Delete these rows: branch names, or worktree paths as listed (comma-separated)
+  --only <names>         Delete these rows: branch names, or worktree paths as listed (comma-separated).
+                         On a floor of several repositories, repo:name (app:office/foo) says which when
+                         the name is in more than one; a bare name that is, is refused. Row numbers
+                         aren't taken, since they can change between runs
   --keep <names>         Keep these rows this run, even if named in --only
   --discard <names>      Rows also named in --only to delete even though they hold work or were
-                         recently active, losing that
+                         recently active, losing that. Named the same way: it applies to that row in
+                         that repository only
   --remote               Also delete GitHub's (origin's) copy of branches whose PR is merged or closed
   --always-keep <names>  Add to the floor's always-keep list (.agent-office/${KEEP_FILE})
   --forget-keep <names>  Take them off it

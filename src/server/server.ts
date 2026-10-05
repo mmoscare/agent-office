@@ -628,10 +628,10 @@ export async function startServer(cfg: Config) {
     if (req.method === 'POST' && r.status === 200 && body?.action === 'duty') toastFloor(floor, body.on === true ? `👔 The ${agent.name} is on duty: he sweeps the PRs by himself` : `👔 The ${agent.name} is off duty`);
     return send(res, r.status, r.body);
   };
-  /** Every floor, and the folders the office's ⌨ terminals are in: what CleanBot must not delete from under anyone. */
+  /** Every floor, and the folders the office's ⌨ terminals are in now and started in: what CleanBot must not delete from under anyone. */
   const officeView = async (): Promise<OfficeView> => ({
     floors: [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })),
-    busy: consoles.folders().map((dir) => ({ path: dir, what: 'a ⌨ terminal in the office' })),
+    busy: (await consoles.folders()).map((dir) => ({ path: dir, what: 'a ⌨ terminal in the office' })),
   });
   /**
    * CleanBot, and only him (office-cleanbot): GET ?view=list[&repo=&recent=&fetch=0], POST {"action":
