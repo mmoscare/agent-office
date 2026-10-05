@@ -17,7 +17,7 @@ function git(dir: string, ...args: string[]): string {
 }
 
 function fixture(t: { after(fn: () => void | Promise<void>): void }) {
-  const root = mkdtempSync(path.join(tmpdir(), 'office workspaces '));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'office workspaces ')));
   const floor = path.join(root, 'project');
   mkdirSync(floor);
   t.after(() => {
@@ -134,6 +134,22 @@ test('two worktrees share a workspace and branch name while preserving originals
   assert.equal(state.dirty, 1);
   assert.equal(state.repositories?.find(r => r.repository === 'frontend')?.dirty, 0);
   assert.equal(state.repositories?.find(r => r.repository === 'backend')?.dirty, 1);
+});
+
+test('a floor alias supports workspaces while a worktree link outside the workspace is refused', async t => {
+  const f = fixture(t);
+  const alias = path.join(f.root, 'floor-alias');
+  symlinkSync(f.floor, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const manager = new Workspaces(alias);
+  const result = manager.create('alias-worker', { repositories: ['frontend'], branch: 'feature/alias' });
+  assert.notEqual(typeof result, 'string', String(result));
+  const ws = result as WorkerWorkspace;
+  assert.equal(manager.check(ws), path.join(f.floor, ws.path));
+  assert.equal((await manager.inspect(ws)).error, undefined);
+  const cwd = path.join(f.floor, ws.repositories[0].path);
+  git(f.frontend, 'worktree', 'remove', cwd);
+  symlinkSync(f.frontend, cwd, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(() => manager.check(ws), /outside the workspace/);
 });
 
 test('preflight refuses branch collisions, duplicates, invalid names, and paths outside the floor', t => {

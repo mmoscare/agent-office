@@ -188,7 +188,8 @@ export class Workspaces {
   check(workspace: WorkerWorkspace, ref?: RepositoryWorktree): string {
     const root = this.root(workspace);
     for (const r of ref ? [ref] : workspace.repositories) {
-      const cwd = path.resolve(this.floor, r.path);
+      // root() uses the physical floor; compare like paths for macOS /var and folder aliases.
+      const cwd = path.resolve(realpathSync(this.floor), r.path);
       if (!within(root, cwd) || cwd === root || !existsSync(cwd) || !within(realpathSync(root), realpathSync(cwd))) throw new Error(`Worktree is missing or outside the workspace: ${r.path}`);
       const dir = source(this.floor, r.repository);
       if (path.relative(realpathSync(cwd), realpathSync(git(cwd, ['rev-parse', '--show-toplevel']))) !== '') throw new Error(`Not a worktree root: ${r.path}`);

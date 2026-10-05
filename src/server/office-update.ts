@@ -158,7 +158,7 @@ export function packageCheck(dir: string): { needed: boolean; runtime: boolean; 
 }
 
 /** Where npm is: next to the Node running the office (npm's own CLI, run by that Node, with no shell). */
-function npmCommand(): { file: string; args: string[] } {
+export function npmCommand(): { file: string; args: string[] } {
   const node = path.dirname(process.execPath);
   const cli = [process.env.npm_execpath, path.join(node, 'node_modules', 'npm', 'bin', 'npm-cli.js'), path.join(node, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')].find((f) => f && /npm-cli\.js$/.test(f) && existsSync(f));
   return cli ? { file: process.execPath, args: [cli] } : { file: 'npm', args: [] };
