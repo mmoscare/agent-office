@@ -12,3 +12,16 @@ Changes:
 Checks at this checkpoint: `node --import tsx --test --test-reporter=spec tests/cleanup.test.ts tests/office-update.test.ts tests/workers.test.ts`: 52 passed, no skips. `npm run typecheck` passed. Earlier fixture runs reproduced npm/path failures and are not passes. Build and full-suite/Ubuntu integration results will be recorded in the PR's additive completion comment and description before merge.
 
 Work is isolated in `/private/tmp/mac-integration-20261004/agent-office` on the existing #98 branch. The live checkout remains on personal, and all 41 original Mac checkouts passed the pre-integration preservation audit. CleanBot #96 remains separate with its three review findings; no cleanup operation ran against a real floor. No private data or generated dependencies are committed. Keep the Windows backup.
+
+## Mac full-suite continuation
+
+The broad native Mac run exposed two baseline platform issues beyond the Ubuntu failures. `Workspaces.check()` compared a physical root to an aliased `/var` floor, refusing valid multi-repository workspaces. It now resolves the floor before confinement checks; a portable alias regression also verifies that an escaping worktree link remains refused. Test fixtures use physical paths so their Git interception and launch assertions compare the same directory.
+
+BSD tar can finish at the archive end marker before Git finishes writing padding, producing an asynchronous stdin EPIPE. The verification runner now consumes that error and drains the producer; the child exit status still decides success/failure. Other input errors fail the step. A regression verifies early input closure for both successful and failed commands. No VP duty was activated.
+
+Checks actually run after these changes on macOS:
+- `node --import tsx --test --test-reporter=spec tests/workspaces.test.ts tests/vp-verify.test.ts tests/vp.test.ts`: 32 passed.
+- `node --import tsx --test --test-reporter=spec tests/*.test.ts`: 786 passed, 0 failed, 6 Windows-only skips (792 total), 44.85 seconds.
+- `npm run typecheck`: passed.
+
+Ubuntu CI passed on the first repair commit `4a99b753687c184806404a4d070d6c01ebcffdd7`: run 37246141556. PR #99 also passed Ubuntu and Windows after merging that repair at `b2842f2f25b3364ed42a80e72f022688685f70a7`: runs 37246362067, 37246362056 and 37246358666. New-head CI, final build and integration receipts will be appended to both existing PRs before completion.
