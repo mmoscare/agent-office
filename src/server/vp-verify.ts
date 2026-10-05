@@ -168,7 +168,17 @@ export function runLow(file: string, args: string[], cwd: string, timeoutMs: num
     } catch {
       // not allowed here: it runs at normal priority
     }
-    if (input && child.stdin) input.pipe(child.stdin);
+    let inputError: Error | undefined;
+    if (input && child.stdin) {
+      child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+        // BSD tar may stop after the archive end marker before Git writes its padding.
+        // A closed pipe is decided by the child's exit status; other input failures fail the step.
+        if (err.code !== 'EPIPE') inputError = err;
+        input.unpipe(child.stdin!);
+        input.resume();
+      });
+      input.pipe(child.stdin);
+    }
     child.stdout?.on('data', keep);
     child.stderr?.on('data', keep);
     const timer = setTimeout(() => {
@@ -181,7 +191,7 @@ export function runLow(file: string, args: string[], cwd: string, timeoutMs: num
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? -1, out, timedOut, ms: Date.now() - started });
+      resolve({ code: inputError ? -1 : code ?? -1, out: inputError ? `${out}\n${inputError.message}` : out, timedOut, ms: Date.now() - started });
     });
   });
 }
