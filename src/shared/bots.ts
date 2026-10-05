@@ -6,9 +6,10 @@
 // Adding a bot: an entry here (name, colour, kiosk, card text, the first request it gets when it's
 // deployed), its brief (see vp-brief.ts, and 'station.<kind>' in prompts.ts so it can be rewritten in
 // ⚙️ Settings), and any command of its own (bin/office-<kind>.js, written onto the board agents' PATH
-// by workers.ts). Nothing here imports layout.ts, which builds its stations from this list.
+// by workers.ts). Nothing here imports layout.ts, which builds its stations from this list. The floor
+// menu deploys any bot with { t: 'bot.deploy', kind } (the VP also has his own vp.deploy).
 
-export type BotKind = 'vp';
+export type BotKind = 'vp' | 'cleanbot';
 
 export interface BotDef {
   kind: BotKind;
@@ -42,6 +43,20 @@ export const BOTS: Record<BotKind, BotDef> = {
     deployPrompt: "You've just been deployed on this floor. Run office-vp status and office-vp workers, then tell me in a few lines where the pull requests and the workers stand, and what (if anything) needs me.",
     // Out in the lounge, against the meeting room's glass under the boss office, facing into the room.
     spot: { x: 14.8, z: 7.0, rotY: 0, label: 'VP', freestanding: true },
+  },
+  cleanbot: {
+    kind: 'cleanbot',
+    name: 'CleanBot',
+    color: '#2a9d8f',
+    icon: '🧹',
+    sign: '🧹 CleanBot',
+    offer: 'Deploy me to tidy up',
+    does: 'I find the leftover branches and worktrees, suggest what to delete, and delete only what you say',
+    example: 'Clean up this floor',
+    deployPrompt: "You've just been deployed on this floor. Run office-cleanbot list, then show me what you found and what you suggest deleting, and ask me which to delete and which to keep. Don't delete anything until I say so.",
+    // In the lounge too, against the meeting room's glass just west of its door (the VP is east of it),
+    // facing into the room. Further east the way out runs into the lounge's furniture (tests/nav.test.ts).
+    spot: { x: 9.6, z: 7.0, rotY: 0, label: 'CleanBot', freestanding: true },
   },
 };
 

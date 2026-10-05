@@ -156,7 +156,14 @@ export function stationBrief(kind: StationKind, checkoutsOrPrompts?: Checkout[] 
 /** Claude Code tools the queue agent and the receptionist are launched without, so they can't edit the checkout even by mistake. */
 export const QUEUE_AGENT_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 
+/**
+ * CleanBot deletes only through office-cleanbot, which checks each row first: Claude Code refuses him
+ * the commands that would delete a branch, a worktree or files by hand (a backstop to his brief).
+ */
+export const CLEANBOT_DISALLOWED_COMMANDS = ['git branch -d', 'git branch -D', 'git branch --delete', 'git worktree remove', 'git worktree prune', 'git push', 'git update-ref', 'git reset', 'git clean', 'rm', 'rmdir', 'del', 'Remove-Item'].map((c) => `Bash(${c}:*)`);
+
 /** The board agents that only ever file and queue work, and the bots (who act only through commands): launched without the file-editing tools. */
 export function stationDisallowedTools(kind: StationKind): string[] {
+  if (kind === 'cleanbot') return [...QUEUE_AGENT_DISALLOWED_TOOLS, ...CLEANBOT_DISALLOWED_COMMANDS];
   return kind === 'queue' || kind === 'inbox' || isBotKind(kind) ? QUEUE_AGENT_DISALLOWED_TOOLS : [];
 }

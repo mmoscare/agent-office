@@ -4,17 +4,35 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import headless from '@xterm/headless';
-import { ConsoleShells, consoleShellLaunch } from '../src/server/console-shell.js';
+import { ConsoleShells, consoleShellLaunch, POWERSHELL_CWD_PROMPT, reportedCwd } from '../src/server/console-shell.js';
 import type { ServerMsg } from '../src/shared/protocol.js';
 
-test('standalone shell uses PowerShell with profiles on Windows and preserves Unix shells', () => {
+test('standalone shell uses PowerShell with profiles on Windows, told to say where it is, and preserves Unix shells', () => {
+  const args = ['-NoLogo', '-NoExit', '-Command', POWERSHELL_CWD_PROMPT];
   assert.deepEqual(consoleShellLaunch('win32', { SystemRoot: 'D:\\Windows', SHELL: '/bin/bash' }, () => false), {
-    file: 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args: ['-NoLogo'],
+    file: 'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', args,
   });
   const pwsh = 'C:\\Program Files\\PowerShell\\7\\pwsh.exe';
-  assert.deepEqual(consoleShellLaunch('win32', { Path: 'C:\\other;"C:\\Program Files\\PowerShell\\7"' }, f => f === pwsh), { file: pwsh, args: ['-NoLogo'] });
+  assert.deepEqual(consoleShellLaunch('win32', { Path: 'C:\\other;"C:\\Program Files\\PowerShell\\7"' }, f => f === pwsh), { file: pwsh, args });
+  assert.ok(!POWERSHELL_CWD_PROMPT.includes('"'), 'no double quotes: it travels on the command line');
+  assert.match(POWERSHELL_CWD_PROMPT, /\$function:prompt/, 'it wraps the prompt the profile left');
   assert.deepEqual(consoleShellLaunch('linux', { SHELL: '/bin/zsh' }), { file: '/bin/zsh', args: ['-l'] });
   assert.deepEqual(consoleShellLaunch('darwin', {}), { file: '/bin/bash', args: ['-l'] });
+});
+
+test('where a shell says it is: OSC 7 and OSC 9;9 from its prompt, split across chunks or not', () => {
+  const esc = '\x1b';
+  assert.deepEqual(reportedCwd(`${esc}]7;file:///C:/Users/Owner/x%20y${'\x07'}PS C:\\Users\\Owner\\x y> `, '', 'win32'), { cwd: 'C:\\Users\\Owner\\x y', tail: '' });
+  assert.deepEqual(reportedCwd(`${esc}]7;file://localhost/home/me/a%20b${esc}\\$ `, '', 'linux'), { cwd: '/home/me/a b', tail: '' });
+  assert.deepEqual(reportedCwd(`${esc}]9;9;"C:\\Users\\Owner"${'\x07'}`, '', 'win32').cwd, 'C:\\Users\\Owner');
+  // The last one in a chunk wins; colour codes after it are carried for the next chunk, which may complete a split sequence.
+  const first = reportedCwd(`${esc}]7;file:///C:/one${'\x07'}${esc}]7;file:///C:/two${'\x07'}${esc}[m${esc}]7;file:///C:/Us`, '', 'win32');
+  assert.equal(first.cwd, 'C:\\two');
+  assert.equal(first.tail, `${esc}]7;file:///C:/Us`);
+  const second = reportedCwd(`ers/Owner${'\x07'}> `, first.tail, 'win32');
+  assert.deepEqual(second, { cwd: 'C:\\Users\\Owner', tail: '' });
+  assert.deepEqual(reportedCwd('plain output\n', 'stale tail', 'linux'), { cwd: undefined, tail: '' });
+  assert.equal(reportedCwd(`${esc}]7;file:///C:/bad%ZZ${'\x07'}`, '', 'win32').cwd, undefined, 'a path that is no URI is ignored');
 });
 
 test('standalone shells navigate outside the floor, keep their directory on reopen, follow a floor change, and isolate clients', async t => {
@@ -65,6 +83,17 @@ test('standalone shells navigate outside the floor, keep their directory on reop
   // Go up outside the floor, then enter a sibling whose path needs quoting.
   write('alice', win ? "cd ..; cd 'folder with spaces'; $global:officeConsoleValue = 'ALICE_ONLY'; Write-Output ('PATH_' + (Get-Location).Path)" : "cd ..; cd 'folder with spaces'; officeConsoleValue=ALICE_ONLY; printf 'PATH_%s\\n' \"$PWD\"");
   await until(() => (output.get('alice') ?? '').includes('PATH_' + other));
+  // CleanBot asks where the terminals are: the folder alice's shell moved into (its prompt says so on
+  // Windows; /proc or lsof say elsewhere) and the one it started in are both protected.
+  const folders = async () => (await shells.folders()).map(f => path.resolve(f));
+  await (async () => {
+    const deadline = Date.now() + 20000;
+    while (!(await folders()).includes(other)) {
+      assert.ok(Date.now() < deadline, `timed out waiting for the shell's folder: ${JSON.stringify(await folders())}`);
+      await new Promise(r => setTimeout(r, 100));
+    }
+  })();
+  assert.ok((await folders()).includes(floor), 'where it started stays protected too');
   shells.handle('alice', { t: 'console.detach' }, floor);
   attach('alice');
   output.set('alice', '');

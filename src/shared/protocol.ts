@@ -22,6 +22,7 @@ import type { TodoAction, TodoBoardId, TodoItem } from './todos.js';
 import type { NoteAction, NotesState } from './notes.js';
 import type { ContentAction, ContentItem } from './content-kanban.js';
 import type { VpView } from './vp.js';
+import type { BotKind } from './bots.js';
 
 export type WorkerStatus =
   | 'starting' // PTY launched, agent booting
@@ -1349,6 +1350,8 @@ export type ClientMsg =
   | { t: 'leaveOnMerge.set'; on: boolean }
   /** Deploys the VP on your floor (hires him at his kiosk with his first request), or turns his standing duty on or off (admins only). */
   | { t: 'vp.deploy' }
+  /** Hires a deployable bot (shared/bots.ts) at its kiosk on this floor, with its brief. */
+  | { t: 'bot.deploy'; kind: BotKind }
   | { t: 'vp.duty'; on: boolean; everyMin?: number }
   /** Where new floors are cloned from now on (admins only); '' goes back to the default. */
   | { t: 'floor.projectsDir'; dir: string }

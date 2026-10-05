@@ -4,6 +4,7 @@ import type { FloorInfo } from '../../shared/protocol';
 import { store } from '../state';
 import { h } from './dom';
 import { vpSection, type VpPanelOptions } from './vp-panel';
+import { cleanbotSection, type CleanbotPanelOptions } from './cleanbot-panel';
 
 // The floor list that drops down from the project in the corner: the main floors of the building, top
 // floor first. Picking one takes you straight there, to the same spot in the office you're standing
@@ -18,6 +19,8 @@ export interface FloorMenuOptions {
   roof(): void;
   /** The VP on the floor you're on: deploy him, and his standing duty (see vp-panel.ts). */
   vp?: VpPanelOptions;
+  /** CleanBot on the floor you're on: deploy him, or open his terminal (see cleanbot-panel.ts). */
+  cleanbot?: CleanbotPanelOptions;
 }
 
 let current: { el: HTMLElement; close(): void } | null = null;
@@ -90,7 +93,8 @@ export function toggleFloorMenu(anchor: HTMLElement, opts: FloorMenuOptions): vo
       opts.roof();
     });
     const vp = opts.vp && vpSection(opts.vp);
-    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add, ...(vp ? [vp] : []));
+    const cleanbot = opts.cleanbot && cleanbotSection(opts.cleanbot);
+    el.replaceChildren(h('div.floor-menu-head', {}, `🏢 ${floors.length} floor${floors.length === 1 ? '' : 's'}`), ...(floors.length ? [roof] : []), ...items, add, ...(vp ? [vp] : []), ...(cleanbot ? [cleanbot] : []));
   };
 
   const place = () => {
