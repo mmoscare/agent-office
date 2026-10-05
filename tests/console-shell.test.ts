@@ -146,3 +146,22 @@ test('a failed cwd probe keeps worktrees protected even after detaching', async 
   shells.close('probe');
   assert.equal((await shells.locations()).unlocated, false);
 });
+
+
+test('detached console still observes a later OSC prompt without broadcasting output', { skip: process.platform === 'win32' }, async t => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'office-console-test-')));
+  const sent: ServerMsg[] = [];
+  const shells = new ConsoleShells((_id, msg) => sent.push(msg), async () => undefined);
+  t.after(() => { shells.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  shells.handle('probe', { t: 'console.attach', cols: 80, rows: 24 }, root);
+  shells.handle('probe', { t: 'console.input', data: "sleep 0.2; printf '\\033]7;file://%s\\007' \"$PWD\"\r" }, root);
+  shells.handle('probe', { t: 'console.detach' }, root);
+  const count = sent.length;
+  const deadline = Date.now() + 10000;
+  while ((await shells.locations()).unlocated) {
+    assert.ok(Date.now() < deadline, 'detached OSC prompt was not observed');
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(sent.length, count, 'no browser output while detached');
+  assert.ok((await shells.locations()).folders.includes(root));
+});

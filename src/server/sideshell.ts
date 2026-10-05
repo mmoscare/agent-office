@@ -25,6 +25,8 @@ interface Side {
 }
 
 export interface SideEvents {
+  /** Observe PTY output even while no browser is attached. */
+  output?(workerId: string, data: string): void;
   /** Output, for whoever has that worker's Shell tab open. */
   data(workerId: string, data: string, viewers: string[]): void;
   /** The shell started, was resized (its size), or ended (undefined). */
@@ -125,6 +127,7 @@ export class SideShells {
     proc.onData((data) => {
       if (this.shells.get(workerId) !== s) return;
       term.write(data);
+      this.events.output?.(workerId, data);
       if (s.viewers.size) this.events.data(workerId, data, [...s.viewers]);
     });
     proc.onExit(({ exitCode }) => {

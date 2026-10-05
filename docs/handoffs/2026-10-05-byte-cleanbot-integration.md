@@ -9,3 +9,5 @@ Checks: focused native `node --import tsx --test tests/prune-floor.test.ts tests
 The alternative Mac-only safety implementation is retained locally at 86d8b12 on integration/cleanbot-review, with its checkpoint handoff, rather than discarded or applied over the newer Windows work. This final branch combines the more precise Windows tracking with the missing fail-closed guard.
 
 Existing thread: https://github.com/mmoscare/agent-office/pull/96 . No private data or dependencies committed. No Windows backup touched. Remaining at this commit: exact-head CI/review/merge and controlled Mac update; no overlapping VP/recorder/ingest/notification duty.
+
+PR #100 review follow-up: SideShells now exposes an optional observer for all PTY output, separate from attached-viewer broadcasting. Console cwd parsing uses it, and reattachment retains any partial OSC tail. A native detached-shell regression checks delayed OSC delivery without browser broadcast. This resolves the review's Windows detached-view availability issue while retaining conservative unknown-location protection.
