@@ -101,15 +101,9 @@ export class ConsoleShells {
 
   constructor(private send: (id: string, msg: ServerMsg) => void, private readCwd = processCwd) {
     this.shells = new SideShells({
-      data: (id, data) => {
-        const session = this.sessions.get(id);
-        if (session) {
-          const seen = reportedCwd(data, session.tail);
-          session.tail = seen.tail;
-          if (seen.cwd) session.at = seen.cwd;
-        }
-        this.send(id, { t: 'console.data', data });
-      },
+      // Read every prompt, viewed or not: one that arrives after the view is closed still says where the shell is.
+      output: (id, data) => this.observe(id, data),
+      data: (id, data) => this.send(id, { t: 'console.data', data }),
       size: (id, size) => {
         const session = this.sessions.get(id);
         if (!session) return;
@@ -120,6 +114,15 @@ export class ConsoleShells {
         }
       },
     }, () => consoleShellLaunch(process.platform, process.env));
+  }
+
+  /** A chunk of `id`'s shell output: notes the folder its prompt reports. */
+  observe(id: string, data: string) {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    const seen = reportedCwd(data, session.tail);
+    session.tail = seen.tail;
+    if (seen.cwd) session.at = seen.cwd;
   }
 
   handle(id: string, msg: ConsoleMessage, cwd: string) {
@@ -141,7 +144,7 @@ export class ConsoleShells {
         }
         const snap = this.shells.attach(id, id, startDir, childEnv(), cols, rows);
         if (typeof snap === 'string') return this.send(id, { t: 'console.error', error: snap });
-        this.sessions.set(id, { cwd: startDir, at: current?.at, tail: '', cols: snap.cols, rows: snap.rows, attached: true });
+        this.sessions.set(id, { cwd: startDir, at: current?.at, tail: current?.tail ?? '', cols: snap.cols, rows: snap.rows, attached: true });
         this.send(id, { t: 'console.snapshot', cwd: startDir, ...snap });
         break;
       }
