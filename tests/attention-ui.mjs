@@ -97,7 +97,7 @@ try {
   assert.equal(await page.locator('.attention-floor-button').count(), 2);
   assert.match(await page.locator('#attention-summary').innerText(), /3 need input/);
   assert.equal(await page.locator('.workers + #attention').count(), 1, 'widget sits directly below Workers');
-  assert.equal(await page.locator('#attention + #spend').count(), 1, 'the separate Spend panel follows the widget');
+  assert.equal(await page.locator('#attention + #phone').count(), 1, 'the phone panel follows the widget');
   await page.locator('#workers-panel').getByRole('button', { name: 'Hide', exact: true }).click();
   assert.equal(await page.locator('#workers-panel').isVisible(), false, 'the personal HUD hide control still works');
   assert.equal(await page.locator('#attention').isVisible(), true, 'building attention stays available with Workers hidden');

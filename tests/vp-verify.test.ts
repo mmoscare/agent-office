@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { agentOfficeRecipe, detectRecipe, exclusive, relatedTests, runLow, tapFailures, verifyMerge, verifySlot } from '../src/server/vp-verify.js';
 import { codexFindings, codexPriority } from '../src/server/vp-github.js';
 
@@ -56,6 +57,16 @@ test('a step that runs too long is stopped with everything it started, and says 
   const r = await runLow(process.execPath, ['slow.mjs'], dir, 1500);
   assert.equal(r.timedOut, true);
   assert.ok(Date.now() - started < 20_000);
+});
+
+test('a child closing its input early reports its exit status without an uncaught pipe error', async t => {
+  const dir = scratch(t);
+  for (const code of [0, 7]) {
+    const input = Readable.from([Buffer.alloc(4 * 1024 * 1024)]);
+    const result = await runLow(process.execPath, ['-e', `process.exit(${code})`], dir, 10_000, process.env, input);
+    assert.equal(result.code, code);
+    assert.equal(result.timedOut, false);
+  }
 });
 
 test('the related tests: changed tests, tests named after changed files, and tests importing them; never console-shell', (t) => {

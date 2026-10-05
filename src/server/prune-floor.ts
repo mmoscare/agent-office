@@ -246,9 +246,10 @@ function run(args: string[], cwd: string, opts: { env?: NodeJS.ProcessEnv; input
       if (typeof code === 'number') return resolve({ out: stdout, err: stderr, code });
       reject(new Error(gitError(err)));
     });
-    // Git often exits without reading stdin; the EPIPE must not fail the test run.
-    child.stdin?.on('error', () => {});
-    child.stdin?.end(opts.input ?? '');
+    child.stdin?.on('error', (error: NodeJS.ErrnoException) => {
+      if (opts.input !== undefined || (error.code !== 'EPIPE' && error.code !== 'EOF')) reject(error);
+    });
+    child.stdin?.end(opts.input);
   });
 }
 

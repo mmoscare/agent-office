@@ -1008,8 +1008,18 @@ export class WorkerManager {
     w.info.ask = nextAsk(w.info.ask, prompt);
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
-    if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
-    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
+    const before = w.info.task;
+    if (!before) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
+    else w.info.task = withGuessedKind(before, w.prompts.join("\n"), w.info.worktree?.branch);
+    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') {
+      // Nothing else publishes these providers' tasks: a follow-up that first reveals the kind
+      // usually lands mid-turn, where the hook's setStatus('working') is a no-op.
+      if (hadTask && w.info.task !== before) {
+        this.emitUpdate(w);
+        this.persist();
+      }
+      return;
+    }
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
     this.nameTask(w);

@@ -65,7 +65,7 @@ try {
   await context.addInitScript(() => {
     localStorage.setItem('agent-office.profile', JSON.stringify({ name: 'Smoke test', color: '#ff8a5b', look: {} }));
     // Use the normal third-person setting so pointer lock does not redirect automated clicks.
-    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true, hud: { spend: true, workers: true } }));
+    localStorage.setItem('agent-office.settings', JSON.stringify({ view: 'third', muted: true, musicMuted: true, hud: { spend: true, limits: true, workers: true } }));
   });
   const page = await context.newPage();
   // Keep an update notice present while exercising modal controls; it must not
@@ -119,6 +119,7 @@ try {
   assert.equal(await page.locator('#local-floor-path').isVisible(), true);
   await page.getByRole('dialog', { name: 'Elevator', exact: true }).getByRole('button', { name: 'Close', exact: true }).click();
   await page.evaluate(() => document.exitPointerLock());
+  await page.locator('#limits-spend').evaluate((el) => { el.open = true; });
   await page.locator('#btn-model-usage').click();
   await page.waitForFunction(() => document.querySelectorAll('.usage-record').length === 2);
   assert.match(await page.locator('.usage-summary').innerText(), /2,000 tokens.*\$0.42/);
