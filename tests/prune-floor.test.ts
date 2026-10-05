@@ -450,3 +450,13 @@ test('the suggestion never says delete for anything but a safe row nobody pinned
   assert.equal(suggestFor({ verdict: 'work', lastCommit: old, changed: new Date(now).toISOString() }, now), 'keep');
   for (const verdict of ['needed', 'worker', 'open-pr', 'recent', 'new', 'protected', 'not-office'] as const) assert.equal(suggestFor({ verdict, lastCommit: old }, now), 'keep', verdict);
 });
+
+test('an open console with unknown current cwd prevents worktree deletion even with discard', async t => {
+  const f = fixture(t);
+  const w = f.merged('console-cd');
+  f.pr(1, w.branch, 'MERGED');
+  const report = await f.run({ only: [w.branch], discard: [w.branch], office: async () => ({ floors: [{ name: 'Test', dir: f.root }], busy: [], unlocatedTerminals: true }) });
+  assert.equal(report.run!.removed.length, 0);
+  assert.ok(report.run!.refused.some(r => /open console/.test(r.why)));
+  assert.ok(existsSync(w.abs));
+});

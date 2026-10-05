@@ -629,10 +629,14 @@ export async function startServer(cfg: Config) {
     return send(res, r.status, r.body);
   };
   /** Every floor, and the folders the office's ⌨ terminals are in now and started in: what CleanBot must not delete from under anyone. */
-  const officeView = async (): Promise<OfficeView> => ({
-    floors: [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })),
-    busy: (await consoles.folders()).map((dir) => ({ path: dir, what: 'a ⌨ terminal in the office' })),
-  });
+  const officeView = async (): Promise<OfficeView> => {
+    const terminals = await consoles.locations();
+    return {
+      floors: [...floors.values()].map((f) => ({ name: f.def.name, dir: f.dir })),
+      busy: terminals.folders.map((dir) => ({ path: dir, what: 'a ⌨ terminal in the office' })),
+      unlocatedTerminals: terminals.unlocated,
+    };
+  };
   /**
    * CleanBot, and only him (office-cleanbot): GET ?view=list[&repo=&recent=&fetch=0], POST {"action":
    * "delete" | "keep" | "forget", …}. The sweep and its safety checks are in cleanbot.ts and

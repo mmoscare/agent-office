@@ -131,3 +131,18 @@ test('standalone shells navigate outside the floor, keep their directory on reop
   write('missing', marker);
   await until(() => (output.get('missing') ?? '').includes('HELLO_SHELL'));
 });
+
+
+test('a failed cwd probe keeps worktrees protected even after detaching', async t => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'office-console-test-')));
+  const shells = new ConsoleShells(() => {}, async () => undefined);
+  t.after(() => { shells.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  assert.equal((await shells.locations()).unlocated, false);
+  shells.handle('probe', { t: 'console.attach', cols: 80, rows: 24 }, root);
+  // Windows may report its prompt: a command invalidates that cached location.
+  shells.handle('probe', { t: 'console.input', data: '\r' }, root);
+  shells.handle('probe', { t: 'console.detach' }, root);
+  assert.equal((await shells.locations()).unlocated, true);
+  shells.close('probe');
+  assert.equal((await shells.locations()).unlocated, false);
+});
