@@ -172,8 +172,8 @@ export function runLow(file: string, args: string[], cwd: string, timeoutMs: num
     if (input && child.stdin) {
       child.stdin.on('error', (err: NodeJS.ErrnoException) => {
         // BSD tar may stop after the archive end marker before Git writes its padding.
-        // A closed pipe is decided by the child's exit status; other input failures fail the step.
-        if (err.code !== 'EPIPE') inputError = err;
+        // A closed pipe (EPIPE; EOF on Windows) is decided by the child's exit status; other input failures fail the step.
+        if (err.code !== 'EPIPE' && err.code !== 'EOF') inputError = err;
         input.unpipe(child.stdin!);
         input.resume();
       });
