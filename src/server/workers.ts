@@ -974,7 +974,6 @@ export class WorkerManager {
       w.openCodeError = false;
       this.persist();
     }
-    const previousStatus = w.info.status;
     if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
     if (payload.prompt || payload.type === 'prompt') beginTurn(w, payload.turnId);
@@ -997,11 +996,6 @@ export class WorkerManager {
     else if (payload.status === 'done' && w.pty && !isStopped(w.info.status) && !isCancelledTurn(w, payload.turnId)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
-    // setStatus is a no-op for a follow-up received during an already-working turn.
-    if (payload.prompt && w.info.status === previousStatus) {
-      this.emitUpdate(w);
-      this.persist();
-    }
     return true;
   }
 
@@ -1014,9 +1008,18 @@ export class WorkerManager {
     w.info.ask = nextAsk(w.info.ask, prompt);
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
-    if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
-    else if (w.info.task) w.info.task = withGuessedKind(w.info.task, w.prompts.join("\n"), w.info.worktree?.branch);
-    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
+    const before = w.info.task;
+    if (!before) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
+    else w.info.task = withGuessedKind(before, w.prompts.join("\n"), w.info.worktree?.branch);
+    if (w.info.provider !== 'claude' && w.info.provider !== 'custom') {
+      // Nothing else publishes these providers' tasks: a follow-up that first reveals the kind
+      // usually lands mid-turn, where the hook's setStatus('working') is a no-op.
+      if (hadTask && w.info.task !== before) {
+        this.emitUpdate(w);
+        this.persist();
+      }
+      return;
+    }
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
     this.nameTask(w);

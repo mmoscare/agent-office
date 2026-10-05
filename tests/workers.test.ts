@@ -285,14 +285,17 @@ test('OpenCode workers use OpenCode-only hooks/config, never invoke Claude namin
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'do the thing' }), true);
   assert.equal(workers.get(worker.id)?.task?.kind, undefined);
   const beforeKind = workers.get(worker.id)!.task!;
+  assert.equal(workers.get(worker.id)?.status, 'working');
   const beforeUpdates = updates.length;
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'Fix the broken login flow' }), true);
   assert.deepEqual(workers.get(worker.id)?.task, { ...beforeKind, kind: 'bug' });
-  assert.ok(updates.length > beforeUpdates, 'an already-working prompt publishes its newly inferred kind');
+  assert.ok(updates.length > beforeUpdates, 'a working -> working prompt publishes its newly inferred kind');
   assert.equal(updates.at(-1)?.task?.kind, 'bug');
   assert.equal(JSON.parse(readFileSync(path.join(f.data, 'workers.json'), 'utf8')).find((w: WorkerInfo) => w.id === worker.id)?.task?.kind, 'bug', 'the kind is persisted before another status event');
+  const afterKindUpdates = updates.length;
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'Update the README documentation' }), true);
   assert.deepEqual(workers.get(worker.id)?.task, { ...beforeKind, kind: 'bug' }, 'a classified task keeps its kind and label');
+  assert.equal(updates.length, afterKindUpdates, 'a follow-up that changes nothing about the task publishes nothing');
   assert.equal(workers.get(worker.id)?.status, 'working');
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'permission', sessionId: 'oc-1', status: 'needs_input', detail: 'write file' }), true);
   assert.equal(workers.get(worker.id)?.status, 'needs_input');
