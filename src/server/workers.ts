@@ -1009,6 +1009,7 @@ export class WorkerManager {
     w.prompts = [...w.prompts, clean].slice(-TASK_PROMPTS);
     const hadTask = !!w.info.task;
     if (!hadTask) w.info.task = fallbackTask(clean, w.info.worktree?.branch);
+    else if (w.info.task) w.info.task = withGuessedKind(w.info.task, w.prompts.join("\n"), w.info.worktree?.branch);
     if (w.info.provider !== 'claude' && w.info.provider !== 'custom') return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;

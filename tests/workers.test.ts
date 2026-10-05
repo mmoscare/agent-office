@@ -283,6 +283,12 @@ test('OpenCode workers use OpenCode-only hooks/config, never invoke Claude namin
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'session', sessionId: 'oc-1', status: 'starting', transcript_path: transcript }), true);
   assert.equal(workers.get(worker.id)?.status, 'idle');
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'do the thing' }), true);
+  assert.equal(workers.get(worker.id)?.task?.kind, undefined);
+  const beforeKind = workers.get(worker.id)!.task!;
+  assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'Fix the broken login flow' }), true);
+  assert.deepEqual(workers.get(worker.id)?.task, { ...beforeKind, kind: 'bug' });
+  assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'prompt', sessionId: 'oc-1', status: 'working', prompt: 'Update the README documentation' }), true);
+  assert.deepEqual(workers.get(worker.id)?.task, { ...beforeKind, kind: 'bug' }, 'a classified task keeps its kind and label');
   assert.equal(workers.get(worker.id)?.status, 'working');
   assert.equal(workers.handleOpenCodeHook(worker.id, firstWorker.env.hookToken!, { type: 'permission', sessionId: 'oc-1', status: 'needs_input', detail: 'write file' }), true);
   assert.equal(workers.get(worker.id)?.status, 'needs_input');
@@ -855,7 +861,7 @@ test('a worker nobody picked a model for starts on the office default, and a boa
   if (typeof hired === 'string') return;
   assert.deepEqual([hired.info.provider, hired.info.model, hired.info.effort], ['claude', 'sonnet', 'low']);
   const [first] = await waitFor(() => launches(hired.info.id), (l) => l.length === 1);
-  assert.equal(first.args.at(-1), 'You triage issues. The request:\n\nFile one about the dog');
+  assert.equal(withoutWorkerHandoff(first.args.at(-1)!), 'You triage issues. The request:\n\nFile one about the dog');
   assert.deepEqual([flag(first.args, '--model'), flag(first.args, '--effort')], ['sonnet', 'low']);
 
   // Picked at the desk, the pick wins, down to "the provider's own model".
@@ -1072,7 +1078,7 @@ test('a restart that takes a mid-turn worker down resumes it with continue; a fi
   const of = (session: string) => resumed.find((r) => r.args.includes(session))!;
   for (const session of ['mid-turn', 'asking']) {
     assert.ok(of(session).args.includes('--resume'));
-    assert.equal(promptOf(of(session)), CARRY_ON_PROMPT);
+    assert.equal(withoutWorkerHandoff(promptOf(of(session))!), CARRY_ON_PROMPT);
   }
   assert.ok(of('finished').args.includes('--resume'));
   assert.equal(promptOf(of('finished')), undefined);
@@ -1111,7 +1117,7 @@ test('a worker whose terminal was in the host when an older office went down car
   t.after(() => workers.shutdown());
   await workers.start();
   const resumed = await waitFor(() => launches(f), (x) => x.length >= 2);
-  assert.equal(promptOf(resumed.find((r) => r.args.includes('was-working'))!), CARRY_ON_PROMPT);
+  assert.equal(withoutWorkerHandoff(promptOf(resumed.find((r) => r.args.includes('was-working'))!)!), CARRY_ON_PROMPT);
   assert.equal(promptOf(resumed.find((r) => r.args.includes('was-done'))!), undefined);
 });
 
