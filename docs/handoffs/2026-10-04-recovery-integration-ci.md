@@ -25,3 +25,7 @@ Checks actually run after these changes on macOS:
 - `npm run typecheck`: passed.
 
 Ubuntu CI passed on the first repair commit `4a99b753687c184806404a4d070d6c01ebcffdd7`: run 37246141556. PR #99 also passed Ubuntu and Windows after merging that repair at `b2842f2f25b3364ed42a80e72f022688685f70a7`: runs 37246362067, 37246362056 and 37246358666. New-head CI, final build and integration receipts will be appended to both existing PRs before completion.
+
+## Review follow-up
+
+Addressed https://github.com/mmoscare/agent-office/pull/98#discussion_r4179886647: a prompt received while OpenCode/Grok is already working now emits and persists its changed task immediately. The regression checks both the published update and workers.json before any later status event. `node --import tsx --test --test-reporter=spec tests/workers.test.ts tests/work-kind.test.ts`: 28 passed after correcting the test fixture's data-directory path. Full native build on the preceding platform-fix head passed; this worker fix receives another build and exact-head Ubuntu CI before merge. No authenticated model request was made by these fixture tests.
