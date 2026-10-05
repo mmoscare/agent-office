@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, CPU_APPS, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
+import { ASHTRAY, BALCONY, BALCONY_DOOR, BEANBAGS, BOARDS, BOOKSHELF, CABINET, CALENDAR, CPU_APPS, DESKS, DESK_SIZE, ELEVATOR, EXIT_DOOR, EXIT_STAIRS, FLOOR, GONG, JUKEBOX, KIOSK, LADDER, LOFT, MACHINE_MONITOR, MEETING_BOARD, MEETING_ROOM, MEETING_SEATS, MEETING_TABLE, PLANTS, SEATING_BY_ID, SLAB, STAIRS, STATIONS, STATION_AGENT, STOREY, STREET_Y, SYNC_BUTTON, TV, WALL_HEIGHT, WALL_T, WINDOWS, deskSeat, streetBelow, type DeskDef, type Opening, type Side, type StationKind } from '../../shared/layout';
 import { wallFacing, wallPose, type WallId, type WallRect } from '../../shared/decor';
 import { BOTS, BOT_KINDS, type BotKind } from '../../shared/bots';
 import { deskPoint } from '../../shared/nav';
@@ -8,6 +8,7 @@ import { buildGarage, buildStreet, bulb, type NightParts } from './outside';
 import { mergeByMaterial, mesh, roundedBox, textPlane, toon, toonUnique } from './toon';
 import { buildElevator, type Elevator } from './elevator';
 import { buildGong, type Gong } from './gong';
+import { buildSyncButton, type SyncButton } from './sync-button';
 import { buildPhone, type Phone } from './phone';
 import { buildJukebox, type JukeboxView } from './jukebox';
 import { buildBookshelf } from './bookshelf';
@@ -37,7 +38,7 @@ export interface Collider {
   fence?: boolean;
 }
 
-export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'clipboard' | 'autonomous' | 'sticky' | 'stickyAdd';
+export type InteractKind = 'desk' | 'station' | 'issues' | 'pulls' | 'gitToggle' | 'todoToggle' | 'authorUpdates' | 'manual' | 'calendar' | 'services' | 'queue' | 'tv' | 'coffee' | 'decor' | 'smoke' | 'elevator' | 'gong' | 'sync' | 'dog' | 'jukebox' | 'seat' | 'whiteboard' | 'plans' | 'timecard' | 'cabinet' | 'ladder' | 'pole' | 'meeting' | 'bar' | 'dj' | 'ledger' | 'golf' | 'ball' | 'bookshelf' | 'clipboard' | 'autonomous' | 'sticky' | 'stickyAdd';
 
 /** Something you can use. Its scene object carries it as `userData.interact`, for clicking. */
 export interface Interactable {
@@ -109,6 +110,8 @@ export interface Office {
   elevator: Elevator;
   /** The merge gong by the PR board. */
   gong: Gong;
+  /** 🔄 Sync everything, the push-button beside the gong. */
+  syncButton: SyncButton;
   /** The office phone on the elevator's pillar: rings when an agent on another floor finishes. */
   phone: Phone;
   jukebox: JukeboxView;
@@ -1396,6 +1399,13 @@ export function buildOffice(): Office {
   interactables.push(gong.interactable);
   fixture('north', GONG.x, (GONG.height + 0.3) / 2, GONG.width + 1.2, GONG.height + 0.3);
 
+  // 🔄 Sync everything: a push-button on a pedestal beside the gong.
+  const syncButton = buildSyncButton();
+  group.add(syncButton.group);
+  colliders.push(...syncButton.colliders);
+  interactables.push(syncButton.interactable);
+  fixture('north', SYNC_BUTTON.x, 0.7, SYNC_BUTTON.radius * 2 + 0.4, 1.4);
+
   // The basketball hoop, on the west wall between the exit door and the kitchen.
   const hoop = buildHoop();
   group.add(hoop.group);
@@ -1491,6 +1501,7 @@ export function buildOffice(): Office {
     }
     elevator.update(dt);
     gong.update(dt);
+    syncButton.update(dt);
     phone.update(dt);
     green.update(t);
     hoop.update(dt);
@@ -1509,7 +1520,7 @@ export function buildOffice(): Office {
     }
   };
 
-  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, phone, jukebox, cabinet, whiteboard, autonomousBoard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
+  return { group, colliders, interactables, desks, setBeanbags, setInTray, boardMeshes, tvScreen, bossScreen, machineScreen, cpuAppsScreen, meetingBoard: meeting.board, meetingSign: meeting.sign, fixtures: () => fixtures, elevator, gong, syncButton, phone, jukebox, cabinet, whiteboard, autonomousBoard, tee, green, hoop, stack, setProjectName, setLook, setLevel, night, plants, update };
 }
 
 /** A chair at the meeting table, with its laptop on the table in front of it. */

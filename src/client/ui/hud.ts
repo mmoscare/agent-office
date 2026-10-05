@@ -152,6 +152,7 @@ export function openHelp() {
     ['🗒️', 'Reminder stickies hang above the To Do board on every floor. Point at one and press E to edit, resize, recolor, move or hide it. The + beside them adds one, and shows any you hid'],
     ['🕹️', 'The arcade cabinet in the lounge plays BLOCKFALL: arrows (or WASD) move and turn, Space drops, C holds, P pauses. Everyone on the floor sees your game on it, and E there watches whoever is playing. One of your workers needing input pauses it'],
     ['🎉', 'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself'],
+    ['🔄', 'The green Sync button beside the gong saves and uploads the unsaved work on this floor and in the office’s app folder, pulls the latest, then says what to do next (install, build, restart). Also in the ☰ menu'],
     ['J', "Boss's office: stand by the glass looking over the floor"],
     ['T', 'Waiting circle: stand behind the nearest worker on this floor who is done or needs you, then the next around the floor, and after the last one back to the office where you started. Click the waiting count to do the same'],
     ['N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"],

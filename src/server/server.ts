@@ -30,7 +30,7 @@ import type { BalanceUpdate } from '../shared/api-balances.js';
 import { PlanLimitsReader } from './limits.js';
 import { Webhook } from './webhook.js';
 import { MAX_WORKER_LIMIT, Machine, parseWorkerLimit } from './machine.js';
-import { PhoneLine } from './phone.js';
+import { PhoneLine, PhoneLog } from './phone.js';
 import { Building, type FloorDef } from './building.js';
 import { listLocalFolders } from './local-folders.js';
 import { Floor, type FloorContext } from './floor.js';
@@ -777,8 +777,9 @@ export async function startServer(cfg: Config) {
     return notes;
   };
 
-  // The office phone: an agent finishing on one floor rings it on all the others.
+  // The office phone: an agent finishing rings it on the other floors, and the call is kept for the log.
   const phone = new PhoneLine();
+  const phoneLog = new PhoneLog(cfg.dataDir);
 
   // Slack / Discord pings for workers that need input or finish (set from ⚙️ Settings or --webhook).
   webhook = new Webhook(cfg.dataDir, (workerId) => (workerId && workerFloor(workerId)?.def.name) || officeName, (state) => broadcast({ t: 'notify', state }));
@@ -874,8 +875,18 @@ export async function startServer(cfg: Config) {
         webhook.onWorker(w);
         mailroom.onWorker(floor.id, w);
         if (phone.onWorker(w)) {
-          const msg: ServerMsg = { t: 'phone', floor: floor.id, name: floor.def.name, worker: w.name, task: w.task?.name };
-          for (const c of clients.values()) if (c.peer.floor !== floor.id) sendTo(c, msg);
+          const call = phoneLog.add({
+            at: Date.now(),
+            floor: floor.id,
+            name: floor.def.name,
+            workerId: w.id,
+            worker: w.name,
+            deskId: w.deskId,
+            color: w.color,
+            ...(w.task?.name ? { task: w.task.name } : {}),
+          });
+          // Everyone gets the call for the log. The page only rings the bell when it isn't on that floor.
+          broadcast({ t: 'phone', ...call });
         }
       }
       machine.workersChanged();
@@ -1675,6 +1686,7 @@ export async function startServer(cfg: Config) {
       mail: mailroom.state(),
       prompts: prompts.state(),
       leaveOnMerge: leaveOnMerge.state(),
+      calls: phoneLog.recent(),
       ...(onRoof ? roofView() : floorView(floor)),
     });
     screensOf(client, floor);

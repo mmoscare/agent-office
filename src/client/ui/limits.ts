@@ -81,16 +81,22 @@ function budgetTitle(w: PlanWindow, b: DayBudget): string {
   return lines.join('\n');
 }
 
-/** The Claude plan's 5-hour session and weekly limits, under the workers. Click to read them again. */
+/** The Claude plan's 5-hour session and weekly limits, under the workers. Click the meters to read them again. Spend folds open underneath. */
 export function renderLimits() {
   const s = store.limits;
   const el = $('limits');
-  el.classList.toggle('hidden', !s.windows.length);
-  if (!s.windows.length) return;
+  const body = $('limits-body');
+  // Spend lives in this panel, so it stays up even when there is no plan meter (an API key).
+  el.classList.remove('hidden');
   const now = Date.now();
   const plan = s.plan ? s.plan.charAt(0).toUpperCase() + s.plan.slice(1) : '';
-  el.replaceChildren(h('h3', {}, 'Claude limits', plan ? h('span.plan', {}, plan) : null, panelHide('limits')), ...s.windows.flatMap((w) => windowRow(w, now)));
-  if (now - s.at > STALE_MS) el.append(h('div.row.muted', {}, `As of ${new Date(s.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`));
+  const head = h('h3', {}, 'Claude limits', plan ? h('span.plan', {}, plan) : null, panelHide('limits'));
+  if (!s.windows.length) {
+    body.replaceChildren(head);
+    return;
+  }
+  body.replaceChildren(head, ...s.windows.flatMap((w) => windowRow(w, now)));
+  if (now - s.at > STALE_MS) body.append(h('div.row.muted', {}, `As of ${new Date(s.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`));
 }
 
 /** What the warning says about one weekly limit whose budget for today is spent. */

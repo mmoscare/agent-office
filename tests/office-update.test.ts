@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WorkerInfo, WorkerStatus } from '../src/shared/protocol.js';
 import { beforeStart, readJson, removeStaged, stagePaths, startFailed, type Applied, type StagedBuild } from '../src/server/app-swap.js';
-import { mergedPrs, OfficeUpdater, packageCheck, redact, routeOfficeUpdate, startupSnapshot, summarize } from '../src/server/office-update.js';
+import { mergedPrs, npmCommand, OfficeUpdater, packageCheck, redact, routeOfficeUpdate, startupSnapshot, summarize } from '../src/server/office-update.js';
 import { packagesByHand } from '../src/shared/office-update.js';
 import type { OfficeFloor } from '../src/server/git-board.js';
 
@@ -45,7 +45,8 @@ function lock(deps: Record<string, { version: string; dev?: boolean; optional?: 
 }
 
 function fixture(t: { after(fn: () => void): void }) {
-  const root = mkdtempSync(path.join(tmpdir(), PREFIX));
+  // Git reports the physical path (/private/var on macOS), as the real app check expects.
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), PREFIX)));
   t.after(() => {
     const resolved = realpathSync(root);
     assert.ok(path.basename(resolved).startsWith(PREFIX));
@@ -273,12 +274,12 @@ test('new packages go into the staging copy with npm ci, then switch in with the
   mkdirSync(pkg);
   writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'left', version: '1.0.0', main: 'index.js' }));
   writeFileSync(path.join(pkg, 'index.js'), 'module.exports = "left";');
-  const npm = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  execFileSync(process.execPath, [npm, 'pack', '--silent', '--pack-destination', seed], { cwd: pkg, stdio: 'ignore' });
+  const npm = npmCommand();
+  execFileSync(npm.file, [...npm.args, 'pack', '--silent', '--pack-destination', seed], { cwd: pkg, stdio: ['ignore', 'pipe', 'pipe'] });
   const manifest = JSON.parse(readFileSync(path.join(seed, 'package.json'), 'utf8'));
   manifest.dependencies = { left: 'file:left-1.0.0.tgz' };
   writeFileSync(path.join(seed, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-  execFileSync(process.execPath, [npm, 'install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: seed, stdio: 'ignore' });
+  execFileSync(npm.file, [...npm.args, 'install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: seed, stdio: ['ignore', 'pipe', 'pipe'] });
   git(seed, 'add', '.');
   git(seed, 'commit', '-qm', 'Add a package');
   git(seed, 'push', '-q', 'origin', 'personal');

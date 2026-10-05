@@ -60,6 +60,15 @@ test('unrecognized or broken Windows shims fail clearly', windows, () => fixture
   assert.throws(() => commandLaunch(shim, []), /entrypoint .* is missing/);
 }));
 
+test('an extensionless node shebang is launched with node, arguments unchanged', windows, () => fixture((dir) => {
+  const script = path.join(dir, 'claude');
+  writeFileSync(script, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)))\n');
+  const args = ['--settings', 'a task with spaces', '%PATH%'];
+  const launch = commandLaunch(script, args);
+  assert.equal(launch.file, process.execPath);
+  assert.deepEqual(JSON.parse(execFileSync(launch.file, launch.args, { encoding: 'utf8' })), args);
+}));
+
 test('native commands keep their arguments, and non-Windows commands pass through', () => {
   const args = ['--version'];
   assert.deepEqual(commandLaunch(process.execPath, args), { file: process.execPath, args });
