@@ -101,14 +101,8 @@ export class ConsoleShells {
 
   constructor(private send: (id: string, msg: ServerMsg) => void, private readCwd = processCwd) {
     this.shells = new SideShells({
-      output: (id, data) => {
-        const session = this.sessions.get(id);
-        if (session) {
-          const seen = reportedCwd(data, session.tail);
-          session.tail = seen.tail;
-          if (seen.cwd) session.at = seen.cwd;
-        }
-      },
+      // Read every prompt, viewed or not: one that arrives after the view is closed still says where the shell is.
+      output: (id, data) => this.observe(id, data),
       data: (id, data) => this.send(id, { t: 'console.data', data }),
       size: (id, size) => {
         const session = this.sessions.get(id);
@@ -120,6 +114,15 @@ export class ConsoleShells {
         }
       },
     }, () => consoleShellLaunch(process.platform, process.env));
+  }
+
+  /** A chunk of `id`'s shell output: notes the folder its prompt reports. */
+  observe(id: string, data: string) {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    const seen = reportedCwd(data, session.tail);
+    session.tail = seen.tail;
+    if (seen.cwd) session.at = seen.cwd;
   }
 
   handle(id: string, msg: ConsoleMessage, cwd: string) {

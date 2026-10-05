@@ -11,3 +11,5 @@ The alternative Mac-only safety implementation is retained locally at 86d8b12 on
 Existing thread: https://github.com/mmoscare/agent-office/pull/96 . No private data or dependencies committed. No Windows backup touched. Remaining at this commit: exact-head CI/review/merge and controlled Mac update; no overlapping VP/recorder/ingest/notification duty.
 
 PR #100 review follow-up: SideShells now exposes an optional observer for all PTY output, separate from attached-viewer broadcasting. Console cwd parsing uses it, and reattachment retains any partial OSC tail. A native detached-shell regression checks delayed OSC delivery without browser broadcast. This resolves the review's Windows detached-view availability issue while retaining conservative unknown-location protection.
+
+Late Windows worker 78c9d4f was discovered before the final push. Its equivalent raw-output observer implementation and Windows tests are retained, alongside the Mac delayed-OSC native regression. Both histories are merged without force push. The earlier 36124b1 receipt referred to the local tested commit; this merged commit is the published continuation.

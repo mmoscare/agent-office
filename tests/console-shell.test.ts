@@ -143,6 +143,12 @@ test('a failed cwd probe keeps worktrees protected even after detaching', async 
   shells.handle('probe', { t: 'console.input', data: '\r' }, root);
   shells.handle('probe', { t: 'console.detach' }, root);
   assert.equal((await shells.locations()).unlocated, true);
+  // The next prompt arrives with the view still closed: it locates the shell again.
+  const inside = path.join(root, 'inside');
+  shells.observe('probe', `\x1b]7;file://host${process.platform === 'win32' ? '/' : ''}${inside.split(path.sep).join('/')}\x07> `);
+  const located = await shells.locations();
+  assert.equal(located.unlocated, false);
+  assert.ok(located.folders.includes(inside));
   shells.close('probe');
   assert.equal((await shells.locations()).unlocated, false);
 });

@@ -83,6 +83,30 @@ test('replacing a side shell drops late output from the process it killed', asyn
   await new Promise((r) => setTimeout(r, 300));
 });
 
+test('a side shell reports its output to the office even while nobody views it', async (t) => {
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'agent-office-side-unviewed-')));
+  let seen = '';
+  let shown = '';
+  const sides = new SideShells({
+    data: (_id, data) => { shown += data; },
+    output: (_id, data) => { seen += data; },
+    size: () => {},
+  });
+  t.after(() => {
+    sides.killAll();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  });
+
+  assert.equal(typeof sides.attach('w1', 'alice', dir, childEnv(), 80, 24), 'object');
+  sides.detach('w1', 'alice');
+  shown = '';
+  sides.write('w1', 'echo UNVIEWED_OUTPUT\r');
+  await until(() => seen.includes('UNVIEWED_OUTPUT'), 'the unviewed shell output');
+  assert.equal(shown.includes('UNVIEWED_OUTPUT'), false, 'nobody is sent it');
+  sides.kill('w1');
+  await new Promise((r) => setTimeout(r, 300));
+});
+
 test('the side shell runs a login $SHELL off Windows and the console shell on Windows', () => {
   const none = () => false;
   assert.deepEqual(sideShellLaunch('linux', { SHELL: '/bin/zsh' }, none), { file: '/bin/zsh', args: ['-l'] });

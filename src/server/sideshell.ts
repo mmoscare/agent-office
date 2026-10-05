@@ -25,10 +25,10 @@ interface Side {
 }
 
 export interface SideEvents {
-  /** Observe PTY output even while no browser is attached. */
-  output?(workerId: string, data: string): void;
   /** Output, for whoever has that worker's Shell tab open. */
   data(workerId: string, data: string, viewers: string[]): void;
+  /** Every chunk of output, viewed or not (console-shell.ts reads where the shell is from it). */
+  output?(workerId: string, data: string): void;
   /** The shell started, was resized (its size), or ended (undefined). */
   size(workerId: string, size: { cols: number; rows: number } | undefined): void;
 }
