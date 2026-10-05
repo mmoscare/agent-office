@@ -99,17 +99,11 @@ export class ConsoleShells {
   private sessions = new Map<string, ConsoleSession>();
   private shells: SideShells;
 
-  constructor(private send: (id: string, msg: ServerMsg) => void) {
+  constructor(private send: (id: string, msg: ServerMsg) => void, private readCwd = processCwd) {
     this.shells = new SideShells({
-      data: (id, data) => {
-        const session = this.sessions.get(id);
-        if (session) {
-          const seen = reportedCwd(data, session.tail);
-          session.tail = seen.tail;
-          if (seen.cwd) session.at = seen.cwd;
-        }
-        this.send(id, { t: 'console.data', data });
-      },
+      // Read every prompt, viewed or not: one that arrives after the view is closed still says where the shell is.
+      output: (id, data) => this.observe(id, data),
+      data: (id, data) => this.send(id, { t: 'console.data', data }),
       size: (id, size) => {
         const session = this.sessions.get(id);
         if (!session) return;
@@ -120,6 +114,15 @@ export class ConsoleShells {
         }
       },
     }, () => consoleShellLaunch(process.platform, process.env));
+  }
+
+  /** A chunk of `id`'s shell output: notes the folder its prompt reports. */
+  observe(id: string, data: string) {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    const seen = reportedCwd(data, session.tail);
+    session.tail = seen.tail;
+    if (seen.cwd) session.at = seen.cwd;
   }
 
   handle(id: string, msg: ConsoleMessage, cwd: string) {
@@ -141,7 +144,7 @@ export class ConsoleShells {
         }
         const snap = this.shells.attach(id, id, startDir, childEnv(), cols, rows);
         if (typeof snap === 'string') return this.send(id, { t: 'console.error', error: snap });
-        this.sessions.set(id, { cwd: startDir, at: current?.at, tail: '', cols: snap.cols, rows: snap.rows, attached: true });
+        this.sessions.set(id, { cwd: startDir, at: current?.at, tail: current?.tail ?? '', cols: snap.cols, rows: snap.rows, attached: true });
         this.send(id, { t: 'console.snapshot', cwd: startDir, ...snap });
         break;
       }
@@ -150,7 +153,11 @@ export class ConsoleShells {
         if (session) session.attached = false;
         break;
       case 'console.input':
-        if (session?.attached && typeof msg.data === 'string') this.shells.write(id, msg.data.slice(0, 64 * 1024));
+        if (session?.attached && typeof msg.data === 'string') {
+          // A command may cd before its next prompt. Do not trust the previous prompt meanwhile.
+          if (/[\r\n]/.test(msg.data)) session.at = undefined;
+          this.shells.write(id, msg.data.slice(0, 64 * 1024));
+        }
         break;
       case 'console.resize':
         if (session?.attached) this.shells.resize(id, dimension(msg.cols, 80, 20, 400), dimension(msg.rows, 24, 5, 200));
@@ -164,15 +171,21 @@ export class ConsoleShells {
    * of its process (Linux, macOS), and the folder it started in. Both are given: a shell that moved into
    * a worktree protects it, and one whose moves can't be read still protects where it started.
    */
-  async folders(): Promise<string[]> {
+  async locations(): Promise<{ folders: string[]; unlocated: boolean }> {
     const out = new Set<string>();
+    let unlocated = false;
     for (const [id, s] of this.sessions) {
       out.add(s.cwd);
       if (s.at) out.add(s.at);
-      const live = await processCwd(this.shells.pid(id));
+      const live = await this.readCwd(this.shells.pid(id));
       if (live) out.add(live);
+      if (!live && !s.at) unlocated = true;
     }
-    return [...out];
+    return { folders: [...out], unlocated };
+  }
+
+  async folders(): Promise<string[]> {
+    return (await this.locations()).folders;
   }
 
   resync(id: string) {

@@ -27,6 +27,8 @@ interface Side {
 export interface SideEvents {
   /** Output, for whoever has that worker's Shell tab open. */
   data(workerId: string, data: string, viewers: string[]): void;
+  /** Every chunk of output, viewed or not (console-shell.ts reads where the shell is from it). */
+  output?(workerId: string, data: string): void;
   /** The shell started, was resized (its size), or ended (undefined). */
   size(workerId: string, size: { cols: number; rows: number } | undefined): void;
 }
@@ -125,6 +127,7 @@ export class SideShells {
     proc.onData((data) => {
       if (this.shells.get(workerId) !== s) return;
       term.write(data);
+      this.events.output?.(workerId, data);
       if (s.viewers.size) this.events.data(workerId, data, [...s.viewers]);
     });
     proc.onExit(({ exitCode }) => {

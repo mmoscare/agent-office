@@ -76,6 +76,8 @@ export type PullLister = (repo: string, cwd: string) => Promise<PullRef[]>;
 
 /** What the running office says (GET /office/cleanbot?view=office, or CleanBot's own sweep in the office). */
 export interface OfficeView {
+  /** At least one live console has no verifiable current directory. */
+  unlocatedTerminals?: boolean;
   floors: { name: string; dir: string }[];
   /** Folders a terminal of the office is working in right now. */
   busy: { path: string; what: string }[];
@@ -333,6 +335,7 @@ interface SavedWorker {
 
 /** Everything the building's workers, meetings and terminals still use. */
 export interface Owners {
+  unlocatedTerminals?: boolean;
   /**
    * Folders (keys) and whose they are. 'tree': a worktree itself. 'desk': a desk's folder, owning every
    * worktree in it. 'cwd': where a terminal is, owning the worktree it's in.
@@ -354,6 +357,7 @@ function scratchpadSession(tmp: string, abs: string): string | undefined {
 
 function ownerOf(owners: Owners, abs: string | undefined, branch: string | undefined, tmp?: string): string | undefined {
   if (abs) {
+    if (owners.unlocatedTerminals) return 'an open console has an unknown current folder: close it before deleting worktrees';
     const k = key(abs);
     for (const p of owners.paths) {
       if (p.how === 'tree' ? p.key === k : p.how === 'desk' ? inside(p.key, k) : inside(k, p.key)) return p.what;
@@ -371,7 +375,7 @@ function ownerOf(owners: Owners, abs: string | undefined, branch: string | undef
  * every floor it has and the folders its terminals are in.
  */
 export function readOwners(floorDirs: string[], view: OfficeView | undefined): Owners {
-  const owners: Owners = { paths: [], branches: new Map(), sessions: new Map() };
+  const owners: Owners = { paths: [], branches: new Map(), sessions: new Map(), unlocatedTerminals: view?.unlocatedTerminals };
   const dirs = floorsOf(floorDirs, view);
   const many = dirs.length > 1;
   for (const dir of dirs) {

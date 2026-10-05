@@ -131,3 +131,43 @@ test('standalone shells navigate outside the floor, keep their directory on reop
   write('missing', marker);
   await until(() => (output.get('missing') ?? '').includes('HELLO_SHELL'));
 });
+
+
+test('a failed cwd probe keeps worktrees protected even after detaching', async t => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'office-console-test-')));
+  const shells = new ConsoleShells(() => {}, async () => undefined);
+  t.after(() => { shells.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  assert.equal((await shells.locations()).unlocated, false);
+  shells.handle('probe', { t: 'console.attach', cols: 80, rows: 24 }, root);
+  // Windows may report its prompt: a command invalidates that cached location.
+  shells.handle('probe', { t: 'console.input', data: '\r' }, root);
+  shells.handle('probe', { t: 'console.detach' }, root);
+  assert.equal((await shells.locations()).unlocated, true);
+  // The next prompt arrives with the view still closed: it locates the shell again.
+  const inside = path.join(root, 'inside');
+  shells.observe('probe', `\x1b]7;file://host${process.platform === 'win32' ? '/' : ''}${inside.split(path.sep).join('/')}\x07> `);
+  const located = await shells.locations();
+  assert.equal(located.unlocated, false);
+  assert.ok(located.folders.includes(inside));
+  shells.close('probe');
+  assert.equal((await shells.locations()).unlocated, false);
+});
+
+
+test('detached console still observes a later OSC prompt without broadcasting output', { skip: process.platform === 'win32' }, async t => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'office-console-test-')));
+  const sent: ServerMsg[] = [];
+  const shells = new ConsoleShells((_id, msg) => sent.push(msg), async () => undefined);
+  t.after(() => { shells.shutdown(); rmSync(root, { recursive: true, force: true }); });
+  shells.handle('probe', { t: 'console.attach', cols: 80, rows: 24 }, root);
+  shells.handle('probe', { t: 'console.input', data: "sleep 0.2; printf '\\033]7;file://%s\\007' \"$PWD\"\r" }, root);
+  shells.handle('probe', { t: 'console.detach' }, root);
+  const count = sent.length;
+  const deadline = Date.now() + 10000;
+  while ((await shells.locations()).unlocated) {
+    assert.ok(Date.now() < deadline, 'detached OSC prompt was not observed');
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(sent.length, count, 'no browser output while detached');
+  assert.ok((await shells.locations()).folders.includes(root));
+});
