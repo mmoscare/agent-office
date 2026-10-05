@@ -974,6 +974,7 @@ export class WorkerManager {
       w.openCodeError = false;
       this.persist();
     }
+    const previousStatus = w.info.status;
     if (payload.type === 'error') w.openCodeError = payload.status !== 'interrupted';
     else if (payload.status === 'working' || payload.prompt) w.openCodeError = false;
     if (payload.prompt || payload.type === 'prompt') beginTurn(w, payload.turnId);
@@ -996,6 +997,11 @@ export class WorkerManager {
     else if (payload.status === 'done' && w.pty && !isStopped(w.info.status) && !isCancelledTurn(w, payload.turnId)) this.setStatus(w, w.openCodeError ? 'needs_input' : 'done');
     else if (payload.status === 'starting' && w.info.status === 'starting') this.setStatus(w, 'idle');
     else this.emitUpdate(w);
+    // setStatus is a no-op for a follow-up received during an already-working turn.
+    if (payload.prompt && w.info.status === previousStatus) {
+      this.emitUpdate(w);
+      this.persist();
+    }
     return true;
   }
 
